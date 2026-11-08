@@ -30,8 +30,9 @@ export interface WatcherInternals extends Watcher {
  * The stall watcher (spec 4.2 steps 5 and 6): under its own lease row `__watch` it finds stalled jobs and calls `onStalled`
  * once a stall, storing the handler's reference on the row; `onRecovered` once when the job runs again; `onFailedAgain`
  * once a day for a job that stays failed. Paused and failed jobs are never judged stalled, and neither is a scheduled job
- * with nothing owed (a one-shot that ran, or a job whose next due time is still ahead). `internals.arm: false` arms no
- * interval: the caller drives `pass()`.
+ * with nothing owed (a one-shot that ran, or a job whose next due time or retry is still ahead); a scheduled job's quiet is
+ * measured from its last run or the time it became owed, whichever is later. A pass renews the watch lease while it runs and
+ * stops when another holder took it. `internals.arm: false` arms no interval: the caller drives `pass()`.
  */
 export function createWatcher(options: WatcherOptions, internals: { readonly arm?: boolean } = {}): WatcherInternals {
   const db = options.db;
@@ -90,29 +91,46 @@ export function createWatcher(options: WatcherOptions, internals: { readonly arm
     await db.run(`UPDATE ${t('jobs')} SET lease_holder = NULL, lease_token = NULL, lease_until = NULL WHERE name = ? AND lease_token = ?`, [WATCH_ROW, token]);
   }
 
-  /** Whether a job can be stalled at all: not paused, not failed, a gap above 0, and, for a scheduled job, a due time owed (enabled, its next due time reached). */
-  function judged(row: JobRow, at: number): boolean {
-    if (row.paused_by !== null || row.failed_at !== null || Number(row.stall_after_ms) <= 0) return false;
-    if (row.kind === 'reports_only') return true;
+  /**
+   * The time a job's quiet is measured from, or null when it cannot be stalled: a paused or failed job, a gap of 0, and a
+   * scheduled job with nothing owed (finished, or its next due time or its retry's readiness still ahead). A reports-only job
+   * is measured from its last report. A scheduled job is measured from its last run (its registration when it never ran) or
+   * the time it became owed, whichever is later: a job due less often than its gap, a one-shot registered days ahead and a
+   * retry waiting out a backoff are never stalled between the time they are owed and their run, only once they stay owed
+   * past their gap.
+   */
+  function quietFrom(row: JobRow, at: number): number | null {
+    if (row.paused_by !== null || row.failed_at !== null || Number(row.stall_after_ms) <= 0) return null;
+    const lastAt = num(row.last_run_at) ?? Number(row.registered_at);
+    if (row.kind === 'reports_only') return lastAt;
     const nextDue = num(row.next_due_at);
-    return row.enabled === 1 && nextDue !== null && nextDue <= at;
+    if (row.enabled !== 1 || nextDue === null) return null;
+    // A retry serves `next_due_at` once `retry_at` comes: until then the job is owed nothing.
+    const retryAt = num(row.retry_at);
+    const owedAt = retryAt === null ? nextDue : Math.max(nextDue, retryAt);
+    return owedAt > at ? null : Math.max(lastAt, owedAt);
   }
 
   async function judge(row: JobRow, at: number): Promise<void> {
     const since = num(row.stall_since);
     const lastAt = num(row.last_run_at) ?? Number(row.registered_at);
     if (since === null) {
-      if (!judged(row, at) || at - lastAt <= Number(row.stall_after_ms)) return;
+      const from = quietFrom(row, at);
+      const gap = Number(row.stall_after_ms);
+      if (from === null || at - from <= gap) return;
       // The stall is marked first under the watch lease, so a second watcher or a restart never opens a second record for it;
       // the host is told, and the row acknowledges it only once the handlers settled (`tell`). The mark holds only while the row
-      // is as this pass read it: a run that settled, a pause or a failure since the read leaves it unmarked.
+      // still reads stalled: a run that settled, a pause or a failure since the read, or a registration that moved its next due
+      // time ahead, leaves it unmarked. Every time the mark checks is older than `at - gap`, as `quietFrom` judged.
+      const quietBefore = at - gap;
       const lastRun = row.last_run_at === null ? 'last_run_at IS NULL' : 'last_run_at = ?';
       const marked = await db.run(
-        `UPDATE ${t('jobs')} SET stall_since = ?, updated_at = ? WHERE name = ? AND stall_since IS NULL AND paused_by IS NULL AND failed_at IS NULL AND ${lastRun}`,
-        row.last_run_at === null ? [lastAt, at, row.name] : [lastAt, at, row.name, lastAt],
+        `UPDATE ${t('jobs')} SET stall_since = ?, updated_at = ? WHERE name = ? AND stall_since IS NULL AND paused_by IS NULL AND failed_at IS NULL AND ${lastRun}
+           AND (kind = 'reports_only' OR (enabled = 1 AND next_due_at IS NOT NULL AND next_due_at < ? AND (retry_at IS NULL OR retry_at < ?)))`,
+        [lastAt, at, row.name, ...(row.last_run_at === null ? [] : [lastAt]), quietBefore, quietBefore],
       );
       if (Number(marked.changes) !== 1) return;
-      logger.warn('job_stalled', { job: row.name, gap_minutes: Math.round((at - lastAt) / 60_000) });
+      logger.warn('job_stalled', { job: row.name, gap_minutes: Math.round((at - from) / 60_000) });
       await tell(row, lastAt, at);
       return;
     }
@@ -167,13 +185,37 @@ export function createWatcher(options: WatcherOptions, internals: { readonly arm
     await ensureRow(at);
     const token = await claim(at);
     if (token === null) return;
+    let held = true;
+    /** Renews the watch lease under this pass's token; a renewal that changes no row, or that the database refuses, ends the hold. */
+    const renew = async (): Promise<boolean> => {
+      if (!held) return false;
+      try {
+        const renewedAt = now();
+        const changed = await db.run(`UPDATE ${t('jobs')} SET lease_until = ?, updated_at = ? WHERE name = ? AND lease_token = ?`, [renewedAt + 2 * everyMs, renewedAt, WATCH_ROW, token]);
+        held = Number(changed.changes) === 1;
+      } catch {
+        held = false;
+      }
+      return held;
+    };
+    // The lease is renewed every half interval while the pass runs, a host's handler awaited included, so a slow handler never
+    // lets a second watcher take the row and tell the same stall at once.
+    const renewer = setInterval(() => void renew(), Math.max(1, Math.floor(everyMs / 2)));
+    renewer.unref?.();
     try {
       const rows = await db.all<JobRow>(`SELECT * FROM ${t('jobs')} WHERE name <> ? ORDER BY name`, [WATCH_ROW]);
       for (const row of rows) {
+        // Renewed before each job too: a lease another holder took (this process lost the database for two intervals) means
+        // that holder judges from here, so this pass judges no further job.
+        if (!(await renew())) {
+          logger.warn('watch_lease_lost', {});
+          break;
+        }
         await judge(row, at);
         await remind(row, at);
       }
     } finally {
+      clearInterval(renewer);
       await release(token);
     }
   }
