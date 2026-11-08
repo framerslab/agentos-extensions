@@ -6,16 +6,26 @@
  * name.
  */
 import { readdirSync } from 'node:fs';
-import { basename } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { basename, dirname } from 'node:path';
 import { expect } from 'vitest';
 
 /** The number the first test file's three locks start at. */
 const LOCK_BASE = 10_000;
 
-/** The package's test files by name, sorted: the order that gives each file its locks. */
+/** The path of the test file running now. */
+function runningFile(): string {
+  const path = expect.getState().testPath;
+  if (!path) throw new Error('locks: no test file is running');
+  return path;
+}
+
+/**
+ * The package's test files by name, sorted: the order that gives each file its locks. They are the files beside the
+ * one running now, read from its path rather than from this module's URL: under jsdom, `fileURLToPath(new URL('..',
+ * import.meta.url))` threw `ERR_INVALID_URL_SCHEME`.
+ */
 export function testFileNames(): string[] {
-  return readdirSync(fileURLToPath(new URL('..', import.meta.url)))
+  return readdirSync(dirname(runningFile()))
     .filter((name) => /\.test\.tsx?$/.test(name))
     .sort();
 }
@@ -30,7 +40,5 @@ export function locksOf(file: string): readonly [tick: number, sweep: number, to
 
 /** The locks of the test file running now. */
 export function ownLocks(): readonly [tick: number, sweep: number, totals: number] {
-  const path = expect.getState().testPath;
-  if (!path) throw new Error('ownLocks: no test file is running');
-  return locksOf(path);
+  return locksOf(runningFile());
 }
