@@ -204,7 +204,10 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     if (postgres) await writer.exec('ROLLBACK TO SAVEPOINT ops_discord_hook');
   }
 
-  /** Throws `ClaimLeft` once `stop()` has begun: no hook and no mail starts then, since its settlement could outlast the handle. */
+  /**
+   * Throws `ClaimLeft` once `stop()` has begun: no hook and no mail starts then, since its settlement could outlast the handle. Asked
+   * before the savepoint and again before the hook or the mail, since `stop()` can begin, or answer, while a statement is awaited.
+   */
   function beginOrLeave(): void {
     if (context.stopped || context.closed) throw new ClaimLeft('stop() has begun');
   }
@@ -292,6 +295,8 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     const fence = `WHERE id = ? AND next_at = ? AND state = 'failed' AND mail_state = 'owed'`;
     let answer: 'sent' | 'failed' | 'suppressed';
     let threw = false;
+    // Asked before the savepoint too: stop() can answer while the give-up's mark before it runs.
+    beginOrLeave();
     await markHook(writer);
     beginOrLeave();
     try {
@@ -349,6 +354,7 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     }
     // The hook is given the claim's deadline as a signal and is awaited to its settlement: the row stays claimed while the hook can
     // still act (a sender that honours the signal settles at the deadline; one that ignores it holds the claim until it settles).
+    beginOrLeave();
     await markHook(writer);
     beginOrLeave();
     const controller = new AbortController();
