@@ -8,15 +8,27 @@ import type { OpsContext } from '../context.js';
 import type { OpsBeatOutcome } from '../contract.js';
 import { ownLine } from '../own-lines.js';
 
-/** Upserts `job`'s beat; `word` names the job on the `ops_job` line a failed write leaves. Never throws. */
-export async function writeBeat(context: OpsContext, job: string, word: string, at: number, outcome: OpsBeatOutcome): Promise<void> {
+/**
+ * Upserts `job`'s beat; `word` names the job on the `ops_job` line a failed write leaves. `okAt` is
+ * the time of the job's last `ok` run this write carries (`at` for an `ok` run, none otherwise,
+ * unless the caller folded an earlier `ok` run into this write); none keeps the stored one. Never
+ * throws.
+ */
+export async function writeBeat(
+  context: OpsContext,
+  job: string,
+  word: string,
+  at: number,
+  outcome: OpsBeatOutcome,
+  okAt: number | null = outcome === 'ok' ? at : null,
+): Promise<void> {
   const beats = context.table('beats');
   try {
     await context.db.run(
       `INSERT INTO ${beats} (job, last_at, outcome, last_ok_at) VALUES (?, ?, ?, ?)
        ON CONFLICT (job) DO UPDATE SET last_at = excluded.last_at, outcome = excluded.outcome,
        last_ok_at = COALESCE(excluded.last_ok_at, ${beats}.last_ok_at)`,
-      [job, at, outcome, outcome === 'ok' ? at : null],
+      [job, at, outcome, okAt],
     );
   } catch {
     ownLine(context.logger, 'warn', 'ops_job', { job: word, step: 'beat', outcome: 'failed' });

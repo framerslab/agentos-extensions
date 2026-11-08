@@ -626,9 +626,12 @@ export interface Health {
   queue(name: string, oldestWaitingMs: () => Promise<number | null>, limitMs: number): void;
   /**
    * Records a run of `job` (a word under the package's word rule) and how it ended: writes the job's
-   * row in the background, keeping the time of its last `ok` run; never throws or waits. A job that
-   * is not a word, an outcome that is none of the three, or a call once `stop()` has begun writes
-   * nothing and leaves one `ops_job` line; `stop()` waits for the beats in flight.
+   * row in the background, keeping the time of its last `ok` run; never throws or waits. One job has
+   * one write out at a time and the newest beat waiting behind it, so its beats land in the order
+   * they were made; past `limits.beatQueue` jobs at once a further job's beat is dropped. A job that
+   * is not a word, an outcome that is none of the three, a dropped beat, or a call once `stop()` has
+   * begun writes nothing and leaves one `ops_job` line; `stop()` waits for the beats out and waiting
+   * within its deadline, and one still waiting then writes nothing.
    */
   beat(job: string, outcome: OpsBeatOutcome): void;
   /** From the batch route; queued, never throws or waits. */
