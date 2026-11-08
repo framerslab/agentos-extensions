@@ -197,8 +197,9 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     if (postgres) await writer.exec('SAVEPOINT ops_discord_hook');
   }
 
-  /** Undoes what a hook's failed statement did to the claim's transaction, back to `markHook`. */
+  /** Undoes what a hook's failed statement did to the claim's transaction, back to `markHook`; nothing once `stop()` has answered. */
   async function undoHook(writer: StorageAdapter): Promise<void> {
+    settleOrLeave();
     if (postgres) await writer.exec('ROLLBACK TO SAVEPOINT ops_discord_hook');
   }
 
@@ -207,7 +208,10 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     if (context.stopped || context.closed) throw new ClaimLeft('stop() has begun');
   }
 
-  /** Throws `ClaimLeft` once `stop()` has answered: the host may have closed its handle, so a returning hook or mail writes nothing. */
+  /**
+   * Throws `ClaimLeft` once `stop()` has answered: the host may have closed its handle, so a returning hook or mail writes nothing.
+   * Asked before every statement after the hook or the mail returns, since `stop()` can answer while one of them is awaited.
+   */
   function settleOrLeave(): void {
     if (context.closed) throw new ClaimLeft('stop() has answered');
   }
@@ -228,15 +232,17 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
    * hook counts as failed. True on SQLite.
    */
   async function settleHook(writer: StorageAdapter): Promise<boolean> {
+    settleOrLeave();
     if (!postgres) return true;
     try {
       await writer.exec('RELEASE SAVEPOINT ops_discord_hook');
       return true;
     } catch {
-      await writer.exec('ROLLBACK TO SAVEPOINT ops_discord_hook').catch(() => undefined);
+      if (!context.closed) await writer.exec('ROLLBACK TO SAVEPOINT ops_discord_hook').catch(() => undefined);
       return false;
     }
   }
+
 
   /**
    * Drops the oldest pending rows of `channel` past `ALERT_PENDING_MAX`, with one `ops_discord` line; answers how many. A row whose
@@ -292,6 +298,7 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     settleOrLeave();
     if (threw) await undoHook(writer);
     if (!(await settleHook(writer))) answer = 'failed';
+    settleOrLeave();
     const doneAt = timeFrom(claimAt);
     const attempts = Number(row.mail_attempts) + 1;
     if (answer === 'sent') {
@@ -352,6 +359,7 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     settleOrLeave();
     if (threw) await undoHook(writer);
     if (!(await settleHook(writer))) answer = { outcome: 'failed', status: null };
+    settleOrLeave();
     const doneAt = timeFrom(claimAt);
     const attempts = Number(row.attempts) + 1;
     const firstAt = first ?? claimAt;
@@ -411,6 +419,8 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
       if (Number(claimed.changes) !== 1) continue; // another instance holds it, or it was settled meanwhile
       inHook.add(row.id);
       try {
+        // stop() began during the claim: no try is written, a give-up or a no_hook mark included, and the claim is given back.
+        beginOrLeave();
         await tryRow(db, { ...row, next_at: held }, claimAt, counts);
       } catch (error) {
         if (!(error instanceof ClaimLeft) && !context.closed) throw error;
