@@ -61,7 +61,9 @@ const BEARER_TOKEN = /^[A-Za-z0-9._~+\/-]+=*$/;
 export interface ResendOptions {
   /**
    * The API key, or a function that answers it at each send (a key file read when a message goes out). Whitespace around
-   * it, such as a key file's final line break, is trimmed.
+   * it, such as a key file's final line break, is trimmed. What is left must be a bearer token as RFC 6750 section 2.1
+   * writes it: letters, digits and `-` `.` `_` `~` `+` `/`, with any `=` at its end. `send` throws an `Error` before any
+   * request for any other key, such as one still in its quotes or after its setting's name, or one empty after the trim.
    */
   apiKey: string | (() => string);
   /** The API's origin with no trailing slash; Resend's own when unset. */
