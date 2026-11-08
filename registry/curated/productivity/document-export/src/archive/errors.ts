@@ -10,7 +10,8 @@
  * - `method`: an entry is compressed other than stored or DEFLATE, or is encrypted;
  * - `size`: an entry's recorded size passes the caller's `maxBytes`;
  * - `path`: an entry's path climbs out of the archive;
- * - `stopped`: the caller's signal fired or the archive was closed, a read of the Blob still pending included;
+ * - `stopped`: the caller's signal fired or the archive was closed, a read of the Blob still pending included, or the
+ *   signal given to the transcript entry's `writeArchive` fired between two entries;
  * - `entries`: the archive lists more entries than `maxEntries`;
  * - `directory_size`: the archive's directory is larger than `maxDirectoryBytes`;
  * - `busy`: another entry of the same archive is being read.
@@ -52,6 +53,7 @@ export const REFUSED = {
   size: 'archive: the entry is larger than the bound',
   path: 'archive: the entry’s path is not a safe relative path',
   stopped: 'archive: the read was stopped',
+  writeStopped: 'archive: the write was stopped',
   entries: 'archive: the archive lists more entries than the bound',
   directorySize: 'archive: the archive’s directory is larger than the bound',
   busy: 'archive: another entry of this archive is being read',
