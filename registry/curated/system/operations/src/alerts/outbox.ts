@@ -32,8 +32,9 @@
  * One drain at a time a process (a call while one runs joins it); `stop()` waits for a running drain within its 3 seconds, and no
  * hook or mail starts once `stop()` has begun, a row read or claimed then included: on PostgreSQL its transaction ends with nothing
  * written, and on SQLite its claim is given back. A hook or a mail still running when `stop()` answers writes nothing once it
- * returns, since the host may have closed its handle: on PostgreSQL the claim rolls back, and on SQLite the claim lapses at its
- * deadline, so the next process tries the row again and Discord may show that alert twice. The lines: `delivery_sent` and
+ * returns, since the host may have closed its handle, nor does a settlement whose commit would come after it: on PostgreSQL the
+ * claim rolls back, and on SQLite the claim lapses at its deadline, so the next process tries the row again and Discord may show
+ * that alert twice. A try's counts and lines stand once its claim has ended, so a claim that rolls back counts and logs nothing. The lines: `delivery_sent` and
  * `delivery_retry` (with `answer`, a word, beside `status`, an integer, where there is one, and `wait_s`), `delivery_failed`
  * (`answer`: `mail_failed` or `suppressed`) and `ops_discord` (`outcome`: `dropped` or `no_hook`, with `count`), each with the row's
  * `channel`; never a line's words or a key.
@@ -119,6 +120,17 @@ interface Counts {
   failed: number;
   dropped: number;
 }
+
+/**
+ * What one row's try came to: the counts it adds and the lines it writes, which stand once its claim has ended (on PostgreSQL once
+ * the claim's transaction has committed), so a claim that rolls back counts nothing and logs nothing.
+ */
+interface Tried {
+  readonly counts: Counts;
+  readonly lines: Array<() => void>;
+}
+
+const emptyTried = (): Tried => ({ counts: { sent: 0, retried: 0, failed: 0, dropped: 0 }, lines: [] });
 
 const num = (value: number | string | null): number | null => (value === null ? null : Number(value));
 
@@ -290,7 +302,7 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
    * Sends a given-up row's team mail once and records what came of it (the file comment). `row.next_at` is the claim's; every write
    * is fenced by it and by the row's owed mail, so a write after another drain took the row changes nothing.
    */
-  async function mailOwed(writer: StorageAdapter, row: Row, claimAt: number): Promise<void> {
+  async function mailOwed(writer: StorageAdapter, row: Row, claimAt: number, tried: Tried): Promise<void> {
     const claimedAt = Number(row.next_at);
     const fence = `WHERE id = ? AND next_at = ? AND state = 'failed' AND mail_state = 'owed'`;
     let answer: 'sent' | 'failed' | 'suppressed';
@@ -319,7 +331,8 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
       await writer.run(`UPDATE ${table} SET mail_state = 'sent', mail_attempts = ?, settled_at = ? ${fence}`, [attempts, doneAt, row.id, claimedAt]);
     } else if (answer === 'suppressed' || attempts >= ALERT_MAIL_ATTEMPTS) {
       await writer.run(`UPDATE ${table} SET mail_state = 'failed', mail_attempts = ?, settled_at = ? ${fence}`, [attempts, doneAt, row.id, claimedAt]);
-      ownLine(context.logger, 'warn', 'delivery_failed', { channel: row.channel, answer: answer === 'suppressed' ? 'suppressed' : 'mail_failed' });
+      const word = answer === 'suppressed' ? 'suppressed' : 'mail_failed';
+      tried.lines.push(() => ownLine(context.logger, 'warn', 'delivery_failed', { channel: row.channel, answer: word }));
     } else {
       await writer.run(`UPDATE ${table} SET mail_attempts = ?, next_at = ? ${fence}`, [attempts, doneAt + ALERT_MAIL_RETRY_MS, row.id, claimedAt]);
     }
@@ -330,9 +343,9 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
    * clock as the claim was made. `row.next_at` is the claim's; every write is fenced by it and by the row's pending state, so a
    * settlement after another drain took the row, or after the bound dropped it, changes nothing.
    */
-  async function tryRow(writer: StorageAdapter, row: Row, claimAt: number, counts: Counts): Promise<void> {
+  async function tryRow(writer: StorageAdapter, row: Row, claimAt: number, tried: Tried): Promise<void> {
     if (row.state === 'failed') {
-      await mailOwed(writer, row, claimAt);
+      await mailOwed(writer, row, claimAt, tried);
       return;
     }
     const claimedAt = Number(row.next_at);
@@ -341,15 +354,15 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     if (first !== null && claimAt - first >= ALERT_GIVE_UP_MS) {
       const gaveUp = await writer.run(`UPDATE ${table} SET state = 'failed', last_answer = 'gave_up', mail_state = 'owed' ${fence}`, [row.id, claimedAt]);
       if (Number(gaveUp.changes) !== 1) return;
-      await mailOwed(writer, { ...row, state: 'failed', mail_state: 'owed' }, claimAt);
-      counts.failed += 1;
+      await mailOwed(writer, { ...row, state: 'failed', mail_state: 'owed' }, claimAt, tried);
+      tried.counts.failed += 1;
       return;
     }
     const hook = context.options.discord;
     if (hook === undefined) {
-      ownLine(context.logger, 'warn', 'ops_discord', { channel: row.channel, outcome: 'no_hook', count: 1 });
       await writer.run(`UPDATE ${table} SET state = 'failed', last_answer = 'no_hook', settled_at = ? ${fence}`, [claimAt, row.id, claimedAt]);
-      counts.failed += 1;
+      tried.lines.push(() => ownLine(context.logger, 'warn', 'ops_discord', { channel: row.channel, outcome: 'no_hook', count: 1 }));
+      tried.counts.failed += 1;
       return;
     }
     // The hook is given the claim's deadline as a signal and is awaited to its settlement: the row stays claimed while the hook can
@@ -383,8 +396,8 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
         `UPDATE ${table} SET state = 'delivered', attempts = ?, first_attempt_at = ?, delivered_at = ?, delivery_id = ?, last_answer = '200', settled_at = ? ${fence}`,
         [attempts, firstAt, doneAt, answer.deliveryId, doneAt, row.id, claimedAt],
       );
-      ownLine(context.logger, 'info', 'delivery_sent', { channel: row.channel });
-      counts.sent += 1;
+      tried.lines.push(() => ownLine(context.logger, 'info', 'delivery_sent', { channel: row.channel }));
+      tried.counts.sent += 1;
       return;
     }
     // Never sooner than a second, so a zero wait (a 429's `retry_after` of 0, or one that rounds to it) does not post the row again in this drain.
@@ -393,20 +406,25 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     const word = answer.outcome === 'retry' ? (rateLimited ? '429' : 'unconfirmed') : answer.status === null ? 'no_answer' : String(answer.status);
     const reason = answer.outcome === 'retry' ? (rateLimited ? 'rate_limited' : 'unconfirmed') : answer.status === null ? 'no_answer' : 'status';
     await writer.run(`UPDATE ${table} SET attempts = ?, first_attempt_at = ?, next_at = ?, last_answer = ? ${fence}`, [attempts, firstAt, doneAt + wait, word, row.id, claimedAt]);
-    ownLine(context.logger, 'info', 'delivery_retry', { channel: row.channel, answer: reason, ...(answer.status === null ? {} : { status: answer.status }), wait_s: Math.round(wait / 1_000) });
-    counts.retried += 1;
+    const retryLine = { channel: row.channel, answer: reason, ...(answer.status === null ? {} : { status: answer.status }), wait_s: Math.round(wait / 1_000) };
+    tried.lines.push(() => ownLine(context.logger, 'info', 'delivery_retry', retryLine));
+    tried.counts.retried += 1;
   }
 
   /** One due row claimed and tried (the file comment); answers false when no row is due that this drain may take, or once `stop()` has begun. */
   async function oneRow(nowMs: number, counts: Counts): Promise<boolean> {
     const due = `((state = 'pending') OR (state = 'failed' AND mail_state = 'owed')) AND next_at <= ?`;
     if (postgres) {
+      const tried = emptyTried();
+      let took: boolean;
       try {
-        return await db.transaction(async (trx) => {
+        took = await db.transaction(async (trx) => {
           const row = await trx.get<Row>(`SELECT * FROM ${table} WHERE ${due} ORDER BY next_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED`, [nowMs]);
           // stop() began while the row was read: the transaction ends with nothing written, and the row is as it was.
           if (!row || context.stopped || context.closed) return false;
-          await tryRow(trx, row, timeFrom(nowMs), counts);
+          await tryRow(trx, row, timeFrom(nowMs), tried);
+          // The commit is a statement too: once stop() has answered, the claim rolls back rather than commit on the closed handle.
+          settleOrLeave();
           return true;
         });
       } catch (error) {
@@ -414,6 +432,8 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
         if (error instanceof ClaimLeft || context.closed) return false;
         throw error;
       }
+      if (took) settle(tried, counts);
+      return took;
     }
     // The rows whose hook is still awaited are left out before the LIMIT, so however many outlive their claims they never fill the
     // read and starve the rows due behind them; the set is asked again below, since a hook can start while the read runs.
@@ -436,10 +456,11 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
       ]);
       if (Number(claimed.changes) !== 1) continue; // another instance holds it, or it was settled meanwhile
       inHook.add(row.id);
+      const tried = emptyTried();
       try {
         // stop() began during the claim: no try is written, a give-up or a no_hook mark included, and the claim is given back.
         beginOrLeave();
-        await tryRow(db, { ...row, next_at: held }, claimAt, counts);
+        await tryRow(db, { ...row, next_at: held }, claimAt, tried);
       } catch (error) {
         if (!(error instanceof ClaimLeft) && !context.closed) throw error;
         // Left once stop() had begun: the claim is given back while the handle is open, so the next process tries the row at once;
@@ -451,9 +472,18 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
       } finally {
         inHook.delete(row.id);
       }
+      settle(tried, counts);
       return true;
     }
     return false;
+  }
+
+  /** Adds a try's counts to the drain's and writes its lines, once its claim has ended. */
+  function settle(tried: Tried, counts: Counts): void {
+    counts.sent += tried.counts.sent;
+    counts.retried += tried.counts.retried;
+    counts.failed += tried.counts.failed;
+    for (const line of tried.lines) line();
   }
 
   return {
