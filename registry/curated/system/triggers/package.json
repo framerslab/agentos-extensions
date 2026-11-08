@@ -1,7 +1,6 @@
 {
   "name": "@framers/agentos-ext-triggers",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "A scheduler of record in a product's own database through the SQL storage adapter: job rows, a lease with a claim token, runs, missed runs and a missed-run rule a schedule, pause and resume with an actor, a hand run for a job marked safe to run twice, bounded retries and a failed state, a stall watcher, reports-only jobs and an audit hook, under a table prefix of its own",
   "main": "dist/index.js",

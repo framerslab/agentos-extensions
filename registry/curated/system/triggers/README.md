@@ -3,7 +3,7 @@
 [![CI Status](https://github.com/framerslab/agentos-extensions/workflows/CI/badge.svg)](https://github.com/framerslab/agentos-extensions/actions)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-A scheduler of record in a product's own database, through the SQL storage adapter it already passes. Jobs are defined in code and registered when the process starts; their rows, their runs and the due times they missed live in three tables under a prefix of the product's choosing. A lease with a claim token gives each due time one run across processes, a missed-run rule decides what a job does with the due times it missed while its process was down or it was paused, and staff pause, resume and run a job by hand through the rows, with an audit hook the product writes its own record through.
+A scheduler of record in a product's own database, through the SQL storage adapter it already passes. Jobs are defined in code and registered when the process starts; their rows, their runs and the due times they missed live in three tables under a prefix of the product's choosing. A lease with a claim token gives each due time one run across processes, a missed-run rule decides what a job does with the due times it missed while its process was down or it was paused, and staff pause, resume and run a job by hand through the rows, with an audit hook the product writes its own record through. A stall watcher in a process that runs no jobs tells the product when a job goes quiet and when it runs again, and loops that run on their own timer report their runs here, so one page shows every job.
 
 ```ts
 import { computeNextRunAtMs, migrateTriggers, scheduleWords } from '@framers/agentos-ext-triggers';
@@ -14,18 +14,17 @@ const next = computeNextRunAtMs({ kind: 'cron', expr: '20 0 * * *' }, Date.now()
 const words = scheduleWords({ kind: 'cron', expr: '20 0 * * *' }); // "Daily at 00:20 UTC"
 ```
 
-## What this release holds
+## What the package holds
 
-| Part | In this release |
+| Part | What it does |
 |---|---|
-| `createScheduler` | Registration, the restore at start with the missed-run rules, the tick, the lease with a claim token, the fenced settlement, retries, pause, resume, run now, the reads and `forgetActor`. |
+| `createScheduler` | Registration, the restore at start with the missed-run rules, the tick, the lease with a claim token, the fenced settlement, retries, pause, resume, run now, the reads, `forgetActor`, `report()` for reports-only jobs and the hourly retention. |
 | `createSchedulerForTests` | The same scheduler with no interval armed: a host's tests drive `tick()` and `settled()` on their own clock. |
+| `createWatcher` | The stall watcher for a process that runs no jobs: a stall told once, its recovery told once, a job that stays failed told again once a day. |
 | `migrateTriggers` | Builds `<prefix>_jobs`, `<prefix>_runs`, `<prefix>_missed` and their migration ledger, `<prefix>_schema_migrations`, on PostgreSQL and SQLite. |
 | `computeNextRunAtMs` | The next due time of a schedule strictly after a given time, or `undefined` when there is none. |
 | `scheduleWords` | The sentence a schedule reads as on a jobs page. |
-| The types | `Schedule`, `MissedRunRule`, `JobDefinition`, `RunContext`, `RunSummary`, `JobState`, `RunOutcome`, `JobView`, `RunView`, `MissedView`, `TriggersRefusal`, `TriggersAuditEntry`, `TriggersLogger`, `Keep`, `TriggersOptions`, `Scheduler`, `SchedulerInternals`, `Watcher`. |
-
-`createWatcher` (the stall watcher), `report()` (reports-only rows, which this release answers with nothing) and the retention of runs and missed runs follow in the next pull request of this package. The package stays private until it, and its first version, 0.1.0, publishes with that merge.
+| The types | `Schedule`, `MissedRunRule`, `JobDefinition`, `RunContext`, `RunSummary`, `JobState`, `RunOutcome`, `JobView`, `RunView`, `MissedView`, `TriggersRefusal`, `TriggersAuditEntry`, `TriggersLogger`, `Keep`, `TriggersOptions`, `Scheduler`, `SchedulerInternals`, `Watcher`, `WatcherFailedAgain`, `WatcherOptions`. |
 
 ## Installation
 
@@ -60,7 +59,7 @@ Node 22 or later. `@framers/sql-storage-adapter` 0.7.15 or later is an optional 
    });
    ```
 
-   `now` (the clock, `Date.now` by default), `tickMs` (10 s by default, the smallest `every`) and `handRunsPerHour` (20 by default) are the other options.
+   `now` (the clock, `Date.now` by default), `tickMs` (10 s by default, the smallest `every`), `handRunsPerHour` (20 by default) and `keep` (the retention, below) are the other options.
 
 3. **Register** each job before `start()`:
 
@@ -91,7 +90,20 @@ Node 22 or later. `@framers/sql-storage-adapter` 0.7.15 or later is an optional 
 
    `start()` writes each definition into its row, restores every job (below) and arms the tick. A second call while it runs waits for the same start and arms nothing more. `stop()` stops claiming (a tick in progress finishes first, and a claim it takes after `stop()` began starts no run and frees the job), holds the lease of each run in flight through `waitMs`, waits up to `waitMs` for those runs and then aborts their signals; a run that settles in the wait releases its lease, and one that does not keeps the held lease until it runs out two ticks after the wait, when the next claim marks it `lost`.
 
-A process that only reads and commands calls `list`, `get`, `runs`, `missed`, `pause`, `resume` and `runNow` on its unstarted scheduler. `pause(name, actor, note?)` and `resume(name, actor)` answer the job's view or a refusal; `runNow(name, actor)` answers `{ queued: true }` or a refusal, and the process that runs the job runs it within one tick. A refusal is `{ refused, status }`: `not_found` (404), `already`, `in_flight`, `not_safe`, `reports_only` (409), and `hand_runs_used` (429, with `retryAt`, the next whole UTC hour), past `handRunsPerHour` hand runs in one UTC clock hour on the instance; two asks at once never both pass the bound. The stall watcher is the step `createWatcher` brings.
+5. **Watch** from a process that runs no jobs, so a stall is seen while the process that runs them is down (below):
+
+   ```ts
+   import { createWatcher } from '@framers/agentos-ext-triggers';
+
+   const watcher = createWatcher({ db, prefix: 'trig', process: 'web', logger });
+   watcher.onStalled(async (job, since) => openRequest(job.name, since));   // answers the request's id, stored on the job's row
+   watcher.onRecovered(async (job, since, ref) => resolveRequest(ref));
+   watcher.onFailedAgain(async (job, days) => alertAgain(job.name, days));
+   watcher.start();
+   process.on('SIGTERM', () => void watcher.stop());
+   ```
+
+A process that only reads and commands calls `list`, `get`, `runs`, `missed`, `pause`, `resume` and `runNow` on its unstarted scheduler. `pause(name, actor, note?)` and `resume(name, actor)` answer the job's view or a refusal; `runNow(name, actor)` answers `{ queued: true }` or a refusal, and the process that runs the job runs it within one tick. A refusal is `{ refused, status }`: `not_found` (404), `already`, `in_flight`, `not_safe`, `reports_only` (409), and `hand_runs_used` (429, with `retryAt`, the next whole UTC hour), past `handRunsPerHour` hand runs in one UTC clock hour on the instance; two asks at once never both pass the bound.
 
 ## What the scheduler guarantees
 
@@ -111,6 +123,41 @@ A process that only reads and commands calls `list`, `get`, `runs`, `missed`, `p
 - When it is not safe to repeat, write `runId` and `dueAt` beside its effects, so a run after a lost one can tell what was done.
 - Answer `{ outcome: 'failed' }`, or throw or reject (with any value, `undefined` included), for a failed try; `{ outcome: 'skipped' }` when there was nothing to do; `{ did }` for the words the jobs page shows. Words and integers only: never a person's name, address or message.
 - Never outlive its timeout.
+
+## The stall watcher
+
+A job is stalled when it has gone quiet for longer than its `stallAfterMs` (15 minutes by default): its last run, or its registration when it never ran, is older than that. `createWatcher` judges every job, scheduled and reports-only, from a process that runs none of them, so a stall is seen while the process that runs them is down. Several processes may run a watcher; a pass runs under the watch lease, a row of its own named `__watch` (never listed, never commanded), so one pass at a time judges, across processes. It passes at `start()` and then every `everyMs` (a minute by default).
+
+- **A stall is told once.** The pass marks the stall on the job's row (`stall_since`, the stall's start: the last run's time, or the registration time of a job never run), then calls `onStalled(job, since)` and stores the reference the handler answers (the host's request id, say) as `stall_ref`. The reference is stored only once every handler settled: a handler that throws leaves the stall marked and unacknowledged, and the next pass calls it again, so the host's handler is idempotent by the job's name and `since` (it finds the record it made before opening one). A handler that answers `null` acknowledges the stall with no reference. A second watcher and a restarted one find the stall stored and tell nothing.
+- **A recovery is told once.** When the job runs again, `onRecovered(job, since, ref)` is called with the stored reference (`null` when the stall was acknowledged with none), and the stall is cleared only once every handler settled; a handler that throws is called again on the next pass with the same reference. A job that ran again before its stall was acknowledged is told the stall first, so the recovery carries the reference the host made; while that stays unacknowledged the stall is kept.
+- **What is never judged stalled.** A paused job and a failed job, whose state already says what is wrong; and a scheduled job with nothing owed: a one-shot that ran, or a job whose next due time is still ahead. A job whose runs come further apart than 15 minutes gives a `stallAfterMs` above its interval (an hourly job, two hours; a nightly one, 25 hours).
+- **A job that stays failed is told again once a day.** `onFailedAgain(job, days)` is called when the job's `alerted_at` (the time of its last alert) is a day old, with the whole days since it failed; `alerted_at` moves to now only once every handler settled, so a handler that throws is called again on the next pass. The handler keys its alert by the day count.
+
+A pass that fails (the database cannot be reached) writes one `watch_failed` line through the logger, and the next pass tries again; no handler's throw stops the pass. `stop()` clears the interval and waits for a pass in progress, which frees the watch lease; a watcher that dies inside a pass leaves the lease to run out two intervals later.
+
+## Reports-only jobs
+
+A loop that runs on its own timer (a box's cron line, a loop inside the product's own process) reports each run, so the jobs page shows it and the watcher judges it:
+
+```ts
+scheduler.report('backup_dump', { title: 'Backup', process: 'box', everyMs: 86_400_000 }, 'ok');
+```
+
+The scheduler keeps a row of kind `reports_only` and a run row for it, written once a minute at most a job: reports in between are coalesced in memory, so a loop may report each second. The row's stall gap is the facts' `stallAfterMs`, else twice `everyMs`, and never under three minutes, since a healthy loop's row can read up to a minute old. `report()` never throws and never waits: a name outside the job-name rule, facts no schedule can have (an interval or a gap that is not a whole number of milliseconds above 0) and a store that refuses the write log one warning (`report_refused` or `report_failed`), and a report under the name of a scheduled job changes nothing of that job. `settled()` on a scheduler from `createSchedulerForTests` waits for the writes a report began. A reports-only job has no lease, no pause and no hand run: `pause`, `resume` and `runNow` answer `reports_only` (409), and a tick never claims it.
+
+## Retention
+
+| Rows | Kept | Who deletes |
+|---|---|---|
+| `<prefix>_runs` | the newest 100 a job, and those of the last 14 days | the scheduler's tick, once an hour at most |
+| `<prefix>_missed` | the newest 50 a job, and those of the last 7 days | the same |
+| a staff account's id in `<prefix>_jobs` and `<prefix>_runs` | until the product deletes that account | the product's deletion step calls `scheduler.forgetActor(trx, accountId)` |
+
+A run still running and a missed due time still owed to a catch-up are kept whatever their age and number, so a `required` catch-up that fails and retries still covers every due time it owes. `keep` (`runsPerJob`, `runDays`, `missedPerJob`, `missedDays`) replaces each default it gives; a field that is not a whole number above 0 throws a `RangeError` when the scheduler is built.
+
+## Privacy
+
+Nothing in these tables is a person's data beyond a staff account id in three columns: `paused_by` and `hand_run_by` on a job's row and `by_hand` on a run. `forgetActor` nulls them, or makes a pause's actor `system`, when the product deletes that staff account. Everything else is a job's name, title and process word, its schedule, times, counts, a run's outcome and error kind, the `did` words a job answers (words and integers, never a person's name, address or message) and the reference a host's stall handler answers. No customer's deletion touches these tables.
 
 ## Schedules
 
@@ -141,7 +188,7 @@ Any other cron expression reads `Cron <expr> UTC`. A minute step reads as an int
 
 ## Tests
 
-The suite runs every table case on SQLite through sql.js in memory and, when `AGENTOS_TEST_POSTGRES_URL` names a server, on PostgreSQL; without it the PostgreSQL half shows as skipped under its reason. The repository's CI runs both, PostgreSQL 16 among its services. The cron cases run under UTC and, in `test/cron-tz.test.ts`, under `America/New_York` across its fall-back on 1 November 2026. `test/scheduler.test.ts` drives the tick by hand on a fake clock (`createSchedulerForTests` gives a host the same); its cases that need two processes at once run their calls at once on PostgreSQL and one after the other on SQLite.
+The suite runs every table case on SQLite through sql.js in memory and, when `AGENTOS_TEST_POSTGRES_URL` names a server, on PostgreSQL; without it the PostgreSQL half shows as skipped under its reason. The repository's CI runs both, PostgreSQL 16 among its services. The cron cases run under UTC and, in `test/cron-tz.test.ts`, under `America/New_York` across its fall-back on 1 November 2026. `test/scheduler.test.ts` drives the tick by hand on a fake clock (`createSchedulerForTests` gives a host the same); its cases that need two processes at once run their calls at once on PostgreSQL and one after the other on SQLite. `test/watcher.test.ts`, `test/report.test.ts` and `test/housekeeping.test.ts` drive the watcher's passes and the tick by hand on the same clock.
 
 ## Releases
 

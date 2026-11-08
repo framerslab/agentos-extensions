@@ -150,8 +150,8 @@ describeBackends('reports-only jobs', (backend) => {
     expect(warnings.map(([message, fields]) => [message, fields?.job]).sort()).toEqual([
       ['report_failed', 'bad_gap'],
       ['report_failed', 'bad_interval'],
-      ['report_refused', '__watch'],
       ['report_refused', 'Not A Name'],
+      ['report_refused', '__watch'],
     ]);
 
     // A store that refuses the write: a scheduler under a prefix with no tables.

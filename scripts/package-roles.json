@@ -287,7 +287,8 @@
       "scheduleWords",
       "computeNextRunAtMs",
       "createScheduler",
-      "createSchedulerForTests"
+      "createSchedulerForTests",
+      "createWatcher"
     ]
   },
   "fixtures": {
