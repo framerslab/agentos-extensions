@@ -26,7 +26,7 @@ export const num = (value: number | string | null | undefined): number | null =>
 const must = (value: number | string): number => Number(value);
 
 /** The stored schedule, or null on a reports-only row. */
-export function scheduleOf(row: JobRow): Schedule | null {
+export function scheduleOf(row: Pick<JobRow, 'schedule'>): Schedule | null {
   return row.schedule === null ? null : (JSON.parse(row.schedule) as Schedule);
 }
 
