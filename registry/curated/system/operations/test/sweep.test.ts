@@ -7,6 +7,7 @@ import { migrateOperations } from '../src/store/migrations.js';
 import { describeBackends, dropOperationsTables, freshPrefix, type Backend } from './helpers/adapters.js';
 import { fakeClock } from './helpers/clock.js';
 import { fixtureOptions } from './helpers/host.js';
+import { ownLocks } from './helpers/locks.js';
 
 const NOW = Date.UTC(2026, 9, 22, 12, 0, 0);
 const HOUR_MS = 3_600_000;
@@ -281,7 +282,7 @@ describeBackends('the hourly sweep', (backend: Backend) => {
       await seed.line('ln_old', NOW - 20 * DAY_MS);
       const fixture = fixtureOptions(db, { prefix }, fakeClock(NOW));
       const job = createSweepJob(createContext(fixture.options));
-      expect(fixture.options.locks[1]).toBe(102);
+      expect(fixture.options.locks[1]).toBe(ownLocks()[1]);
       if (backend.name === 'postgres') {
         const other = await backend.open();
         try {

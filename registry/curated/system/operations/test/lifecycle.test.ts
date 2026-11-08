@@ -532,7 +532,7 @@ describeBackends('lifecycle events', (backend) => {
     await seed('evt_kept', NOW - 29 * DAY_MS);
     await seed('evt_waiting', null);
 
-    const { fixture } = build({ options: { locks: [7201, 7202, 7203] } });
+    const { fixture } = build();
     const run = await createSweepJob(createContext(fixture.options)).run();
     expect(run.outcome).toBe('ok');
     expect(run.failed).toEqual([]);

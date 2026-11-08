@@ -8,6 +8,7 @@ import { migrateOperations } from '../src/store/migrations.js';
 import { describeBackends, dropOperationsTables, freshPrefix } from './helpers/adapters.js';
 import { fakeClock } from './helpers/clock.js';
 import { FIXTURE_METRICS, fixtureOptions } from './helpers/host.js';
+import { ownLocks } from './helpers/locks.js';
 
 const TODAY = Date.UTC(2026, 9, 22);
 const YESTERDAY = TODAY - DAY_MS;
@@ -94,7 +95,7 @@ describeBackends('the nightly totals job', (backend) => {
       expect((await job.run()).outcome).toBe('ok');
       expect(Number((await beat())?.last_ok_at)).toBe(clock.now());
     }
-    expect(fixture.options.locks[2]).toBe(103);
+    expect(fixture.options.locks[2]).toBe(ownLocks()[2]);
     expect(fixture.recorder.linesOf('ops_job')).toEqual([]);
   });
 
