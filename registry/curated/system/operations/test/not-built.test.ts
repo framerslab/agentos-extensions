@@ -63,25 +63,28 @@ describe('createOperations before the next minor release', () => {
     await db.close();
   });
 
-  it('answers errors and health whose calls throw not_built naming the next minor release, while tickets and the account functions are built', async () => {
+  it('answers errors whose calls throw not_built naming the next minor release, while tickets, health.status and the account functions are built', async () => {
     const operations = createOperations(fixtureOptions(db).options);
     expectNextMinor(thrownBy(() => operations.errors.groups()), 'errors.groups');
-    expectNextMinor(thrownBy(() => operations.health.status()), 'health.status');
+    await expect(operations.health.status()).resolves.toEqual({ checks: [], beats: [], outages: [] });
     expect(await operations.tickets?.stats({ accountId: 'staff-1', role: 'owner' })).toMatchObject({ open: 0, waiting: 0, urgent: 0, resolvedToday: 0 });
     await operations.stop();
   });
 
-  it('answers every member of errors and health with not_built, health.queue among them', async () => {
+  it('answers every member of errors and every health member but beat and status with not_built, health.queue among them', async () => {
     const operations = createOperations(fixtureOptions(db).options);
     const members: Readonly<Record<'errors' | 'health', readonly string[]>> = {
       errors: ['capture', 'report', 'groups', 'group', 'setState'],
-      health: ['check', 'queue', 'beat', 'box', 'outage', 'status'],
+      health: ['check', 'queue', 'box', 'outage'],
     };
     for (const [surface, names] of Object.entries(members)) {
       const object = operations[surface as keyof typeof members] as unknown as Record<string, () => unknown>;
       // A member the stub lacks is not a function, so calling it throws a TypeError, never not_built.
       for (const name of names) expectNextMinor(thrownBy(() => object[name]()), `${surface}.${name}`);
     }
+    // The beats part of health is built: beat answers nothing and never throws, and status reads the beats table.
+    expect(operations.health.beat('x', 'ok')).toBeUndefined();
+    await expect(operations.health.status()).resolves.toMatchObject({ checks: [], outages: [] });
     await operations.stop();
   });
 });
