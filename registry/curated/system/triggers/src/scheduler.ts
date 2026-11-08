@@ -649,7 +649,9 @@ export function createScheduler(options: TriggersOptions, internals: { readonly 
     for (const row of rows) views.push(viewOf(row, at, missed.get(row.name) ?? 0, row.lease_until !== null && Number(row.lease_until) > at ? await runningSince(db, row.name) : null));
     const wanted = views.filter((v) => (filter.process === undefined || v.process === filter.process) && (filter.state === undefined || (filter.state === 'attention' ? v.state === 'failed' || v.state === 'stalled' || v.state === 'missed' : v.state === filter.state)));
     wanted.sort((a, b) => RANK[a.state] - RANK[b.state] || (a.nextDueAt ?? Number.MAX_SAFE_INTEGER) - (b.nextDueAt ?? Number.MAX_SAFE_INTEGER) || a.name.localeCompare(b.name));
-    const offset = filter.cursor === undefined ? 0 : Number(filter.cursor);
+    // The cursor comes back from a host's query string: anything but a whole number from zero up reads as the first page.
+    const asked = filter.cursor === undefined ? 0 : Number(filter.cursor);
+    const offset = Number.isInteger(asked) && asked >= 0 ? asked : 0;
     const page = wanted.slice(offset, offset + LIST_PAGE);
     return { jobs: page, cursor: offset + LIST_PAGE < wanted.length ? String(offset + LIST_PAGE) : null };
   }
