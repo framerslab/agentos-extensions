@@ -43,7 +43,7 @@ CI ([`ci.yml`](https://github.com/framerslab/agentos-extensions/blob/master/.git
 9. runs `pnpm -r --filter '!@framers/agentos' --if-present run test`, each pack's own tests
 10. runs `node scripts/pack-guard.mjs --only <the planned directories> --tarballs "$RUNNER_TEMP/release-tarballs"`, the pack guard described below, on the packages the plan publishes; with nothing planned it checks nothing
 
-A push to `master` runs the same job through the release workflow, with the plan made for real: the job keeps the plan and the tarballs the guard checked, and the release job publishes those tarballs. Maintainers merge a pull request only when CI is green.
+The daily release (10:17 UTC, or started by hand) runs the same job on `master`'s head through the release workflow when its gate finds releasable changes, with the plan made for real: the job keeps the plan and the tarballs the guard checked, and the release job publishes those tarballs. A merge to `master` does not run it. Maintainers merge a pull request only when CI is green.
 
 A newer push to a pull request cancels the unfinished runs of its earlier commits, workflow by workflow, so the newest run is the one that counts. A re-run cancels nothing.
 
@@ -120,7 +120,7 @@ This repository is Apache-2.0. By submitting a contribution you agree it is prov
 
 ## Releases
 
-A push to `master` publishes each package whose shipped files changed since its newest published version, from the tarball CI tested, and tags and releases it on GitHub. The [release guide](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md) explains what publishes and when.
+The release runs once a day at 10:17 UTC when releasable changes have merged: it publishes each package whose shipped files changed on `master` since its newest published version, from the tarball CI tested, and tags and releases it on GitHub. To release at once, run `gh workflow run release.yml --repo framerslab/agentos-extensions --ref master`, with `-f dry_run=true` to see what it would publish. The [release guide](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md) explains what publishes and when.
 
 ## Code of Conduct
 

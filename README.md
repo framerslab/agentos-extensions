@@ -122,8 +122,8 @@ independently. Version bumps here do **not** affect curated extension versions.
 
 The packages inside `registry/curated/` are the full extension catalog: channel
 adapters, integrations, research tools, media tools, and more. Each is versioned
-on its own, and a push to `master` that changes a package's shipped files
-publishes it in the same run ([RELEASING.md](./RELEASING.md)).
+on its own, and the daily release (10:17 UTC) publishes each package whose
+shipped files changed on `master` since its last release ([RELEASING.md](./RELEASING.md)).
 
 ### Why two tiers?
 
@@ -400,7 +400,7 @@ pnpm run dev
 
 ## Releasing & Publishing
 
-A push to `master` publishes every package whose shipped files changed since its newest version on npm, from the tarball CI built and tested, and tags and releases each version on GitHub. New versions publish from GitHub Actions through npm trusted publishing, with a provenance statement; a new package's first version publishes through the token, as RELEASING.md describes. Nobody writes a changeset or a release note: the merged pull request's title is the note. See [RELEASING.md](./RELEASING.md) for the full workflow.
+The release runs once a day at 10:17 UTC when releasable changes have merged to `master`: it publishes every package whose shipped files changed since its newest version on npm, from the tarball CI built and tested, and tags and releases each version on GitHub. A merge publishes nothing by itself. To release at once, run `gh workflow run release.yml --repo framerslab/agentos-extensions --ref master` (add `-f dry_run=true` to see what would be released), or Actions, Release & Publish, Run workflow. New versions publish from GitHub Actions through npm trusted publishing, with a provenance statement; a new package's first version publishes through the token, as RELEASING.md describes. Nobody writes a changeset or a release note: the merged pull request's title is the note. See [RELEASING.md](./RELEASING.md) for the full workflow.
 
 ### TL;DR
 
@@ -413,8 +413,9 @@ A push to `master` publishes every package whose shipped files changed since its
 # 2. Read the summary of CI's step "The packages this push would publish":
 #    each package the merge publishes, with its version and the reason
 
-# 3. Merge it: the push to master publishes those packages to npm, tags each
-#    version <name>@<version> and makes its GitHub release
+# 3. Merge it: the next daily release (10:17 UTC) publishes those packages to
+#    npm, tags each version <name>@<version> and makes its GitHub release
+#    (gh workflow run release.yml --ref master releases at once)
 ```
 
 Each extension is versioned and published independently. A change to `web-search` does not bump `telegram`.
@@ -431,7 +432,7 @@ Each extension is versioned and published independently. A change to `web-search
 All extensions get free CI/CD via GitHub Actions:
 
 - **CI** (`ci.yml`): plans what the push would publish (`scripts/release-plan.mjs`), builds the AgentOS core and every pack, runs the release-script tests and each pack's tests, and runs the pack guard on the planned packages, on every pull request
-- **Release** (`release.yml`): runs CI on a push to `master`, then publishes the tarballs CI tested for the packages the push changed, tags each version, makes its GitHub release, and writes the images' version tags
+- **Release** (`release.yml`): runs daily at 10:17 UTC and by hand; a gate ends the run in seconds when nothing is releasable, otherwise it runs CI on `master`'s head, then publishes the tarballs CI tested for the packages that changed, tags each version, makes its GitHub release, and writes the images' version tags
 - **TypeDoc** (`pages-typedoc.yml`): API docs deployed to [framerslab.github.io/agentos-extensions](https://framerslab.github.io/agentos-extensions/) on a push to `master`, one deploy at a time: a deploy that has started runs to the end, and a push that lands during it waits, the last push to come in replacing any earlier one still waiting
 - **Lockfile** (`lockfile.yml`): resolves the workspace's dependency ranges and offers `pnpm-lock.yaml` as an artifact to commit, run by hand on a branch whose `package.json` files changed
 - **Meeting bot image** (`meeting-bot-image.yml`): builds the browser meeting bot's container image and runs its lifecycle test on every pull request that touches `registry/curated/meetings/browser/`, and pushes the image to GHCR from `master`; the bot's nightly real-join check (`nightly-real-join.yml`) runs daily and by hand, and its capacity measurement on a worker (`measure-meeting-bots.yml`) by hand only, as [the pack's README](./registry/curated/meetings/browser/README.md) describes
@@ -471,7 +472,7 @@ All extensions get free CI/CD via GitHub Actions:
 | Guide | What |
 |---|---|
 | [Contributing](https://github.com/framerslab/agentos-extensions/blob/master/CONTRIBUTING.md) | Development setup, adding a pack, commit messages and releases, pull request rules, review threads, contribution licensing |
-| [Release guide](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md) | What a push to `master` publishes, and at which version |
+| [Release guide](https://github.com/framerslab/agentos-extensions/blob/master/RELEASING.md) | What the daily release publishes, and at which version |
 | [Agent instructions](https://github.com/framerslab/agentos-extensions/blob/master/AGENTS.md) | Commands and conventions for coding agents |
 | [Maintainers](https://github.com/framerslab/agentos-extensions/blob/master/MAINTAINERS.md) | Who reviews and merges changes |
 | [Code of Conduct](https://github.com/framerslab/agentos-extensions/blob/master/.github/CODE_OF_CONDUCT.md) | Community standards |

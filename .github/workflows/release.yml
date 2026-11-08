@@ -1,35 +1,134 @@
 name: Release & Publish
 
+# The release runs once a day, at 10:17 UTC, and by hand from the Actions tab; a merge to master releases nothing by
+# itself. Its first job, "Releasable changes", costs seconds: it runs the release plan (scripts/release-plan.mjs plan,
+# then apply) on master's head with git and Node alone, installs nothing, and ends the run green there when the plan
+# names no package to publish and no tag or release to repair. Otherwise CI runs the full suite on that head and the
+# release job publishes what it tested. GitHub may start a scheduled run late when Actions is busy, and runs it on the
+# default branch's newest commit
+# (https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+#
+# A run by hand takes two inputs: force skips the gate and runs the suite and the release whatever the plan says;
+# dry_run runs the gate, the suite and the release job's downloads, and skips the publish, the tags and releases and
+# the images' version tags. From the command line:
+#
+#   gh workflow run release.yml --ref master                     # release now what is owed
+#   gh workflow run release.yml --ref master -f dry_run=true     # see what would be released
+#
 # npm's trusted publishers for these packages name this repository and this workflow file, release.yml: npm compares
 # the file's name with the run that publishes (https://docs.npmjs.com/trusted-publishers), so the file keeps its name
 # and no other workflow publishes.
 on:
-  push:
-    branches: [master]
+  schedule:
+    - cron: '17 10 * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Run the suite and the release even when the gate finds nothing releasable.'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Run the gate and the suite, and skip the publish, the tags and releases and the image tags.'
+        type: boolean
+        default: false
 
-# One run at a time for a ref, and one pending behind it: a newer push replaces the pending run and cancels nothing.
-# The running run's publish step reads master's head again before each package and stops, green, once master has moved
-# past its commit; the newer commit's run plans from npm and the tags and so publishes those changes too.
-concurrency: ${{ github.workflow }}-${{ github.ref }}
+# One run at a time for a ref, and one pending behind it; nothing is cancelled while it runs. A dry run keys a group of
+# its own, so it never takes the place of a pending release. The publish step reads master's head again before each
+# package and stops, green, once master has moved past the run's commit: the packages after it are planned again by
+# the next run, the next day's or one started by hand.
+concurrency: ${{ github.workflow }}-${{ github.ref }}${{ inputs.dry_run && '-dry-run' || '' }}
 
-# contents: write pushes the release tags and creates the GitHub releases; packages: write writes the images' version
-# tags on GHCR; id-token: write lets npm authenticate the publish through OIDC (trusted publishing, with provenance);
-# actions: read lets the images step read the image workflows' runs. The run opens no pull request, pushes no branch
-# and dispatches nothing.
+# Each job names what it holds: the gate and CI read, and the release job alone writes.
 permissions:
-  contents: write
-  packages: write
-  id-token: write
-  actions: read
+  contents: read
 
 jobs:
+  # The gate: the same resolver, plan and apply that CI's step "The packages this push would publish" runs, on the same
+  # commit, with nothing installed. The run is releasable when the plan names a package to publish (planned_count) or
+  # a tag or release to repair (repairs); the reason goes to the log and the run summary. A plan that fails here fails
+  # the run here, as it would have failed CI. force skips the plan.
+  gate:
+    name: Releasable changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      releasable: ${{ steps.decide.outputs.releasable }}
+    steps:
+      - uses: actions/checkout@v7
+        if: ${{ !inputs.force }}
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The resolver writes the core release CI builds against into the checkout before the plan, as in ci.yml.
+      - name: Checkout agentos core (peer dependency)
+        if: ${{ !inputs.force }}
+        uses: actions/checkout@v7
+        with:
+          repository: framerslab/agentos
+          path: packages/agentos
+          persist-credentials: false
+          fetch-depth: 0
+          filter: tree:0
+
+      - name: Setup Node.js
+        if: ${{ !inputs.force }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Resolve published source-store peer floor
+        if: ${{ !inputs.force }}
+        run: node scripts/resolve-core-release.mjs
+
+      - name: The packages this run would publish
+        id: plan
+        if: ${{ !inputs.force }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" = refs/heads/master ]; then
+            node scripts/release-plan.mjs plan
+          else
+            node scripts/release-plan.mjs plan --dry-run
+          fi
+          node scripts/release-plan.mjs apply --tarballs "$RUNNER_TEMP/release-tarballs"
+
+      - name: Decide
+        id: decide
+        env:
+          FORCE: ${{ inputs.force }}
+          PLANNED: ${{ steps.plan.outputs.planned_count }}
+          PLANNED_DIRS: ${{ steps.plan.outputs.planned_dirs }}
+          REPAIRS: ${{ steps.plan.outputs.repairs }}
+        run: |
+          if [ "$FORCE" = true ]; then
+            releasable=true
+            reason='the run was started with force, which skips the check'
+          elif [ "${PLANNED:-0}" -gt 0 ]; then
+            releasable=true
+            reason="the plan publishes ${PLANNED} package(s): ${PLANNED_DIRS}"
+          elif [ "${REPAIRS:-0}" -gt 0 ]; then
+            releasable=true
+            reason="the plan owes ${REPAIRS} tag or release repair(s)"
+          else
+            releasable=false
+            reason='nothing a package ships changed since its newest release, and no tag or release is owed; the run ends here'
+          fi
+          echo "releasable=${releasable}" >> "$GITHUB_OUTPUT"
+          echo "release gate: releasable=${releasable}: ${reason}"
+          printf '### Releasable changes\n\nreleasable: %s\n\n%s\n' "$releasable" "$reason" >> "$GITHUB_STEP_SUMMARY"
+
   # CI plans the release (scripts/release-plan.mjs plan and apply), then builds, tests and packs the exact revision
   # being released, with the plan written into its checkout: the pack guard packs each planned package into the
   # tarball directory, and the job uploads the plan and the tarballs as the artifacts release-plan and
   # release-tarballs. A red run publishes nothing. It installs dependencies and runs their scripts and every test
-  # suite, so it gets a read-only token: only the release job below can write or publish.
+  # suite, so it gets a read-only token: only the release job below can write or publish. It runs only when the gate
+  # finds something releasable.
   ci:
+    needs: gate
+    if: needs.gate.outputs.releasable == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/ci.yml
@@ -42,11 +141,21 @@ jobs:
   # tags step's reads after a refused create (up to one minute and one read of 20 seconds, RELEASE_READ_WAIT), the
   # images step's one wait for the image runs (up to 45 minutes, IMAGE_WAIT) and the publishes, the tags and the
   # releases beside them.
+  #
+  # contents: write pushes the release tags and creates the GitHub releases; packages: write writes the images' version
+  # tags on GHCR; id-token: write lets npm authenticate the publish through OIDC (trusted publishing, with provenance);
+  # actions: read lets the images step read the image workflows' runs. The run opens no pull request, pushes no branch
+  # and dispatches nothing.
   release:
     needs: ci
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      actions: read
     steps:
       # Every commit and tag: the tags step reads the tags in place and pushes the new ones, the images step reads
       # each release tag's commit and the history before it. No credential is kept in the checkout's git config, since
@@ -83,18 +192,27 @@ jobs:
       - name: npm 11.20.0 for trusted publishing
         run: npm install -g npm@11.20.0 && npm --version
 
+      # A dry run stops here: it lists the tarballs the publish would publish, in its order, and writes nothing.
+      - name: Dry run
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "dry run: nothing is published, tagged, released or pushed to GHCR"
+          ls -1 "$RUNNER_TEMP/release-tarballs"
+          cat "$RUNNER_TEMP/release-tarballs/expected.json"
+
       # Publishes each planned tarball with npm publish, in the plan's order, a dependency before its dependents and
       # the root last, after checking that the tarball directory is the plan's. Before each package it reads master's
-      # head again: once master has moved past this commit it stops, green, and the newer commit's run publishes the
-      # rest. It reads the package's versions on npm again, and a version npm gained during the run fails the step,
-      # unless it is the planned version as these tarballs made it (its gitHead this commit and its integrity the
-      # tarball's): an earlier attempt of this run published it, since a re-run replays the first attempt's plan and
-      # tarballs, and it is journaled and not published again. Each accepted publish is appended to the journal before
-      # the next starts, and a dependent waits until npm serves the version of the sibling it names. The npm token sits
-      # on this step alone, as npm's fallback for a package with no trusted publisher; npm tries OIDC first. When it ends
-      # the step reads each published version's publisher on npm and warns for one that came through the token.
+      # head again: once master has moved past this commit it stops, green, and the next run publishes the rest. It
+      # reads the package's versions on npm again, and a version npm gained during the run fails the step, unless it is
+      # the planned version as these tarballs made it (its gitHead this commit and its integrity the tarball's): an
+      # earlier attempt of this run published it, since a re-run replays the first attempt's plan and tarballs, and it
+      # is journaled and not published again. Each accepted publish is appended to the journal before the next starts,
+      # and a dependent waits until npm serves the version of the sibling it names. The npm token sits on this step
+      # alone, as npm's fallback for a package with no trusted publisher; npm tries OIDC first. When it ends the step
+      # reads each published version's publisher on npm and warns for one that came through the token.
       - name: Publish the planned tarballs
         id: publish
+        if: ${{ !inputs.dry_run }}
         run: node scripts/release-plan.mjs publish --plan "$RUNNER_TEMP/release-plan/release-plan.json" --journal "$RUNNER_TEMP/published.jsonl" --tarballs "$RUNNER_TEMP/release-tarballs"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -106,17 +224,18 @@ jobs:
       # unpublished, less a package whose tag names this commit already, which an earlier attempt of the run published.
       - name: Tags and releases
         id: tags
-        if: always()
+        if: ${{ always() && !inputs.dry_run }}
         run: node scripts/release-plan.mjs tags --plan "$RUNNER_TEMP/release-plan/release-plan.json" --journal "$RUNNER_TEMP/published.jsonl"
         env:
           GH_TOKEN: ${{ github.token }}
 
       # The only writer of the images' version tags: for each image pack in scripts/package-roles.json, each released
       # version's image is copied from the image workflow's tested sha- image of its image commit, with no rebuild.
-      # It reconciles on every run, whether or not this one published, and never moves a version tag GHCR holds.
+      # It reconciles on every release run, whether or not this one published, and never moves a version tag GHCR
+      # holds.
       - name: Image version tags
         id: images
-        if: always()
+        if: ${{ always() && !inputs.dry_run }}
         run: node scripts/release-plan.mjs images
         env:
           GH_TOKEN: ${{ github.token }}
