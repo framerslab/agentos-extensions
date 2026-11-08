@@ -861,6 +861,46 @@ describeBackends('the Discord outbox', (backend: Backend) => {
     }
   }, 30_000);
 
+  it("13d. stop() answering while a row's give-up is marked starts no mail and no statement after it: on PostgreSQL the give-up rolls back, on SQLite the mail stays owed", async () => {
+    await within(async ({ prefix, clock, build }) => {
+      const hook = recordingHook();
+      const late: string[] = [];
+      let answered = false;
+      const mark = holdOnce((sql, method) => method === 'run' && sql.includes("last_answer = 'gave_up'"), { armed: false });
+      const handle = watched(db, {
+        seen(sql) {
+          if (answered) late.push(sql);
+        },
+        hold: mark.hold,
+      });
+      const { ops, fixture } = build({ discord: hook.hook }, handle);
+      await ops.alerts.post(POST);
+      hook.answers.push({ outcome: 'failed', status: 503 });
+      await ops.alerts.sendDue(clock.now());
+      clock.set(NOW + ALERT_GIVE_UP_MS);
+      mark.arm();
+
+      const draining = ops.alerts.sendDue(clock.now());
+      try {
+        await mark.reached;
+        await ops.stop(); // past its 3 seconds: the give-up's mark is held
+        answered = true;
+      } finally {
+        mark.release();
+      }
+      expect(await draining).toEqual(NOTHING);
+      expect(late).toEqual([]);
+      expect(fixture.recorder.mails).toEqual([]);
+      expect(hook.calls).toHaveLength(1);
+      const row = await stored(db, prefix, POST.dedupKey);
+      if (backend.name === 'postgres') {
+        expect(row).toMatchObject({ state: 'pending', attempts: 1, lastAnswer: '503', mailState: 'none' });
+      } else {
+        expect(row).toMatchObject({ state: 'failed', lastAnswer: 'gave_up', mailState: 'owed', mailAttempts: 0, settledAt: null });
+      }
+    });
+  }, 30_000);
+
   it('13c. on SQLite, rows whose hooks are still awaited past their claims never fill the drain\'s read: a row due behind twenty of them is delivered', async () => {
     if (backend.name === 'postgres') return; // PostgreSQL's read skips a locked row before its LIMIT
     await within(async ({ prefix, clock }) => {
