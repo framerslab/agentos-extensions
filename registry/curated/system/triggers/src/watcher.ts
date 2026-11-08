@@ -15,10 +15,12 @@ import { DEFAULT_PREFIX, requireDialectPrefix, requirePrefix, tableName } from '
 
 /** How often the watcher passes when the host gives no interval. */
 export const DEFAULT_WATCH_EVERY_MS = 60_000;
+/** How long a host's handler may run before the watcher gives it up as a throw, when the host gives no bound. */
+export const DEFAULT_HANDLER_TIMEOUT_MS = 30_000;
 const DAY_MS = 86_400_000;
 
-/** The options `createWatcher` takes: the scheduler's, without the commands' hooks, and the pass interval. */
-export type WatcherOptions = Omit<TriggersOptions, 'audit' | 'handRunsPerHour'> & { readonly everyMs?: number };
+/** The options `createWatcher` takes: the scheduler's, without the commands' hooks, the pass interval and the bound on each handler call. */
+export type WatcherOptions = Omit<TriggersOptions, 'audit' | 'handRunsPerHour'> & { readonly everyMs?: number; readonly handlerTimeoutMs?: number };
 
 /** The watcher with its pass exposed, for the package's tests. */
 export interface WatcherInternals extends Watcher {
@@ -32,7 +34,8 @@ export interface WatcherInternals extends Watcher {
  * once a day for a job that stays failed. Paused and failed jobs are never judged stalled, and neither is a scheduled job
  * with nothing owed (a one-shot that ran, or a job whose next due time or retry is still ahead); a scheduled job's quiet is
  * measured from its last run or the time it became owed, whichever is later. A pass renews the watch lease while it runs and
- * stops when another holder took it. `internals.arm: false` arms no interval: the caller drives `pass()`.
+ * stops when another holder took it. A handler call that has not settled within `handlerTimeoutMs` is given up as a throw, so
+ * a handler that never settles never holds the pass and its lease. `internals.arm: false` arms no interval: the caller drives `pass()`.
  */
 export function createWatcher(options: WatcherOptions, internals: { readonly arm?: boolean } = {}): WatcherInternals {
   const db = options.db;
@@ -41,6 +44,8 @@ export function createWatcher(options: WatcherOptions, internals: { readonly arm
   const now = options.now ?? Date.now;
   const everyMs = options.everyMs ?? DEFAULT_WATCH_EVERY_MS;
   if (!(Number.isInteger(everyMs) && everyMs > 0)) throw new RangeError('the watcher\'s interval is a whole number of milliseconds above 0');
+  const handlerTimeoutMs = options.handlerTimeoutMs ?? DEFAULT_HANDLER_TIMEOUT_MS;
+  if (!(Number.isInteger(handlerTimeoutMs) && handlerTimeoutMs > 0)) throw new RangeError('the watcher\'s handler bound is a whole number of milliseconds above 0');
   const logger = options.logger;
   const holder = `${options.process}:${randomHex(4)}`;
   const stalled = new Set<(job: JobView, since: number) => Promise<string | null>>();
@@ -49,6 +54,22 @@ export function createWatcher(options: WatcherOptions, internals: { readonly arm
   let timer: ReturnType<typeof setInterval> | null = null;
   /** The pass in progress, which a second call and `stop()` wait on rather than start another. */
   let current: Promise<void> | null = null;
+
+  /**
+   * A host's handler call, rejected once it has run `handlerTimeoutMs` without settling: the caller counts it as a throw, so the
+   * stall, recovery or repeat stays unacknowledged and the next pass calls it again (the handlers are idempotent). A call given up
+   * is one `watch_handler_timed_out` line, and what it answers later is not stored.
+   */
+  function bounded<T>(work: Promise<T>, job: string, handler: 'stalled' | 'recovered' | 'failed_again'): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        logger.warn('watch_handler_timed_out', { job, handler });
+        reject(new Error('handler timed out'));
+      }, handlerTimeoutMs);
+    });
+    return Promise.race([work, limit]).finally(() => clearTimeout(timer));
+  }
 
   const view = async (row: JobRow, at: number): Promise<JobView> => {
     const missed = await db.get<{ n: number | string }>(`SELECT COUNT(*) AS n FROM ${t('missed')} WHERE job = ? AND due_at >= ?`, [row.name, at - DAY_MS]);
@@ -66,7 +87,7 @@ export function createWatcher(options: WatcherOptions, internals: { readonly arm
     let ok = true;
     for (const handler of stalled) {
       try {
-        ref = (await handler(job, since)) ?? ref;
+        ref = (await bounded(handler(job, since), row.name, 'stalled')) ?? ref;
       } catch {
         ok = false;
       }
@@ -156,7 +177,7 @@ export function createWatcher(options: WatcherOptions, internals: { readonly arm
     let ok = true;
     for (const handler of recovered) {
       try {
-        await handler(job, since, ref === '' ? null : ref);
+        await bounded(handler(job, since, ref === '' ? null : ref), row.name, 'recovered');
       } catch {
         ok = false;
       }
@@ -181,7 +202,7 @@ export function createWatcher(options: WatcherOptions, internals: { readonly arm
     let ok = true;
     for (const handler of failedAgain) {
       try {
-        await handler(job, days);
+        await bounded(handler(job, days), row.name, 'failed_again');
       } catch {
         ok = false;
       }
@@ -208,7 +229,8 @@ export function createWatcher(options: WatcherOptions, internals: { readonly arm
       return held;
     };
     // The lease is renewed every half interval while the pass runs, a host's handler awaited included, so a slow handler never
-    // lets a second watcher take the row and tell the same stall at once.
+    // lets a second watcher take the row and tell the same stall at once; each handler call is bounded (`bounded`), so the pass
+    // ends and the renewals stop even when a handler never settles.
     const renewer = setInterval(() => void renew(), Math.max(1, Math.floor(everyMs / 2)));
     renewer.unref?.();
     try {
