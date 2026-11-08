@@ -18,12 +18,14 @@ const words = scheduleWords({ kind: 'cron', expr: '20 0 * * *' }); // "Daily at 
 
 | Part | In this release |
 |---|---|
+| `createScheduler` | Registration, the restore at start with the missed-run rules, the tick, the lease with a claim token, the fenced settlement, retries, pause, resume, run now, the reads and `forgetActor`. |
+| `createSchedulerForTests` | The same scheduler with no interval armed: a host's tests drive `tick()` and `settled()` on their own clock. |
 | `migrateTriggers` | Builds `<prefix>_jobs`, `<prefix>_runs`, `<prefix>_missed` and their migration ledger, `<prefix>_schema_migrations`, on PostgreSQL and SQLite. |
 | `computeNextRunAtMs` | The next due time of a schedule strictly after a given time, or `undefined` when there is none. |
 | `scheduleWords` | The sentence a schedule reads as on a jobs page. |
-| The types | `Schedule`, `MissedRunRule`, `JobDefinition`, `RunContext`, `RunSummary`, `JobState`, `RunOutcome`, `JobView`, `RunView`, `MissedView`, `TriggersRefusal`, `TriggersAuditEntry`, `TriggersLogger`, `Keep`, `TriggersOptions`, `Scheduler`, `Watcher`. |
+| The types | `Schedule`, `MissedRunRule`, `JobDefinition`, `RunContext`, `RunSummary`, `JobState`, `RunOutcome`, `JobView`, `RunView`, `MissedView`, `TriggersRefusal`, `TriggersAuditEntry`, `TriggersLogger`, `Keep`, `TriggersOptions`, `Scheduler`, `SchedulerInternals`, `Watcher`. |
 
-`createScheduler` (registration, the restore and the missed-run rules, the tick, the lease, retries, pause, resume, run now and the reads) and `createWatcher` (the stall watcher, reports-only rows and the retention of runs) follow in the next two pull requests of this package. The package stays private until the last of them, and its first version, 0.1.0, publishes with that merge.
+`createWatcher` (the stall watcher), `report()` (reports-only rows, which this release answers with nothing) and the retention of runs and missed runs follow in the next pull request of this package. The package stays private until it, and its first version, 0.1.0, publishes with that merge.
 
 ## Installation
 
@@ -43,7 +45,71 @@ Node 22 or later. `@framers/sql-storage-adapter` 0.7.15 or later is an optional 
 
    It builds the three tables and the ledger under the prefix; run again, it applies nothing. A prefix is a lower-case letter followed by at most 32 lower-case letters, digits or underscores, `trig` when none is given; on SQLite, `sqlite` and a prefix beginning `sqlite_` are refused, since SQLite keeps those names for itself. The lock key is 724313571 when none is given, the adapter runner's own default, which the operations package takes too, so runners that share a database share a key.
 
-Registering jobs, starting the scheduler in the process that runs them, the reads and commands in the other processes and the stall watcher are the steps `createScheduler` and `createWatcher` bring.
+2. **Build** one scheduler in each process that runs jobs, and one in each process that only reads and commands, which it never starts:
+
+   ```ts
+   import { createScheduler } from '@framers/agentos-ext-triggers';
+
+   const scheduler = createScheduler({
+     db,                      // the product's StorageAdapter
+     prefix: 'trig',
+     process: 'sweeper',      // the process word its leases carry
+     logger,                  // info, warn, error
+     audit: (trx, entry) => writeStaffEvent(trx, entry), // pause, resume and run now, inside the command's transaction
+     describe: (error) => ({ kind: errorKind(error) }),  // a failed try's kind as a word
+   });
+   ```
+
+   `now` (the clock, `Date.now` by default), `tickMs` (10 s by default, the smallest `every`) and `handRunsPerHour` (20 by default) are the other options.
+
+3. **Register** each job before `start()`:
+
+   ```ts
+   scheduler.register({
+     name: 'ticket_routing',            // a lower-case letter, then at most 63 lower-case letters, digits or underscores
+     title: 'Ticket routing',
+     process: 'sweeper',
+     schedule: { kind: 'every', everyMs: 300_000 },
+     rule: 'catch_up_once',             // or 'skip', or 'required'
+     safeToRepeat: true,                // offers run now; a lost run is run again
+     stallAfterMs: 900_000,
+     run: async ({ signal }) => {
+       const routed = await routeWaitingTickets({ signal });
+       return { did: `${routed} routed` };
+     },
+   });
+   ```
+
+   `register` throws on a name outside the rule, a duplicate name, an `every` below the tick, a cron expression the parser refuses, and a job marked `legalDuty` whose rule is not `required`. `retries` (5), `backoffMs` (30 s doubling to 10 minutes) and `timeoutMs` (10 minutes) take those defaults when left out.
+
+4. **Start** after the product's other registrations, and stop inside the process's SIGTERM grace:
+
+   ```ts
+   await scheduler.start();
+   process.on('SIGTERM', () => void scheduler.stop({ waitMs: 5_000 }));
+   ```
+
+   `start()` writes each definition into its row, restores every job (below) and arms the tick. `stop()` stops claiming, waits up to `waitMs` for the runs in flight and then aborts their signals; a run that settles in the wait releases its lease, and one that does not stops being renewed, so its lease expires within two ticks and the next claim marks it `lost`.
+
+A process that only reads and commands calls `list`, `get`, `runs`, `missed`, `pause`, `resume` and `runNow` on its unstarted scheduler. `pause(name, actor, note?)` and `resume(name, actor)` answer the job's view or a refusal; `runNow(name, actor)` answers `{ queued: true }` or a refusal, and the process that runs the job runs it within one tick. A refusal is `{ refused, status }`: `not_found` (404), `already`, `in_flight`, `not_safe`, `reports_only` (409), and `hand_runs_used` (429, with `retryAt`, the next whole hour), past `handRunsPerHour` hand runs an hour on the instance. The stall watcher is the step `createWatcher` brings.
+
+## What the scheduler guarantees
+
+- **One run per due time across processes.** A run starts only under a claim: a conditional update that writes the process's lease and a fresh 128-bit token on a job that is due and free. Two processes on one PostgreSQL database give one run per due time; SQLite is one process by the adapter's design.
+- **A run that outlives its lease never settles over its successor.** Every write a settlement makes is conditional on its token, so a run whose lease another process took changes no job row and reads `lost`. A job not marked `safeToRepeat` is paused by the system after a lost run, never run again on its own.
+- **A restart restores every job and loses no row.** Due times that passed while no process ran a job are written to `<prefix>_missed` with cause `worker_down` and follow the job's rule: `skip` records each one skipped; `catch_up_once` records them skipped but the latest, which one run catches up; `required` catches up every one, the run's `covers` naming them. The rows and the move of the job's next due time land in one transaction, and a due time is recorded once whatever number of processes start at once. A catch-up runs on a due time the schedule had, never on "now". Past 1,000 missed due times, `skip` and `catch_up_once` record the newest 1,000 and count the rest in the log line; `required` records the oldest 1,000 and each catch-up's settlement records the next batch.
+- **Retries serve the due time their first try served.** A failed try below `retries` waits its backoff and runs again on the same due time, a restart past the backoff included; at the bound the job is paused by the system, reads `failed`, and `onFailed` fires once. `resume` clears it, and records the due times passed while it was paused (cause `paused`) by the job's rule.
+- **A hand run never doubles a run in flight and never runs a job not marked safe.** It leaves the schedule, the tries and a pause as they were.
+- **Commands decide by their write.** Each of `pause`, `resume` and `runNow` is a conditional update; two at once on one job give one change and one `already`. The `audit` hook writes inside the command's transaction only after its row changed, and a hook that throws rolls the command back.
+- **A timeout is seen at the first tick at or past it**, so a job's `signal` aborts (reason `timeout`) within one tick of its `timeoutMs`, and the try counts as failed when the body settles. The lease is renewed each tick until then.
+- **A renewal the database refuses aborts the run's `signal` with `lease_lost` at once**, before another process can take the job.
+
+## What a job body must do
+
+- Honour `signal`: stop its work when it aborts (`timeout`, `lease_lost` or `stop`).
+- When it is not safe to repeat, write `runId` and `dueAt` beside its effects, so a run after a lost one can tell what was done.
+- Answer `{ outcome: 'failed' }`, or throw, for a failed try; `{ outcome: 'skipped' }` when there was nothing to do; `{ did }` for the words the jobs page shows. Words and integers only: never a person's name, address or message.
+- Never outlive its timeout.
 
 ## Schedules
 
@@ -74,7 +140,7 @@ Any other cron expression reads `Cron <expr> UTC`. A minute step reads as an int
 
 ## Tests
 
-The suite runs every table case on SQLite through sql.js in memory and, when `AGENTOS_TEST_POSTGRES_URL` names a server, on PostgreSQL; without it the PostgreSQL half shows as skipped under its reason. The repository's CI runs both, PostgreSQL 16 among its services. The cron cases run under UTC and, in `test/cron-tz.test.ts`, under `America/New_York` across its fall-back on 1 November 2026.
+The suite runs every table case on SQLite through sql.js in memory and, when `AGENTOS_TEST_POSTGRES_URL` names a server, on PostgreSQL; without it the PostgreSQL half shows as skipped under its reason. The repository's CI runs both, PostgreSQL 16 among its services. The cron cases run under UTC and, in `test/cron-tz.test.ts`, under `America/New_York` across its fall-back on 1 November 2026. `test/scheduler.test.ts` drives the tick by hand on a fake clock (`createSchedulerForTests` gives a host the same); its cases that need two processes at once run their calls at once on PostgreSQL and one after the other on SQLite.
 
 ## Releases
 

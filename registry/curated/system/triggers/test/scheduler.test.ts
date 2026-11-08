@@ -234,7 +234,7 @@ describeBackends('the scheduler', (backend) => {
     const a = make(clock, 'a'); a.register(job('again', async () => {}, { rule: 'catch_up_once' }));
     await a.start(); await a.stop({ waitMs: 0 }); // the catch-up is queued (next_due_at = T0 + 30 s) and never ran
     const b = make(clock, 'b'); b.register(job('again', async () => {}, { rule: 'catch_up_once' }));
-    await b.start(); await b.stop({ waitMs: 0 }); // the same window: nothing new (plan gate, P0: a fourth row was written)
+    await b.start(); await b.stop({ waitMs: 0 }); // the same window: nothing new (a fourth row would record the queued catch-up again)
     expect(await db.all(`SELECT due_at FROM ${t('missed')} WHERE job = 'again'`)).toHaveLength(3);
     clock.advance(30_000);
     const c = make(clock, 'c'); c.register(job('again', async () => {}, { rule: 'catch_up_once' }));
