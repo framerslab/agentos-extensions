@@ -32,14 +32,14 @@
  * settled, dropped) go 30 days after they settled, by the hourly sweep's `discord_outbox` step.
  *
  * One drain at a time a process (a call while one runs joins it); `stop()` waits for a running drain within its 3 seconds, and no
- * hook or mail starts once `stop()` has begun, a row read or claimed then included: on PostgreSQL its transaction ends with nothing
- * written, and on SQLite its claim is given back. A hook or a mail still running when `stop()` answers writes nothing once it
- * returns, since the host may have closed its handle, nor does a settlement whose commit would come after it: on PostgreSQL the claim
- * rolls back, and on SQLite the claim lapses at its deadline, so the next process tries the row again and Discord may show that alert
- * twice. A try's counts and lines stand once its claim has ended, so a claim that rolls back counts and logs nothing. The lines:
- * `delivery_sent` and `delivery_retry` (with `answer`, a word, beside `status`, an integer, where there is one, and `wait_s`),
- * `delivery_failed` (`answer`: `mail_failed` or `suppressed`) and `ops_discord` (`outcome`: `dropped` or `no_hook`, with `count`),
- * each with the row's `channel`; never a line's words or a key.
+ * hook, mail or drop of the drain's bound starts once `stop()` has begun, a row read or claimed then included: on PostgreSQL its
+ * transaction ends with nothing written, and on SQLite its claim is given back. A hook or a mail still running when `stop()` answers
+ * writes nothing once it returns, since the host may have closed its handle, nor does a settlement whose commit would come after it:
+ * on PostgreSQL the claim rolls back, and on SQLite the claim lapses at its deadline, so the next process tries the row again and
+ * Discord may show that alert twice. A try's counts and lines stand once its claim has ended, so a claim that rolls back counts and
+ * logs nothing. The lines: `delivery_sent` and `delivery_retry` (with `answer`, a word, beside `status`, an integer, where there is
+ * one, and `wait_s`), `delivery_failed` (`answer`: `mail_failed` or `suppressed`) and `ops_discord` (`outcome`: `dropped` or
+ * `no_hook`, with `count`), each with the row's `channel`; never a line's words or a key.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext } from '../context.js';
@@ -277,6 +277,8 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
    * a hook, and on SQLite the rows whose hook is awaited over this adapter are left out.
    */
   async function cap(channel: string, nowMs: number): Promise<number> {
+    // Once stop() has answered the host may have closed its handle: the bound waits for the next drain.
+    if (context.closed) return 0;
     const leftOut = leftOutInHook();
     const oldest = `SELECT id FROM ${table} WHERE channel = ? AND state = 'pending'${leftOut.sql} ORDER BY created DESC, id DESC ${
       postgres ? `OFFSET ${ALERT_PENDING_MAX} FOR UPDATE SKIP LOCKED` : `LIMIT -1 OFFSET ${ALERT_PENDING_MAX}`
@@ -296,7 +298,11 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
   async function capAll(nowMs: number): Promise<number> {
     const over = await db.all<{ channel: string }>(`SELECT channel FROM ${table} WHERE state = 'pending' GROUP BY channel HAVING COUNT(*) > ${ALERT_PENDING_MAX}`);
     let dropped = 0;
-    for (const { channel } of over) dropped += await cap(channel, nowMs);
+    for (const { channel } of over) {
+      // No drop begins once stop() has begun, as no row does: the read or a channel's drop before it can outlast stop()'s 3 seconds.
+      if (context.stopped || context.closed) break;
+      dropped += await cap(channel, nowMs);
+    }
     return dropped;
   }
 
