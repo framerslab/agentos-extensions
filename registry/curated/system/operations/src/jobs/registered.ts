@@ -4,7 +4,9 @@
  * adapter over the job it runs and answers the run's outcome; none writes a beat, since the
  * scheduler's `onRun` writes it once the run has settled, so one run writes one beat. The sweep and
  * the totals keep their try-locks inside their bodies, so through a rolling deploy an old process's
- * timers and a new process's registered job never run one job at once. A body asked to run once
+ * timers and a new process's registered job never run one job at once; the sweep that finds its lock
+ * held answers `skipped`, the totals `failed`, since the holder's run may still roll back and the
+ * totals' rule is `required`. A body asked to run once
  * `stop()` has begun begins nothing, since the host closes its database once `stop()` answers (D47):
  * the sweep and the drain answer `skipped`, the totals `failed`, so the due times its `required`
  * rule owes stay owed.
@@ -134,6 +136,13 @@ export function registeredJobs(context: OpsContext, parts: RegisteredParts): rea
         if (context.stopped) return stoppedTotals(context);
         const totals = await parts.totals.run();
         if (context.stopped && totals.outcome !== 'ok') return stoppedTotals(context);
+        // The night's run skips only when another process holds the totals lock (an old process's nightly run through a rolling
+        // deploy). That run may still fail a metric or roll back, so the try fails rather than serve the due time on its word:
+        // the scheduler runs the night again after its backoff, and the run rewrites the day whole.
+        if (totals.outcome === 'skipped') {
+          ownLine(context.logger, 'warn', 'ops_job', { job: 'totals', step: 'night', outcome: 'skipped' });
+          return { outcome: 'failed', did: `${filled} written, lock held` };
+        }
         return { outcome: fillFailed ? 'failed' : totals.outcome, did: `${filled + totals.written} written` };
       },
     },
