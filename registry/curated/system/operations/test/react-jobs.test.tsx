@@ -297,10 +297,12 @@ describe('useJob', () => {
   it('pause(note), resume() and runNow() POST and replace the job from the answer only, never before it', async () => {
     const posts: Array<{ url: string; method: string; body: string | null; type: string | null }> = [];
     const answers = new Map<string, ReturnType<typeof deferred<Response>>>();
+    // The server's job: what its last command left, which a read after the command's answer reads.
+    let server: Record<string, unknown> = JOB_OK;
     const client: OpsClient = {
       fetch: async (input, init) => {
         const url = String(input);
-        if ((init?.method ?? 'GET') === 'GET') return json(JOB_PAGE);
+        if ((init?.method ?? 'GET') === 'GET') return json({ ...JOB_PAGE, job: server });
         posts.push({ url, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? init.body : null, type: new Headers(init?.headers).get('content-type') });
         const held = deferred<Response>();
         answers.set(url.slice(url.lastIndexOf('/') + 1), held);
@@ -320,6 +322,7 @@ describe('useJob', () => {
     // Until the server answers, the job is as last read.
     expect(hook.current()).toMatchObject({ acting: 'pause', job: JOB_OK });
     await act(async () => {
+      server = paused;
       answers.get('pause')!.resolve(json(paused));
       await pausing;
     });
@@ -333,6 +336,7 @@ describe('useJob', () => {
     expect(posts[1]).toMatchObject({ url: `${BASE}/ticket_routing/resume`, method: 'POST' });
     expect(hook.current()).toMatchObject({ acting: 'resume', job: paused });
     await act(async () => {
+      server = JOB_OK;
       answers.get('resume')!.resolve(json(JOB_OK));
       await resuming;
     });
@@ -345,6 +349,7 @@ describe('useJob', () => {
     });
     expect(posts[2]).toMatchObject({ url: `${BASE}/ticket_routing/run`, method: 'POST' });
     await act(async () => {
+      server = asked;
       answers.get('run')!.resolve(json(asked));
       await running;
     });
@@ -416,9 +421,10 @@ describe('useJob', () => {
     const posts: string[] = [];
     const held = deferred<Response>();
     const paused = { ...JOB_OK, state: 'paused', paused: { by: 'acct_1', at: NOW, note: 'x' } };
+    let server: Record<string, unknown> = JOB_OK;
     const client: OpsClient = {
       fetch: async (input, init) => {
-        if ((init?.method ?? 'GET') === 'GET') return json(JOB_PAGE);
+        if ((init?.method ?? 'GET') === 'GET') return json({ ...JOB_PAGE, job: server });
         posts.push(String(input));
         return held.promise;
       },
@@ -438,6 +444,7 @@ describe('useJob', () => {
     expect(posts).toEqual([`${BASE}/ticket_routing/pause`]);
     expect(hook.current().acting).toBe('pause');
     await act(async () => {
+      server = paused;
       held.resolve(json(paused));
       await pausing;
     });
@@ -561,6 +568,79 @@ describe('useJob', () => {
     await pass(0);
     expect(calls).toEqual([`${BASE}/ticket_routing`, `${BASE}/ops_sweep`]);
     expect(hook.current()).toMatchObject({ offline: false, job: { name: 'ops_sweep' } });
+  });
+
+  it("a command's answer reads the job's page and the list under the same base again at once, so the changes and the list's row show it before the next tick", async () => {
+    const change = { at: NOW, kind: 'job_paused', staffAccountId: 'acct_1', staffName: 'Nathan', note: 'waiting' };
+    const paused = { ...JOB_OK, state: 'paused', paused: { by: 'acct_1', at: NOW, note: 'waiting' } };
+    let server: { job: Record<string, unknown>; changes: unknown[] } = { job: JOB_OK, changes: [] };
+    const gets: string[] = [];
+    const client: OpsClient = {
+      fetch: async (input, init) => {
+        const url = String(input);
+        if ((init?.method ?? 'GET') !== 'GET') {
+          server = { job: paused, changes: [change] };
+          return json(paused);
+        }
+        gets.push(url);
+        return url === BASE ? json({ ...PAGE, jobs: [JOB_FAILED, server.job] }) : json({ ...JOB_PAGE, job: server.job, changes: server.changes });
+      },
+      base: BASE,
+    };
+    // The list beside the job's page, as the page lays them out from 1,024 wide.
+    const hook = renderHook(() => ({ list: useJobs(client), item: useJob(client, 'ticket_routing') }));
+    await pass(0);
+    expect([...gets].sort()).toEqual([BASE, `${BASE}/ticket_routing`]);
+    await act(async () => {
+      await hook.current().item.pause('waiting');
+    });
+    await pass(0);
+    // No tick has passed: the record of changes holds the pause and the list's row reads it.
+    expect(hook.current().item).toMatchObject({ job: paused, page: { job: paused, changes: [change] }, updating: false });
+    expect(hook.current().list).toMatchObject({ jobs: [JOB_FAILED, paused], updating: false });
+    expect(gets).toHaveLength(4);
+  });
+
+  it("a command awaiting its answer under one client is not another's: a fetch swapped under the same base and no session word shows none in flight and sends its own", async () => {
+    const held = deferred<Response>();
+    const posts: string[] = [];
+    const make = (who: string): OpsClient => ({
+      fetch: async (input, init) => {
+        if ((init?.method ?? 'GET') === 'GET') return json(JOB_PAGE);
+        posts.push(`${who} ${String(input)}`);
+        return who === 'first' ? held.promise : json({ ...JOB_OK, state: 'paused' });
+      },
+      base: BASE,
+    });
+    const first = make('first');
+    const second = make('second');
+    let swap: (client: OpsClient) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [client, setClient] = useState<OpsClient>(first);
+      swap = setClient;
+      return useJob(client, 'ticket_routing');
+    });
+    await pass(0);
+    let pausing!: Promise<unknown>;
+    await act(async () => {
+      pausing = hook.current().pause();
+    });
+    expect(hook.current().acting).toBe('pause');
+    await act(async () => {
+      swap(second);
+    });
+    await pass(0);
+    expect(hook.current().acting).toBeNull();
+    let result: unknown;
+    await act(async () => {
+      result = await hook.current().pause();
+    });
+    expect(result).toMatchObject({ job: { state: 'paused' } });
+    expect(posts).toEqual([`first ${BASE}/ticket_routing/pause`, `second ${BASE}/ticket_routing/pause`]);
+    await act(async () => {
+      held.resolve(json(JOB_OK));
+      await pausing;
+    });
   });
 
   it('reads nothing for a null name, and its commands answer not_found without a request', async () => {
