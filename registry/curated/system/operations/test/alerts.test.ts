@@ -598,12 +598,14 @@ describeBackends('the Discord outbox', (backend: Backend) => {
     });
   });
 
-  it("9. a hook or a mail that fails a statement through the handle it is given fails that try alone: the attempt is counted and the drain goes on (on PostgreSQL from a savepoint, so the claim's own writes land)", async () => {
+  it("9. a hook or a mail that fails a statement through the handle it is given fails that try alone: the attempt is counted and the drain goes on (on PostgreSQL from a savepoint, so the claim's own writes land); a hook that swallows its failed statement and posts keeps its answer on both databases", async () => {
     await within(async ({ prefix, clock, build }) => {
       const broken = async (handle: StorageAdapter) => handle.get('SELECT nothing FROM no_such_table_of_the_hook');
       let swallow = false;
+      let posts = 0;
       const { ops } = build({
         async discord(_post, handle) {
+          posts += 1;
           if (swallow) {
             await broken(handle).catch(() => undefined);
             return { outcome: 'sent', deliveryId: 'm9' };
@@ -619,18 +621,17 @@ describeBackends('the Discord outbox', (backend: Backend) => {
       expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'pending', attempts: 1, lastAnswer: 'no_answer' });
       expect(await stored(db, prefix, 'second')).toMatchObject({ state: 'pending', attempts: 1, lastAnswer: 'no_answer' });
 
-      // A hook that swallows its own failed statement: on PostgreSQL its answer stands on an aborted transaction and counts as
-      // failed, as a hook that throws does; on SQLite no transaction is poisoned, and its answer stands.
+      // A hook that swallows its own failed statement and posts: its post is outside the database, so its answer stands on both
+      // (on PostgreSQL the savepoint is rolled back to, so the row's own writes land), and the row is never posted again.
       swallow = true;
       clock.advance(alertBackoffMs(1));
-      const run = await ops.alerts.sendDue(clock.now());
-      if (backend.name === 'postgres') {
-        expect(run).toEqual({ ...NOTHING, retried: 2 });
-        expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'pending', attempts: 2, lastAnswer: 'no_answer' });
-      } else {
-        expect(run).toEqual({ ...NOTHING, sent: 2 });
-        expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'delivered', deliveryId: 'm9' });
-      }
+      expect(await ops.alerts.sendDue(clock.now())).toEqual({ ...NOTHING, sent: 2 });
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'delivered', attempts: 2, deliveryId: 'm9', lastAnswer: '200' });
+      expect(await stored(db, prefix, 'second')).toMatchObject({ state: 'delivered', attempts: 2, deliveryId: 'm9' });
+      expect(posts).toBe(4);
+      clock.advance(3_600_000);
+      expect(await ops.alerts.sendDue(clock.now())).toEqual(NOTHING);
+      expect(posts).toBe(4);
     });
 
     await within(async ({ prefix, clock, build }) => {
@@ -1190,6 +1191,26 @@ describeBackends('the Discord outbox', (backend: Backend) => {
       expect(await stored(db, prefix, `backlog:${DRAIN_ROWS_MAX}`)).toMatchObject({ state: 'pending', attempts: 0 });
       expect(await ops.alerts.sendDue(clock.now())).toEqual({ ...NOTHING, sent: 1 });
       expect(await countRows(db, prefix, "state = 'delivered'")).toBe(DRAIN_ROWS_MAX + 1);
+    });
+  });
+
+  it("21. a hook's delivery id is stored without its control characters, as every stored string is: a U+0000, which PostgreSQL refuses in text, never fails the row's settlement, posts it again or holds back the rows behind it", async () => {
+    await within(async ({ prefix, clock, build }) => {
+      const hook = recordingHook();
+      const { ops } = build({ discord: hook.hook });
+      await ops.alerts.post(POST);
+      clock.advance(1);
+      await ops.alerts.post({ ...POST, dedupKey: 'second' });
+      hook.answers.push({ outcome: 'sent', deliveryId: 'm\u000021' });
+
+      expect(await ops.alerts.sendDue(clock.now())).toEqual({ ...NOTHING, sent: 2 });
+      expect(hook.calls).toHaveLength(2);
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'delivered', deliveryId: 'm21', lastAnswer: '200' });
+      expect(await stored(db, prefix, 'second')).toMatchObject({ state: 'delivered', deliveryId: 'm1' });
+
+      clock.advance(3_600_000);
+      expect(await ops.alerts.sendDue(clock.now())).toEqual(NOTHING);
+      expect(hook.calls).toHaveLength(2);
     });
   });
 });
