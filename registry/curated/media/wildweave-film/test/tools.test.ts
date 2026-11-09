@@ -363,7 +363,7 @@ describe('the templates and the refusal envelope, through the tools over the stu
     return createToolContext(config, silentLog, { sleep: async (ms) => void waits.push(ms) });
   }
 
-  const templatesTool = () => TOOL_DEFINITIONS.find((def) => def.name === ('wildweave_film_templates' as string));
+  const templatesTool = () => TOOL_DEFINITIONS.find((def) => def.name === 'wildweave_film_templates');
 
   it("reads the registry's definitions, the transition kinds the box draws and the saved templates", async () => {
     scripted.answer = (request) => (request.method === 'GET' && request.path === '/templates' ? { status: 200, body: REGISTRY } : { status: 404, body: { error: 'not_found' } });

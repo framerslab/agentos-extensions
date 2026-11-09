@@ -56,11 +56,21 @@ export const readiness = z
 
 // ── The edit ops ────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The transition kinds the cut names (studio v2 spec 4.4): the engine's first four, then a dip to white, a slide, a
+ * circle that opens or closes and a diagonal wipe. A kind the render box's ffmpeg lacks is `transition_unsupported`;
+ * wildweave_film_templates answers the kinds the box draws.
+ */
+export const TRANSITION_KINDS = ['cut', 'crossfade', 'dip-to-black', 'wipe', 'dip-to-white', 'slide', 'circle-open', 'circle-close', 'wipe-diagonal'] as const;
+
 /** A transition out of a scene into the next one. */
 export const cutTransition = z.strictObject({
-  kind: z.enum(['cut', 'crossfade', 'dip-to-black', 'wipe']),
+  kind: z.enum(TRANSITION_KINDS),
   durMs: z.number().min(0).describe('At most 2,000 ms and shorter than both scenes, else transition_too_long'),
-  direction: z.enum(['from-left', 'from-right', 'from-top', 'from-bottom']).optional().describe("A wipe's direction"),
+  direction: z
+    .enum(['from-left', 'from-right', 'from-top', 'from-bottom', 'from-top-left', 'from-top-right', 'from-bottom-left', 'from-bottom-right'])
+    .optional()
+    .describe("A wipe's or a slide's side, a diagonal wipe's corner; absent, the kind's default"),
 });
 
 /** The crossfade of the beds into the next scene. */
@@ -73,10 +83,19 @@ const wordTiming = z.strictObject({
   source: z.enum(['whisper', 'tiled']),
 });
 
+/** A layer's stable id: unique in its scene, up to 64 characters without the cut's reserved "@". */
+const layerId = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[^@]+$/)
+  .describe('A layer\'s stable id, unique in its scene: up to 64 characters without "@"; layer_ids gives one to every layer that lacks it');
+
 /** A text layer v1 edits: a strip, an intertitle or a text frame, on the scene's own clock. A capture is not editable. */
 export const textLayer = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('strip'),
+    id: layerId.optional(),
     text: z.string().min(1).max(2000),
     cite: z.string().max(2000).optional(),
     atMs: z.number().min(0),
@@ -86,12 +105,14 @@ export const textLayer = z.discriminatedUnion('kind', [
   }),
   z.strictObject({
     kind: z.literal('intertitle'),
+    id: layerId.optional(),
     text: z.string().min(1).max(2000),
     atMs: z.number().min(0),
     durMs: z.number().gt(0),
   }),
   z.strictObject({
     kind: z.literal('text-frame'),
+    id: layerId.optional(),
     title: z.string().max(2000),
     body: z.string().max(4000),
     atMs: z.number().min(0),
@@ -102,6 +123,150 @@ export const textLayer = z.discriminatedUnion('kind', [
 const assetTable = z
   .record(z.string().min(1).max(200), z.string().min(1).max(1024))
   .describe('A map from an id (no "@") to a file path relative to the film repository, with forward slashes and no . or .. segments');
+
+// ── The v2 pieces: keyframes, places, moves, templates, sound (studio v2 spec 2.5, 2.6, 4.2, 5.4, 8.2, 8.3) ─────────
+
+const ease = z.enum(['linear', 'smoother', 'hold']).describe('How the segment leaves the point: a straight line, the smoother-step, or held to the next point');
+
+/** One point of an animated value on its target's own clock: whole milliseconds, sorted, inside the target's window. */
+function point<T extends z.ZodType>(value: T) {
+  return z.strictObject({
+    atMs: z.number().min(0).describe("On the target's own clock: whole milliseconds inside its window (keyframe_outside_layer), each after the one before (keyframes_unsorted)"),
+    value,
+    ease,
+  });
+}
+
+/** One keyframe of any property, as a `keyframes` op carries it: the value's shape is the property's (an opacity, a gain, a place or a move). */
+export const cutKeyframe = point(z.unknown().describe('The property\'s value: an opacity 0 to 1, a gain in dB, a place { xPct, yPct, wPct } or a move { scale, xPct, yPct }'));
+
+const opacityValue = z.number().min(0).max(1).describe('0 (unseen) to 1 (as drawn)');
+const opacity = z
+  .union([opacityValue, z.array(point(opacityValue)).max(500)])
+  .describe("A single opacity held from the layer's start, or its keyframes on the layer's clock");
+
+const placeValue = z
+  .strictObject({ xPct: z.number(), yPct: z.number(), wPct: z.number() })
+  .describe('Percent of the frame: across and down the room the box leaves, 0 to 100, and the width above 0 and at most 100 (overlay_place_invalid)');
+const cutPlace = z.union([placeValue, z.array(point(placeValue)).min(1).max(500)]).describe("A place, or its keyframes on the layer's clock (never an empty list)");
+
+const moveValue = z.strictObject({ scale: z.number().gt(0), xPct: z.number(), yPct: z.number() });
+const cutMove = z
+  .strictObject({
+    fromScale: z.number(),
+    toScale: z.number(),
+    fromXPct: z.number(),
+    fromYPct: z.number(),
+    toXPct: z.number(),
+    toYPct: z.number(),
+    points: z.array(point(moveValue)).max(500).optional().describe("The move's keyframes on its target's clock; with them, the start and the end are not read"),
+  })
+  .describe('A slow move over a picture: from its start to its end, or through its points');
+
+const gainDb = z.number().describe('Decibels, -30 to +6 (gain_out_of_range otherwise)');
+const gainKeyframes = z.array(point(gainDb)).max(500).describe('A gain envelope in dB; with a point, it sets the level in place of gain');
+const fadeMs = z.number().int().min(0).describe('Whole milliseconds, at most 5,000 (fade_too_long)');
+
+/** What a `keyframes` op animates (spec 8.3's table): a still's visual, a clip's sound, or a layer by its id. */
+export const keyframeTarget = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('visual') }).describe("A still's visual: its move"),
+  z.strictObject({ kind: z.literal('clip_sound') }).describe("A clip's sound: its gain"),
+  z.strictObject({ kind: z.literal('layer'), layerId }).describe("A layer by its id: a text or template layer's opacity, a capture's or an overlay's move and place, a lower third's place"),
+]);
+
+const layerWindow = {
+  atMs: z.number().int().min(0).describe("The layer's start on the scene's clock, whole milliseconds"),
+  durMs: z.number().int().gt(0).describe('Inside the scene (layer_past_end otherwise)'),
+};
+
+const templateRef = z
+  .string()
+  .min(1)
+  .max(200)
+  .describe("A registry id such as title.morph, credits.roll or lower-third.band (wildweave_film_templates lists them), or @<id> for an entry of the film's own templates table");
+const templateParams = z.unknown().describe("The look's parameters, checked against its schema (template_params_invalid)");
+
+/** A title card, end credits or a lower third from the template registry (spec 4.2): a title or credits sits on a card scene, a lower third on any other. */
+export const templateLayer = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('title'), id: layerId, template: templateRef, params: templateParams, ...layerWindow, opacity: opacity.optional() }),
+  z.strictObject({ kind: z.literal('credits'), id: layerId, template: templateRef, params: templateParams, ...layerWindow, opacity: opacity.optional() }),
+  z.strictObject({ kind: z.literal('lower-third'), id: layerId, template: templateRef, params: templateParams, ...layerWindow, opacity: opacity.optional(), place: cutPlace.optional() }),
+]);
+
+/** A picture of the scene's own assets placed over its visual (spec 8.3), named by its id. */
+const overlayLayer = z.strictObject({
+  id: layerId,
+  asset: z.string().min(1).max(128).describe("An image or a clip of the scene's own assets (asset_unknown otherwise; asset_add stages one)"),
+  place: cutPlace,
+  ...layerWindow,
+  opacity: opacity.optional(),
+  move: cutMove.optional(),
+});
+
+/**
+ * What `layer_update` sets on one layer: the fields its kind allows (a text layer's words and timing, a template
+ * layer's params, place and timing, an overlay's place, timing, opacity and move, a capture's place and timing); any
+ * other field of a layer is layer_field_immutable. null removes an optional field.
+ */
+const layerFields = z
+  .strictObject({
+    text: z.string().max(2000).optional(),
+    cite: z.string().max(2000).nullable().optional(),
+    title: z.string().max(2000).optional(),
+    body: z.string().max(4000).optional(),
+    atMs: layerWindow.atMs.optional(),
+    durMs: layerWindow.durMs.optional(),
+    reveal: z.enum(['words', 'none']).optional(),
+    words: z.array(wordTiming).nullable().optional(),
+    opacity: opacity.nullable().optional(),
+    place: cutPlace.nullable().optional(),
+    move: cutMove.nullable().optional(),
+    params: templateParams.optional(),
+    kind: z.unknown().optional().describe('Never set: layer_field_immutable'),
+    id: z.unknown().optional().describe('Never set: layer_field_immutable'),
+    template: z.unknown().optional().describe('Never set: a layer keeps its look (layer_field_immutable)'),
+    asset: z.unknown().optional().describe("Never set: a picture's file is its asset's (layer_field_immutable)"),
+    frame: z.unknown().optional().describe('Never set: layer_field_immutable'),
+    end: z.unknown().optional().describe('Never set: layer_field_immutable'),
+    secondary: z.unknown().optional().describe('Never set: layer_field_immutable'),
+    fromMs: z.unknown().optional().describe('Never set: layer_field_immutable'),
+    toMs: z.unknown().optional().describe('Never set: layer_field_immutable'),
+    fallback: z.unknown().optional().describe('Never set: layer_field_immutable'),
+  })
+  .describe('The fields to set on the layer');
+
+const bedDuck = z.strictObject({
+  depthDb: z.number().describe('-30 to 0 dB'),
+  attackMs: z.number().int().min(0),
+  releaseMs: z.number().int().min(0),
+});
+
+/** What `bed_edit` sets on one run of a bed (spec 5.4): each field, or null to remove it. */
+export const bedEdit = z.strictObject({
+  inMs: z.number().int().min(0).nullable().optional().describe("Where the run starts inside the bed's file; inside its trusted length (bed_window_invalid, bed_duration_unknown)"),
+  outMs: z.number().int().min(0).nullable().optional().describe('Where the run ends inside the file, after inMs'),
+  gain: gainDb.nullable().optional(),
+  fadeInMs: fadeMs.nullable().optional(),
+  fadeOutMs: fadeMs.nullable().optional(),
+  duck: bedDuck.nullable().optional().describe('The run\'s own duck under the narration'),
+  gainKeyframes: gainKeyframes.nullable().optional(),
+});
+
+const stingEntry = z.strictObject({
+  asset: z.string().min(1).max(200).describe('A key of the marks table'),
+  atMs: z.number().min(0).describe("On the scene's clock, inside the scene"),
+  kind: z.enum(['sting', 'mark']).optional(),
+  gain: gainDb.optional(),
+  fadeInMs: fadeMs.optional(),
+  fadeOutMs: fadeMs.optional().describe('Needs durMs: the mix knows where the mark ends from it alone'),
+  inMs: z.number().int().min(0).optional().describe('Where in the file it starts'),
+  durMs: z.number().int().min(1).optional().describe('How much of the file it plays'),
+  gainKeyframes: gainKeyframes.optional(),
+});
+
+const assetId = z.string().min(1).max(128).regex(/^[^@]+$/).describe('A timeline asset id of the scene: up to 128 characters without "@"');
+const line = z.string().max(500);
+const layerIndex = z.number().int().min(0).nullable().optional().describe("Where among the scene's layers it goes, from 0; null or absent puts it last");
 
 /** One edit op, as the studio's edit module admits it. */
 export const filmEditOp = z.discriminatedUnion('op', [
@@ -137,6 +302,51 @@ export const filmEditOp = z.discriminatedUnion('op', [
   }),
   z.strictObject({ op: z.literal('marks_table'), marks: assetTable.describe("The sidecar's marks table") }),
   z.strictObject({ op: z.literal('layers'), sceneId, layers: z.array(textLayer).max(100).describe("The scene's text layers; they take the place of the text layers it held") }),
+  // v2 (studio v2 spec 8.2): templates, overlays, layers by their ids, keyframes, sound, studio assets.
+  z.strictObject({ op: z.literal('template_layer'), sceneId, at: layerIndex, layer: templateLayer }).describe('Places a title, credits or lower third from the template registry or the film\'s own templates'),
+  z
+    .strictObject({
+      op: z.literal('templates_table'),
+      templates: z
+        .record(
+          z.string().min(1).max(64).regex(/^[^@]+$/),
+          z.strictObject({ base: z.string().min(1).max(200).describe('A registry id'), params: templateParams, name: z.string().min(1).max(80).regex(/\S/) }),
+        )
+        .describe("The film's own templates, whole: a layer names an entry as @<id>; removing one a layer draws is template_in_use"),
+    })
+    .describe("Writes the sidecar's templates table"),
+  z.strictObject({ op: z.literal('overlay'), sceneId, at: layerIndex, overlay: overlayLayer }).describe("Places a picture of the scene's assets over its visual"),
+  z.strictObject({ op: z.literal('layer_update'), sceneId, layerId, set: layerFields }).describe('Sets the fields a layer\'s kind allows, on the layer named by its id'),
+  z.strictObject({ op: z.literal('layer_remove'), sceneId, layerId }).describe('Takes a text, template or overlay layer off its scene; a capture or a label stays (layer_field_immutable)'),
+  z.strictObject({ op: z.literal('layer_ids') }).describe('Gives every layer that lacks one its stable id; nothing a person sees changes'),
+  z
+    .strictObject({
+      op: z.literal('keyframes'),
+      sceneId,
+      target: keyframeTarget,
+      property: z.enum(['move', 'opacity', 'place', 'gain']),
+      points: z.array(cutKeyframe).max(500).nullable().describe('The points, or null to remove them and keep the single value'),
+    })
+    .describe("Sets a property's keyframes on a still's visual (move), a clip's sound (gain) or a layer (opacity, place, move); a bed run's and a mark's gain are bed_edit's and sting's"),
+  z.strictObject({ op: z.literal('bed_edit'), run: sceneId.describe("The run, named by the id of its first scene"), edit: bedEdit }).describe('Sets one run of a bed: trim, level, fades, duck and envelope'),
+  z.strictObject({ op: z.literal('sting'), sceneId, sfx: z.array(stingEntry).max(500).describe("The scene's whole marks list") }).describe("Writes a scene's marks and stings with their level, fades, part of the file and envelope"),
+  z
+    .strictObject({
+      op: z.literal('asset_add'),
+      sceneId,
+      assetId,
+      assetRow: z.string().min(1).max(200).describe("The account's staged file (wildweave_film_assets row): its kind, path, licence and rights are read from it, never from the op"),
+      note: line.optional(),
+      changes: line.optional().describe('The changes line of the rights credit, such as "cropped to 16:9"'),
+    })
+    .describe("Adds a staged studio file to the scene's assets; a file outside the licences a film takes is asset_not_eligible"),
+  z.strictObject({ op: z.literal('asset_remove'), sceneId, assetId }).describe('Takes an asset off the scene; one a visual, an overlay, a bed or a mark names is asset_in_use'),
+  z
+    .strictObject({ op: z.literal('visual'), sceneId, asset: assetId.nullable().describe("A still or a clip of the scene's assets, or null for the scene's default"), move: cutMove.nullable().optional() })
+    .describe("Sets the scene's picture and its move"),
+  z
+    .strictObject({ op: z.literal('assets_rights'), entries: z.record(assetId, z.strictObject({ changes: line })).describe("Each timeline asset's changes line alone; no op sets a rights value") })
+    .describe("Writes the changes line of the assets' rights credits"),
 ]);
 
 /** One edit op, as the studio's edit module admits it. */
@@ -153,7 +363,67 @@ export const toolError = z.looseObject({
   findings: z.array(z.unknown()).optional(),
   sceneId: z.string().optional(),
   details: z.record(z.string(), z.unknown()).optional().describe("The rest of the route's answer, such as stale_write's current edit times"),
+  refusal: z
+    .looseObject({
+      capability: z.string(),
+      tier: z.string(),
+      requiredPlan: z.string().nullable(),
+      upgradeUrl: z.string(),
+      limit: z.looseObject({}),
+      checkoutPaused: z.boolean(),
+      policyVersion: z.number().int(),
+    })
+    .partial()
+    .optional()
+    .describe("The gate's envelope beside the code: the account's plan or room decides it, so the call is never sent again as it is"),
 });
+
+/**
+ * The codes of the studio gate's one refusal envelope (studio v2 spec, the Amendment's A.7): what the account's plan,
+ * its room or the policy decides, each with the policy module's words in `message`. A plan or a room never changes on a
+ * retry, so the client never sends a call refused with one of these again; `rate_limited` waits out its Retry-After.
+ */
+export const STUDIO_REFUSAL_CODES = [
+  'sign_in_required',
+  'forge_required',
+  'plan_required',
+  'limit_reached',
+  'insufficient_credits',
+  'budget_exhausted',
+  'not_open',
+  'file_too_large',
+  'rate_limited',
+  'key_rejected',
+  'scope_required',
+  'source_app_needs_session',
+  'demo_not_ready',
+] as const;
+
+/**
+ * The studio gate's one refusal envelope (the Amendment's A.7): the code in `error`, the capability and the tier it
+ * was refused for, the lowest plan that opens it, where to upgrade, the meter a room refusal names, whether checkout is
+ * paused, the policy's version and its words. Every field but `error` is optional and a later field is kept, so a v1
+ * body that names the code alone (`{ error: 'forge_required' }`) still parses.
+ */
+export const StudioRefusal = z
+  .looseObject({
+    error: z.string().min(1).describe('The refusal code, such as plan_required or limit_reached'),
+    capability: z.string().optional().describe('The capability key refused, such as edit.keyframes'),
+    tier: z.string().optional().describe("The caller's identity: visitor, free, plus, pro or forge"),
+    requiredPlan: z.string().nullable().optional().describe('The lowest plan that opens the capability (free, plus, pro or forge), or null'),
+    upgradeUrl: z.string().optional().describe('Where the account holder upgrades, such as /pricing'),
+    limit: z
+      .looseObject({ meter: z.string(), used: z.number(), max: z.number(), window: z.string(), resetsAt: z.number().optional() })
+      .optional()
+      .describe('The meter a room refusal names: what is used of what, over which window, and when it resets'),
+    checkoutPaused: z.boolean().optional(),
+    policyVersion: z.number().int().optional(),
+    message: z.string().optional().describe("The policy module's words for the refusal, the sentence the person reads"),
+  })
+  .describe("The studio gate's refusal envelope");
+
+/** The studio gate's refusal envelope, parsed. */
+export type StudioRefusal = z.infer<typeof StudioRefusal>;
 
 /** Every tool answers one object: `{ ok: true, result }` or `{ ok: false, error }`. */
 export function toolResult<T extends z.ZodType>(result: T) {
@@ -235,6 +505,17 @@ const exportSource = answer({
   baseSha256: z.string().nullable(),
   changed: z.boolean(),
   notes: z.array(z.unknown()),
+});
+
+/** One staged file the export route lists for the repository (spec 8.4): fetched through the files route and written at its path. */
+const exportFetchEntry = answer({
+  path: z.string().describe('The repository path the file is written at'),
+  sha256: z.string(),
+  bytes: z.number().int(),
+  url: z.string().describe("The files route's address of the file under the account's own folder"),
+  rights: z.looseObject({}).describe('The rights line the file carries: licence, its id and URL, attribution, rights, changes, notice, source'),
+  stockJson: z.string().describe("The librarian's record, written beside the file as stock.json"),
+  line: answer({ sceneId: z.string(), index: z.number().int() }).describe("A generated take's line"),
 });
 
 const SOURCE_NAMES = ['script', 'beatSheet', 'takes', 'timeline', 'sidecar'] as const;
@@ -383,6 +664,11 @@ export const TOOL_SCHEMAS = {
         unchanged: z.array(sourceName),
         validated: z.boolean().describe('True when the local engine cut and validated the written set before it was moved into place'),
         ack: answer({ seq: z.number().int().nullable(), sources: z.record(z.string(), z.unknown()), rebound: z.boolean() }),
+        fetch: z.array(exportFetchEntry).describe('Without writeTo: the staged files the timeline names that the repository does not hold yet, as the route lists them'),
+        fetched: z
+          .array(answer({ path: z.string(), sha256: z.string(), bytes: z.number().int(), stock: z.string().describe('Where its stock.json was written'), forced: z.boolean() }))
+          .describe('With writeTo: each staged file fetched, checked by its sha256 and written at its path'),
+        fetchUnchanged: z.array(z.string()).describe('With writeTo: each listed path the repository already held with the same sha256, never fetched'),
       }),
     ),
   },
@@ -537,12 +823,37 @@ export const TOOL_SCHEMAS = {
     }),
     output: toolResult(answer({ proposal })),
   },
+  wildweave_film_templates: {
+    input: z.strictObject({ filmId: filmId.optional().describe("Also read this film's own templates table") }),
+    output: toolResult(
+      answer({
+        definitions: z
+          .array(
+            answer({
+              id: z.string().describe('The look\'s id, such as title.morph, the template a layer names'),
+              kind: z.enum(['title', 'credits', 'lower-third', 'transition']),
+              name: z.string(),
+              editable: z.unknown().describe('The groups of the look a person edits: type, colours, motion, timing, content'),
+              defaults: z.unknown(),
+              params: z.looseObject({}).describe("The parameters' schema, as JSON Schema"),
+              thumbnailAtMs: z.number(),
+            }),
+          )
+          .describe("The template registry's definitions"),
+        transitions: z.array(z.string()).describe('The transition kinds the render box draws'),
+        saved: z
+          .array(answer({ templateId: z.string(), base: z.string(), params: z.unknown(), name: z.string(), createdAtMs: z.number(), updatedAtMs: z.number() }))
+          .describe("The account's saved templates, where its plan authors them; none otherwise"),
+        film: answer({ filmId: z.string(), templates: z.record(z.string(), z.unknown()) }).describe("With filmId: the film's own templates table"),
+      }),
+    ),
+  },
 } as const;
 
-/** The name of one of the 22 tools. */
+/** The name of one of the 23 tools. */
 export type ToolName = keyof typeof TOOL_SCHEMAS;
 
-/** The names of the 22 tools, in the order of the studio's tool surface. */
+/** The names of the 23 tools, in the order of the studio's tool surface. */
 export const TOOL_NAMES = Object.keys(TOOL_SCHEMAS) as ToolName[];
 
 /** A tool's parsed input. */

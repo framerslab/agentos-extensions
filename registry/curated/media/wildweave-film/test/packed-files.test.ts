@@ -87,7 +87,7 @@ describe('what the tarball holds', () => {
     }
   }, 120_000);
 
-  it("lists the pack's 22 tools in manifest.json, by the ids and names the pack gives them, and the one secret", () => {
+  it("lists the pack's 23 tools in manifest.json, by the ids and names the pack gives them, and the one secret", () => {
     const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8')) as {
       id: string;
       version: string;
@@ -137,7 +137,7 @@ function throughExports(): Record<string, { url: string; names?: string[] }> {
 describe('the built package in a test host', () => {
   // The host imports the build through the package's exports, as it would from node_modules: the pack, its tools, a
   // route call against a fake studio and a run of a stand-in engine; then each code entry's named exports.
-  it('loads from dist through the exports map: 22 tools, a studio call and an engine run', async () => {
+  it('loads from dist through the exports map: 23 tools, a studio call and an engine run', async () => {
     packed();
     // Every entry as Node resolves the package's name for a consumer, each to the file its exports row names.
     const resolved = throughExports();

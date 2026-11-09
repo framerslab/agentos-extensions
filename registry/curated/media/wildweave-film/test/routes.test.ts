@@ -198,7 +198,7 @@ const REMOTE_ROWS: RemoteRow[] = [
   },
   { label: 'wildweave_film_records (a job on the box: not_open)', tool: 'wildweave_film_records', args: { filmId: FILM_ID, jobId: 'job-1' }, method: 'GET', path: `${F}/jobs/job-1` },
   { label: 'wildweave_film_preview', tool: 'wildweave_film_preview', args: { filmId: FILM_ID }, method: 'GET', path: `${F}/preview` },
-  { label: 'wildweave_film_templates (the registry)', tool: 'wildweave_film_templates' as string as ToolName, args: {}, method: 'GET', path: '/templates' },
+  { label: 'wildweave_film_templates (the registry)', tool: 'wildweave_film_templates', args: {}, method: 'GET', path: '/templates' },
   { label: 'wildweave_film_proposals (by status)', tool: 'wildweave_film_proposals', args: { filmId: FILM_ID, status: 'noted' }, method: 'GET', path: `${F}/proposals?status=noted` },
   {
     label: 'wildweave_film_proposal_submit (every field)',
@@ -456,6 +456,7 @@ const TABLE: Record<ToolName, { mode: 'remote' | 'local' | 'both'; scopes: Scope
   wildweave_film_proposals: { mode: 'remote', scopes: ['read'], sideEffects: false },
   wildweave_film_proposal_submit: { mode: 'remote', scopes: ['write'], sideEffects: true },
   wildweave_film_proposal_decide: { mode: 'remote', scopes: ['write'], sideEffects: true },
+  wildweave_film_templates: { mode: 'remote', scopes: ['read'], sideEffects: false },
 };
 
 describe("each tool's mode, scope and side effects, as the spec's table sets them", () => {

@@ -1,8 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import type { ZodType } from 'zod';
-import * as schemas from '../src/schemas.js';
-import { TOOL_SCHEMAS, toolJsonSchema, type ToolName } from '../src/schemas.js';
+import { StudioRefusal, TOOL_SCHEMAS, toolJsonSchema, type ToolName } from '../src/schemas.js';
 
 /** The 23 tools of the studio's tool surface, in its order. */
 const TOOL_NAMES: ToolName[] = [
@@ -28,7 +26,7 @@ const TOOL_NAMES: ToolName[] = [
   'wildweave_film_proposals',
   'wildweave_film_proposal_submit',
   'wildweave_film_proposal_decide',
-  'wildweave_film_templates' as string as ToolName,
+  'wildweave_film_templates',
 ];
 
 /** The committed golden of a tool, or null when the folder holds none yet. */
@@ -165,12 +163,12 @@ describe('the v2 edit ops', () => {
 });
 
 describe('the refusal envelope', () => {
-  const envelope = (schemas as unknown as Record<string, ZodType | undefined>).StudioRefusal;
+  const envelope = StudioRefusal;
 
   it('parses a v1 { error } body, so a route that answers the code alone still reads as a refusal', () => {
     expect(envelope).toBeDefined();
-    expect(envelope!.safeParse({ error: 'forge_required' }).success).toBe(true);
-    expect(envelope!.safeParse({ message: 'no code' }).success).toBe(false);
+    expect(envelope.safeParse({ error: 'forge_required' }).success).toBe(true);
+    expect(envelope.safeParse({ message: 'no code' }).success).toBe(false);
   });
 
   it('parses the whole envelope, and a field a later release adds', () => {
@@ -187,6 +185,6 @@ describe('the refusal envelope', () => {
       message: 'Keyframes are part of Pro.',
       index: 0,
     };
-    expect(envelope!.safeParse(whole).success).toBe(true);
+    expect(envelope.safeParse(whole).success).toBe(true);
   });
 });

@@ -5,35 +5,53 @@
  * repository made since the last crossing. The one exception is a rollback the file system refuses,
  * which the answer names (`details.unrestored`, `details.notRemoved`) instead of claiming it done.
  *
- * 1. The timeline is read for the edit times the acknowledgement is guarded by, then the export
+ * 1. With an engine configured, the engine clone is read first: a clone that predates the shapes the
+ *    export writes (its `package.json` version below `ENGINE_FLOOR.version`, or without the engine
+ *    module those shapes need, `ENGINE_FLOOR.file`) answers `engine_too_old` with the floor, before
+ *    anything is read from the studio or written.
+ * 2. The timeline is read for the edit times the acknowledgement is guarded by, then the export
  *    route answers each source's text, sha256 and `baseSha256` (the file's hash as the repository
- *    last held it).
- * 2. Each source's file is resolved under `writeTo` (the repository root, or a folder inside it,
+ *    last held it), and `fetch`: the studio files the timeline names that the repository does not
+ *    hold yet (studio v2 spec 8.4).
+ * 3. Each source's file is resolved under `writeTo` (the repository root, or a folder inside it,
  *    made when the repository lacks it), symlinks included, and must lie inside
  *    `WILDWEAVE_FILM_REPO`; `force` never lifts this. Every source's path is checked, the ones the
  *    route leaves out too, since the engine's cut reads them, and no two sources may resolve to one
- *    file (`arg_invalid`).
- * 3. A file already holding the export is left alone; a file whose hash is the base (or a file
+ *    file (`arg_invalid`). Each fetched file's path, and its `stock.json` beside it, is resolved the
+ *    same way under `writeTo`, the root the engine's cut reads assets from; a path the route gives
+ *    that is not repository-relative answers `fetch_failed`, one that resolves outside the
+ *    repository `path_outside_repo`.
+ * 4. A file already holding the export is left alone; a file whose hash is the base (or a file
  *    absent while the record holds no base) is written; any other is the repository moving since,
- *    reported `source_changed` with both hashes, and nothing is written unless `force`.
- * 4. The set is written into a folder inside the destination, cut and validated by the engine when
- *    an engine directory is configured (an error refuses the set, `export_invalid`), then renamed
- *    into place. Each file is read again right before its rename: one that changed since step 3 (an
- *    editor saved it while the engine checked the set) refuses the set, `source_changed`, unless
- *    `force` (it is then written over and reported forced; a backup is then written again from the
- *    new bytes and the file read once more, and a file still changing after four tries is refused).
- *    Each file's folder and backup are made before that last read, so only the hash stands between
- *    the read and the rename; a save landing in that instant is still written over, since no
- *    file-system call renames only over an unchanged file. A failure part way renames the backups
- *    back over the files it replaced, writing nothing, and removes the ones it made where the
- *    repository held none; it names any it could not put back with where its old bytes are kept
- *    (`details.unrestored`; the staging folder then stays) and any it could not remove
- *    (`details.notRemoved`). Of the folders it made it removes only the ones left empty.
- * 5. The written hashes are acknowledged to the route, so the next export compares against them.
+ *    reported `source_changed` with both hashes, and nothing is written unless `force`. A fetched
+ *    file the repository holds with its sha256 is never fetched (`fetchUnchanged`); one absent is
+ *    fetched; one holding other bytes, or a `stock.json` holding another record, is a
+ *    `source_changed` conflict as a source's is.
+ * 5. The set is written into a folder inside the destination. Each fetched file comes through the
+ *    files route with the studio key (`GET /files/:sha256?key=`) into that folder and is checked by
+ *    its sha256 and its size; a fetch that fails answers `fetch_failed` naming the path, with
+ *    nothing moved. The fetched files and their records are then moved into place, so the engine's
+ *    cut reads them under the assets root, and the set is cut and validated by the engine when an
+ *    engine directory is configured (an error refuses the set, `export_invalid`, and puts the
+ *    fetched files back); then the sources are renamed into place. Each file is read again right
+ *    before its rename: one that changed since step 4 (an editor saved it while the engine checked
+ *    the set) refuses the set, `source_changed`, unless `force` (it is then written over and
+ *    reported forced; a backup is then written again from the new bytes and the file read once
+ *    more, and a file still changing after four tries is refused). Each file's folder and backup
+ *    are made before that last read, so only the hash stands between the read and the rename; a
+ *    save landing in that instant is still written over, since no file-system call renames only
+ *    over an unchanged file. A failure part way renames the backups back over the files it
+ *    replaced, writing nothing, and removes the ones it made where the repository held none; it
+ *    names any it could not put back with where its old bytes are kept (`details.unrestored`; the
+ *    staging folder then stays) and any it could not remove (`details.notRemoved`). Of the folders
+ *    it made it removes only the ones left empty.
+ * 6. The written sources' hashes are acknowledged to the route, so the next export compares against
+ *    them. The acknowledgement names sources alone (the route takes no other name); the fetched
+ *    files are named in the answer's `fetched`, and the next import's record lists them.
  */
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import type { StudioAnswer, StudioError, WildweaveStudioClient } from './client.js';
 import type { EngineAnswer, EngineArgs } from './local.js';
 import { EXPORT_SOURCE_NAMES } from './schemas.js';
@@ -50,6 +68,18 @@ export const DEFAULT_SOURCE_PATHS: Readonly<Record<ExportSourceName, string>> = 
   sidecar: 'production/render.json',
 };
 
+/**
+ * The oldest engine clone that reads the shapes the export writes: template layers, overlays, layer ids, bed runs,
+ * marks with E2's fields and keyframes (studio v2 spec 8.3). wilds.ai's `package.json` names `version` 0.1.0 and has not
+ * moved it as the engine grew, so the clone must also hold the engine's keyframes module, the last of those shapes to
+ * land (the engine of 7 November 2026).
+ */
+export const ENGINE_FLOOR = Object.freeze({
+  version: '0.1.0',
+  file: 'src/lib/wildweave/film-keyframes.ts',
+  since: 'the engine of 7 November 2026',
+});
+
 /** What the export write needs. */
 export interface ExportWriteInput {
   filmId: string;
@@ -65,6 +95,8 @@ export interface ExportWriteDeps {
   filmRepo?: string;
   /** Runs the engine; absent when no engine directory is configured. */
   engine?: (subcommand: string, args: EngineArgs) => Promise<EngineAnswer>;
+  /** The engine clone the engine runs in, read for its floor (`ENGINE_FLOOR`) before anything else. */
+  engineDir?: string;
 }
 
 /** The export's answer. */
@@ -78,9 +110,20 @@ interface RouteSource {
   notes: unknown[];
 }
 
+/** One file the route's `fetch` lists, as the write reads it. */
+interface FetchEntry {
+  path: string;
+  sha256: string;
+  bytes: number | null;
+  url: string;
+  stockJson: string;
+}
+
 const isRec = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 const sha256Hex = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
+
+const HEX64 = /^[0-9a-f]{64}$/;
 
 /** True when `p` is `root` or lies inside it. */
 function inside(root: string, p: string): boolean {
@@ -139,6 +182,35 @@ async function pruneEmpty(dir: string): Promise<void> {
   await rmdir(dir).catch(() => undefined);
 }
 
+/** Below zero when `a` is the lower x.y.z version, zero when they are equal, above zero when `a` is the higher. */
+function versionOrder(a: string, b: string): number {
+  const [x, y] = [a, b].map((version) => (version.split(/[-+]/)[0] ?? '').split('.').map(Number));
+  for (let i = 0; i < 3; i += 1) {
+    const step = (x?.[i] ?? 0) - (y?.[i] ?? 0);
+    if (step !== 0) return step;
+  }
+  return 0;
+}
+
+/**
+ * Why the engine clone predates the shapes the export writes, or null when it does not or cannot be told: a clone
+ * whose `package.json` is missing or names no version is left to the engine to answer for itself.
+ */
+export async function engineTooOld(engineDir: string): Promise<{ version: string; missing?: string } | null> {
+  let version: unknown;
+  try {
+    version = (JSON.parse(await readFile(join(engineDir, 'package.json'), 'utf8')) as { version?: unknown }).version;
+  } catch {
+    return null;
+  }
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+/.test(version)) return null;
+  if (versionOrder(version, ENGINE_FLOOR.version) < 0) return { version };
+  const held = await stat(join(engineDir, ENGINE_FLOOR.file))
+    .then((s) => s.isFile())
+    .catch(() => false);
+  return held ? null : { version, missing: ENGINE_FLOOR.file };
+}
+
 /** How many times a forced export writes a file's backup before it gives up on a file that keeps changing. */
 const BACKUP_TRIES = 4;
 
@@ -147,9 +219,34 @@ class SourceMovedError extends Error {
   readonly conflict: Record<string, unknown>;
 
   constructor(conflict: Record<string, unknown>) {
-    super(`the repository changed ${String(conflict.source)} while the export was checked`);
+    super(`the repository changed ${String(conflict.source ?? conflict.fetch)} while the export was checked`);
     this.name = 'SourceMovedError';
     this.conflict = conflict;
+  }
+}
+
+/** A fetch of a listed file that failed: the files route refused it, or its bytes are not its sha256. */
+class FetchFailedError extends Error {
+  readonly path: string;
+  /** What the answer adds beside the path: the route's code and status, or the hash or size the bytes had. */
+  readonly info: Record<string, unknown>;
+
+  constructor(path: string, reason: string, info: Record<string, unknown> = {}) {
+    super(reason);
+    this.name = 'FetchFailedError';
+    this.path = path;
+    this.info = info;
+  }
+}
+
+/** The engine refused the set: its message and the details the answer carries. */
+class ExportInvalidError extends Error {
+  readonly details: Record<string, unknown>;
+
+  constructor(message: string, details: Record<string, unknown>) {
+    super(message);
+    this.name = 'ExportInvalidError';
+    this.details = details;
   }
 }
 
@@ -172,6 +269,39 @@ function routeSources(result: unknown): Partial<Record<ExportSourceName, RouteSo
     }
   }
   return out;
+}
+
+/** The files the route's `fetch` lists, each read in the shape the write needs, or the first entry that is not. */
+function routeFetch(result: unknown): { ok: true; entries: FetchEntry[] } | { ok: false; path: string | null; reason: string } {
+  const listed = isRec(result) ? result.fetch : undefined;
+  if (listed === undefined) return { ok: true, entries: [] };
+  if (!Array.isArray(listed)) return { ok: false, path: null, reason: "the route's fetch is not a list" };
+  const entries: FetchEntry[] = [];
+  for (const raw of listed) {
+    const path = isRec(raw) && typeof raw.path === 'string' ? raw.path : null;
+    if (!isRec(raw) || path === null || typeof raw.sha256 !== 'string' || !HEX64.test(raw.sha256) || typeof raw.url !== 'string' || typeof raw.stockJson !== 'string') {
+      return { ok: false, path, reason: 'an entry of the fetch list has no path, sha256, files-route address or stock.json' };
+    }
+    const bytes = typeof raw.bytes === 'number' && Number.isInteger(raw.bytes) && raw.bytes >= 0 ? raw.bytes : null;
+    entries.push({ path, sha256: raw.sha256, bytes, url: raw.url, stockJson: raw.stockJson });
+  }
+  return { ok: true, entries };
+}
+
+/** One file the write moves into the repository: a source, a fetched file, or a fetched file's `stock.json`. */
+interface Landing {
+  /** What the answer names it by: a source's name, or a fetched path. */
+  label: { source: ExportSourceName } | { fetch: string };
+  rel: string;
+  target: string;
+  /** Where its bytes wait in the staging folder. */
+  staged: string;
+  /** The file's sha256 as the plan read it, or null when there was none. */
+  disk: string | null;
+  sha256: string;
+  /** A source's base, named in its conflict; a fetched file has none. */
+  baseSha256?: string | null;
+  forced: boolean;
 }
 
 /** The export, and its write into the repository when `writeTo` is given. */
@@ -204,6 +334,18 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
     targets[name] = { rel, target };
   }
 
+  // The engine clone before anything is read or written: one that predates the shapes would refuse them in its own words.
+  if (deps.engine && deps.engineDir) {
+    const old = await engineTooOld(deps.engineDir);
+    if (old) {
+      return refuse(
+        'engine_too_old',
+        `the engine clone at ${deps.engineDir} is ${old.version}${old.missing ? ` without ${old.missing}` : ''}: the shapes this export writes need ${ENGINE_FLOOR.version} with ${ENGINE_FLOOR.file}, ${ENGINE_FLOOR.since} or later; pull the clone's master and install it`,
+        { version: old.version, floor: ENGINE_FLOOR.version, floorFile: ENGINE_FLOOR.file, since: ENGINE_FLOOR.since, ...(old.missing ? { missing: old.missing } : {}) },
+      );
+    }
+  }
+
   // The edit times first: an edit landing between this read and the export makes the acknowledgement stale, never wrong.
   const timeline: StudioAnswer = await deps.client.timeline(input.filmId);
   if (!timeline.ok) return timeline;
@@ -212,6 +354,8 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
   if (!exported.ok) return exported;
   const sources = routeSources(exported.result);
   const recordFormat = isRec(exported.result) ? exported.result.recordFormat : undefined;
+  const listed = routeFetch(exported.result);
+  if (!listed.ok) return refuse('fetch_failed', `${listed.reason}; nothing was written`, { path: listed.path });
 
   interface Plan {
     name: ExportSourceName;
@@ -241,13 +385,71 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
       conflicts.push({ source: name, path: rel, diskSha256: disk, baseSha256: source.baseSha256, sha256: source.sha256 });
     }
   }
+
+  // The fetch list: each file's path and its stock.json under writeTo, never on a source's file or on one another.
+  interface FetchPlan {
+    entry: FetchEntry;
+    file: { rel: string; target: string; disk: string | null; forced: boolean };
+    stock: { rel: string; target: string; disk: string | null; sha256: string; forced: boolean } | null;
+  }
+  const fetchPlans: FetchPlan[] = [];
+  const fetchUnchanged: string[] = [];
+  const fetchOwners = new Map<string, string>();
+  const stockTexts = new Map<string, string>();
+  for (const entry of listed.entries) {
+    const rel = entry.path;
+    if (!isRepositoryPath(rel)) return refuse('fetch_failed', `the fetch list names ${JSON.stringify(rel)}, which is not relative to the repository with forward slashes and no . or .. segment; nothing was written`, { path: rel });
+    const stockRel = posix.join(posix.dirname(rel), 'stock.json');
+    if (stockRel === rel) return refuse('fetch_failed', `the fetch list names ${rel}, the path of its own stock.json; nothing was written`, { path: rel });
+    const target = await realOf(resolve(dest, rel));
+    const stockTarget = await realOf(resolve(dest, stockRel));
+    for (const [what, at] of [[rel, target], [stockRel, stockTarget]] as const) {
+      if (!inside(root, at)) return refuse('path_outside_repo', `the fetched path ${what} resolves outside the film repository`, { fetch: rel, path: what });
+      const info = await lstat(at).catch(() => null);
+      if (info && !info.isFile()) return refuse('path_outside_repo', `the fetched path ${what} is not a regular file`, { fetch: rel, path: what });
+      if (owners.has(at)) return refuse('fetch_failed', `the fetched path ${what} is the file of the source ${owners.get(at)!}; nothing was written`, { path: rel });
+    }
+    if (fetchOwners.has(target)) return refuse('fetch_failed', `the fetch list names ${rel} twice, or beside a file's stock.json; nothing was written`, { path: rel });
+    fetchOwners.set(target, rel);
+    const disk = await fileSha(target);
+    // A file the repository holds with its hash is never fetched again, and its record is left as it is.
+    if (disk === entry.sha256) {
+      fetchUnchanged.push(rel);
+      continue;
+    }
+    if (disk !== null && !input.force) conflicts.push({ fetch: rel, path: rel, diskSha256: disk, sha256: entry.sha256 });
+    let stock: FetchPlan['stock'] = null;
+    const stockSha = sha256Hex(entry.stockJson);
+    const shared = stockTexts.get(stockTarget);
+    if (shared !== undefined) {
+      // Two files of one folder share its record: one text writes it once; two texts are no record of either.
+      if (shared !== entry.stockJson) return refuse('fetch_failed', `the fetch list gives ${stockRel} two records; nothing was written`, { path: rel });
+    } else {
+      if (fetchOwners.has(stockTarget)) return refuse('fetch_failed', `the fetch list names ${stockRel} as a file and as a record; nothing was written`, { path: rel });
+      stockTexts.set(stockTarget, entry.stockJson);
+      const stockDisk = await fileSha(stockTarget);
+      if (stockDisk !== stockSha) {
+        if (stockDisk !== null && !input.force) conflicts.push({ fetch: stockRel, path: stockRel, diskSha256: stockDisk, sha256: stockSha });
+        stock = { rel: stockRel, target: stockTarget, disk: stockDisk, sha256: stockSha, forced: stockDisk !== null };
+      }
+    }
+    fetchPlans.push({ entry, file: { rel, target, disk, forced: disk !== null }, stock });
+  }
+  for (const target of stockTexts.keys()) {
+    if (fetchOwners.has(target)) return refuse('fetch_failed', `the fetch list names ${fetchOwners.get(target)!} as a file and as a record; nothing was written`, { path: fetchOwners.get(target)! });
+  }
+
   if (conflicts.length > 0) {
-    return refuse('source_changed', `the repository changed since the last crossing: ${conflicts.map((c) => c.source).join(', ')}; nothing was written (force writes over it, on his word alone)`, { conflicts });
+    return refuse(
+      'source_changed',
+      `the repository changed since the last crossing: ${conflicts.map((c) => String(c.source ?? c.fetch)).join(', ')}; nothing was written (force writes over it, on his word alone)`,
+      { conflicts },
+    );
   }
 
   const writes = plans.filter((p) => p.action === 'write');
   let validated = false;
-  if (writes.length > 0) {
+  if (writes.length > 0 || fetchPlans.length > 0) {
     // The first folder this write made, when the repository lacked writeTo: removed again unless the set lands.
     let made: string | undefined;
     let staged = '';
@@ -258,18 +460,97 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
       if (made) await pruneEmpty(made);
       return refuse('export_write_failed', `the destination folder could not be made inside the film repository: ${(err as Error).message}`);
     }
-    const restored: Array<{ name: ExportSourceName; rel: string; target: string; backup: string | null }> = [];
+    const restored: Array<{ label: Landing['label']; rel: string; target: string; backup: string | null }> = [];
     // The files a rollback could not put back: their old bytes stay in the staging folder, named in the answer.
-    const unrestored: Array<{ source: ExportSourceName; path: string; keptAt: string }> = [];
+    const unrestored: Array<Landing['label'] & { path: string; keptAt: string }> = [];
     // The files the export made where the repository held none, that a rollback could not remove.
-    const notRemoved: Array<{ source: ExportSourceName; path: string }> = [];
+    const notRemoved: Array<Landing['label'] & { path: string }> = [];
+    // The folders a file's landing made inside the repository: removed again, when left empty, unless the set lands.
+    const madeFolders: string[] = [];
     let landed = false;
+
+    const moved = (l: Landing, now: string | null) =>
+      new SourceMovedError({ ...l.label, path: l.rel, diskSha256: now, ...(l.baseSha256 === undefined ? {} : { baseSha256: l.baseSha256 }), sha256: l.sha256 });
+
+    /** Moves one staged file into place over the file the plan read, its backup made first, so a rollback only renames. */
+    const land = async (l: Landing): Promise<void> => {
+      // The file's folder and its backup come first, so a rollback only renames (it writes no byte, which a full
+      // disk could refuse) and nothing but the hash stands between the file's last read and the rename over it.
+      const folder = await mkdir(dirname(l.target), { recursive: true });
+      if (folder) madeFolders.push(folder);
+      const before = await fileBytes(l.target);
+      const beforeSha = before === null ? null : sha256Hex(before);
+      // A file that changed since the plan (an editor saved it while the engine checked the set) is not written
+      // over unless forced; his force covers a change found here as it covers one the plan found.
+      if (beforeSha !== l.disk) {
+        if (!input.force) throw moved(l, beforeSha);
+        l.forced = true;
+      }
+      // The backup is written from the bytes last read, then the file is read again: one that changed meanwhile is
+      // refused unless forced, and forced it has its backup made again from the new bytes and is read once more, so
+      // no step but the hash stands between the last read and the rename, and the backup holds what is replaced.
+      const backup = join(staged, 'backup', l.rel);
+      let held = before;
+      let heldSha = beforeSha;
+      for (let tries = 1; ; tries += 1) {
+        if (held === null) {
+          await rm(backup, { force: true });
+        } else {
+          await mkdir(dirname(backup), { recursive: true });
+          await writeFile(backup, held);
+        }
+        const current = await fileBytes(l.target);
+        const now = current === null ? null : sha256Hex(current);
+        if (now === heldSha) break;
+        // A file that keeps changing while its backup is written is refused, forced or not.
+        if (!input.force || tries >= BACKUP_TRIES) throw moved(l, now);
+        l.forced = true;
+        held = current;
+        heldSha = now;
+      }
+      await rename(l.staged, l.target);
+      restored.push({ label: l.label, rel: l.rel, target: l.target, backup: held === null ? null : backup });
+    };
+
+    const fetchLandings: Landing[] = [];
     try {
       for (const p of writes) {
         const file = join(staged, 'files', p.rel);
         await mkdir(dirname(file), { recursive: true });
         await writeFile(file, p.source.text, 'utf8');
       }
+      // Each listed file into the staging folder, checked by its sha256 and its size, before any file moves: a fetch
+      // that fails leaves the repository as it was. A file two entries share is fetched once.
+      const got = new Map<string, string>();
+      for (const fp of fetchPlans) {
+        const { entry } = fp;
+        const file = join(staged, 'fetch', fp.file.rel);
+        await mkdir(dirname(file), { recursive: true });
+        const earlier = got.get(entry.sha256);
+        if (earlier !== undefined) {
+          await writeFile(file, await readFile(earlier));
+        } else {
+          const answer = await deps.client.file(entry.url, entry.sha256);
+          if (!answer.ok) {
+            throw new FetchFailedError(entry.path, answer.error.message, { code: answer.error.code, ...(answer.error.status === undefined ? {} : { status: answer.error.status }) });
+          }
+          const bytes = answer.result;
+          const sha = sha256Hex(bytes);
+          if (sha !== entry.sha256) throw new FetchFailedError(entry.path, `its bytes hash to ${sha}, not the listed ${entry.sha256}`, { code: 'sha256_mismatch', sha256: sha });
+          if (entry.bytes !== null && bytes.byteLength !== entry.bytes) throw new FetchFailedError(entry.path, `it is ${bytes.byteLength} bytes, not the listed ${entry.bytes}`, { code: 'size_mismatch', bytes: bytes.byteLength });
+          await writeFile(file, bytes);
+          got.set(entry.sha256, file);
+        }
+        fetchLandings.push({ label: { fetch: fp.file.rel }, rel: fp.file.rel, target: fp.file.target, staged: file, disk: fp.file.disk, sha256: entry.sha256, forced: fp.file.forced });
+        if (fp.stock) {
+          const record = join(staged, 'fetch', fp.stock.rel);
+          await mkdir(dirname(record), { recursive: true });
+          await writeFile(record, entry.stockJson, 'utf8');
+          fetchLandings.push({ label: { fetch: fp.stock.rel }, rel: fp.stock.rel, target: fp.stock.target, staged: record, disk: fp.stock.disk, sha256: fp.stock.sha256, forced: fp.stock.forced });
+        }
+      }
+      // The fetched files and their records go into place first: the engine's cut reads every file under the assets root.
+      for (const l of fetchLandings) await land(l);
       if (deps.engine) {
         const fileOf = (name: ExportSourceName): string => {
           const p = plans.find((plan) => plan.name === name);
@@ -278,50 +559,20 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
         };
         const cutFile = join(staged, 'cut.json');
         const cut = await deps.engine('cut', { timeline: fileOf('timeline'), sidecar: fileOf('sidecar'), takes: fileOf('takes'), assets: dest, out: cutFile, draft: true });
-        if (!cut.ok) return refuse('export_invalid', `the engine refused to cut the exported sources: ${cut.error.message}`, { engine: cut.error });
+        if (!cut.ok) throw new ExportInvalidError(`the engine refused to cut the exported sources: ${cut.error.message}`, { engine: cut.error });
         const check = await deps.engine('validate', { cut: cutFile, assets: dest, draft: true });
-        if (!check.ok) return refuse('export_invalid', `the engine refused the exported cut: ${check.error.message}`, { engine: check.error });
+        if (!check.ok) throw new ExportInvalidError(`the engine refused the exported cut: ${check.error.message}`, { engine: check.error });
         const result = isRec(check.result) ? check.result : {};
-        if (result.ok === false) return refuse('export_invalid', 'the exported cut holds an error finding; nothing was written', { findings: result.findings ?? [] });
+        if (result.ok === false) throw new ExportInvalidError('the exported cut holds an error finding; nothing was written', { findings: result.findings ?? [] });
         validated = true;
       }
-      const moved = (p: Plan, now: string | null) => new SourceMovedError({ source: p.name, path: p.rel, diskSha256: now, baseSha256: p.source.baseSha256, sha256: p.source.sha256 });
       for (const p of writes) {
-        // The file's folder and its backup come first, so a rollback only renames (it writes no byte, which a full
-        // disk could refuse) and nothing but the hash stands between the file's last read and the rename over it.
-        await mkdir(dirname(p.target), { recursive: true });
-        const before = await fileBytes(p.target);
-        const beforeSha = before === null ? null : sha256Hex(before);
-        // A file that changed since the plan (an editor saved it while the engine checked the set) is not written
-        // over unless forced; his force covers a change found here as it covers one the plan found.
-        if (beforeSha !== p.disk) {
-          if (!input.force) throw moved(p, beforeSha);
-          p.forced = true;
+        const l: Landing = { label: { source: p.name }, rel: p.rel, target: p.target, staged: join(staged, 'files', p.rel), disk: p.disk, sha256: p.source.sha256, baseSha256: p.source.baseSha256, forced: p.forced };
+        try {
+          await land(l);
+        } finally {
+          p.forced = l.forced;
         }
-        // The backup is written from the bytes last read, then the file is read again: one that changed meanwhile is
-        // refused unless forced, and forced it has its backup made again from the new bytes and is read once more, so
-        // no step but the hash stands between the last read and the rename, and the backup holds what is replaced.
-        const backup = join(staged, 'backup', p.rel);
-        let held = before;
-        let heldSha = beforeSha;
-        for (let tries = 1; ; tries += 1) {
-          if (held === null) {
-            await rm(backup, { force: true });
-          } else {
-            await mkdir(dirname(backup), { recursive: true });
-            await writeFile(backup, held);
-          }
-          const current = await fileBytes(p.target);
-          const now = current === null ? null : sha256Hex(current);
-          if (now === heldSha) break;
-          // A file that keeps changing while its backup is written is refused, forced or not.
-          if (!input.force || tries >= BACKUP_TRIES) throw moved(p, now);
-          p.forced = true;
-          held = current;
-          heldSha = now;
-        }
-        await rename(join(staged, 'files', p.rel), p.target);
-        restored.push({ name: p.name, rel: p.rel, target: p.target, backup: held === null ? null : backup });
       }
       landed = true;
     } catch (err) {
@@ -330,16 +581,17 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
           try {
             await rm(done.target, { force: true });
           } catch {
-            notRemoved.push({ source: done.name, path: done.rel });
+            notRemoved.push({ ...done.label, path: done.rel });
           }
           continue;
         }
         try {
           await rename(done.backup, done.target);
         } catch {
-          unrestored.push({ source: done.name, path: done.rel, keptAt: relative(root, done.backup).split(sep).join('/') });
+          unrestored.push({ ...done.label, path: done.rel, keptAt: relative(root, done.backup).split(sep).join('/') });
         }
       }
+      for (const folder of madeFolders.reverse()) await pruneEmpty(folder);
       const left: string[] = [];
       if (unrestored.length > 0) {
         left.push(`${unrestored.map((u) => u.path).join(', ')} could not be put back: each holds the export's text, and its old bytes are kept at ${unrestored.map((u) => u.keptAt).join(', ')}`);
@@ -349,10 +601,16 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
       }
       const kept = left.length === 0 ? 'the files already moved were put back' : left.join('; ');
       const details = { ...(unrestored.length === 0 ? {} : { unrestored }), ...(notRemoved.length === 0 ? {} : { notRemoved }) };
+      if (err instanceof FetchFailedError) {
+        return refuse('fetch_failed', `fetching ${err.path} through the files route failed (${err.message}); nothing was written and nothing was acknowledged`, { path: err.path, ...err.info, ...details });
+      }
+      if (err instanceof ExportInvalidError) {
+        return refuse('export_invalid', left.length === 0 ? err.message : `${err.message}; ${kept}`, { ...err.details, ...details });
+      }
       if (err instanceof SourceMovedError) {
         return refuse(
           'source_changed',
-          `the repository changed ${String(err.conflict.source)} while the export was checked; ${kept}, and nothing was acknowledged (force writes over it, on his word alone)`,
+          `the repository changed ${String(err.conflict.source ?? err.conflict.fetch)} while the export was checked; ${kept}, and nothing was acknowledged (force writes over it, on his word alone)`,
           { conflicts: [err.conflict], ...details },
         );
       }
@@ -367,12 +625,19 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
 
   const written = writes.map((p) => ({ source: p.name, path: p.rel, sha256: p.source.sha256, forced: p.forced }));
   const unchanged = plans.filter((p) => p.action === 'same').map((p) => p.name);
+  const fetched = fetchPlans.map((fp) => ({
+    path: fp.file.rel,
+    sha256: fp.entry.sha256,
+    bytes: fp.entry.bytes,
+    stock: posix.join(posix.dirname(fp.file.rel), 'stock.json'),
+    forced: fp.file.forced,
+  }));
   const reported = Object.fromEntries(
     Object.entries(sources).map(([name, s]) => [name, { sha256: s.sha256, baseSha256: s.baseSha256, changed: s.changed, notes: s.notes }]),
   );
   // Every source the repository now holds as exported, whose base the record does not hold yet.
   const ack = Object.fromEntries(plans.filter((p) => p.source.baseSha256 !== p.source.sha256).map((p) => [p.name, p.source.sha256]));
-  const result: Record<string, unknown> = { recordFormat, sources: reported, written, unchanged, validated };
+  const result: Record<string, unknown> = { recordFormat, sources: reported, written, unchanged, validated, fetched, fetchUnchanged };
   if (Object.keys(ack).length === 0) return { ok: true, result, requestId: exported.requestId };
   const acked = await deps.client.acknowledge(input.filmId, { ack, ifUpdatedAtMs: updatedAtMs });
   if (!acked.ok) {
