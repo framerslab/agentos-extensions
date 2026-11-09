@@ -202,18 +202,12 @@ export function createJobsHandlers(options: OpsHandlersOptions): OpsJobsHandlers
     };
 
   /**
-   * A command's answer: a refusal with its word and status, else the job's view. `noteBound` says the command carried a note,
-   * whose bound is the one `RangeError` the scheduler throws for it: that one is `bad_request`; any other throw, a `RangeError`
-   * from the product's audit hook or the database among them, is the host's to answer.
+   * A command's answer: a refusal with its word and status, else the job's view. A throw is the host's to answer, a
+   * `RangeError` among them: the note's bound, the one `RangeError` the scheduler throws for a pause, is checked before the
+   * scheduler is called, so one that reaches here comes from the product's audit hook or the database, never the request.
    */
-  const commandAnswer = async (run: () => Promise<unknown>, noteBound = false): Promise<Response> => {
-    let answer: unknown;
-    try {
-      answer = await run();
-    } catch (error) {
-      if (noteBound && error instanceof RangeError) return badRequest();
-      throw error;
-    }
+  const commandAnswer = async (run: () => Promise<unknown>): Promise<Response> => {
+    const answer = await run();
     if (isRefusal(answer)) return refused(answer);
     if (answer === null || answer === undefined) return notFound();
     return json(answer);
@@ -267,7 +261,7 @@ export function createJobsHandlers(options: OpsHandlersOptions): OpsJobsHandlers
       const read = await noteOf(request);
       if (read === 'no_zod') return json({ error: 'missing_peer', status: 500, peer: 'zod' }, 500);
       if (read === 'bad_request') return badRequest();
-      return commandAnswer(() => scheduler.pause(name, { accountId: staff.accountId }, read.note), read.note !== undefined);
+      return commandAnswer(() => scheduler.pause(name, { accountId: staff.accountId }, read.note));
     },
 
     async resume(request, params) {

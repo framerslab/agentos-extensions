@@ -178,9 +178,14 @@ export function usePolled<T>(client: OpsClient, path: string | null): Polled<T> 
     failingSince.current = null;
     gaveUp.current = false;
     const markOffline = (): void => {
-      // With no read in flight nothing is being read: a page mounted offline reads as offline, not as updating.
+      // With no read in flight nothing is being read: a page mounted offline, or moved to another address or client while
+      // offline, reads as offline, not as updating; the state of the address it left is not this one's.
       const reading = inFlight.current !== null;
-      setState((current) => (belongs(current, url, fetchImpl, session) && (!current.offline || (current.updating && !reading)) ? { ...current, offline: true, updating: current.updating && reading } : current));
+      setState((current) => {
+        const own = belongs(current, url, fetchImpl, session) ? current : fresh<T>(url, fetchImpl, session);
+        if (own === current && current.offline && !(current.updating && !reading)) return current;
+        return { ...own, offline: true, updating: own.updating && reading };
+      });
     };
     // A timed read: none once the reads gave up, none behind a hidden page, none while the browser says it is offline, and none while a read runs.
     const tick = (): void => {
