@@ -205,7 +205,7 @@ describe('the refusal envelope', () => {
 });
 
 describe("the template registry's ids", () => {
-  /** The ten seeded looks of studio v2 spec 4.7, as wilds.ai's film-templates/specs.ts holds them. */
+  /** The ten seeded looks of studio v2 spec 4.7, in the studio registry's order. */
   const SEEDED = ['title.morph', 'title.serif', 'title.slate', 'title.bookend', 'credits.roll', 'credits.cards', 'credits.bookend', 'lower-third.band', 'lower-third.plate', 'lower-third.cite'];
 
   it('are exported in the registry order', () => {

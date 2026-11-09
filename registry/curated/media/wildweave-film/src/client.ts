@@ -46,7 +46,8 @@ export interface StudioError {
 
 /** The fields of the gate's envelope beside its code and its words (`StudioRefusal` less `error` and `message`). */
 export interface StudioRefusalFields {
-  capability?: string;
+  /** The capability refused; null when the refusal names none (key_rejected, rate_limited, scope_required). */
+  capability?: string | null;
   tier?: string;
   requiredPlan?: string | null;
   upgradeUrl?: string;

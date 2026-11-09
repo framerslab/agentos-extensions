@@ -2583,7 +2583,10 @@
                 "type": "object",
                 "properties": {
                   "capability": {
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "tier": {
                     "type": "string"

@@ -34,7 +34,9 @@
  *    fetch that fails answers `fetch_failed` naming the path, with nothing moved. The fetched files and their records are then moved into place, so the engine's
  *    cut reads them under the assets root, and the set is cut and validated by the engine when an
  *    engine directory is configured (an error refuses the set, `export_invalid`, and puts the
- *    fetched files back); then the sources are renamed into place. Each file is read again right
+ *    fetched files back); each fetched file and record is read once more after the engine passes the set, and one saved
+ *    over since it was placed refuses the set, `source_changed`, forced or not, since the engine checked other bytes
+ *    (the rollback keeps his save, `details.kept`); then the sources are renamed into place. Each file is read again right
  *    before its rename: one that changed since step 4 (an editor saved it while the engine checked
  *    the set) refuses the set, `source_changed`, unless `force` (it is then written over and
  *    reported forced, a fetched file in `fetched` as a source in `written`; a backup is then written again from the new bytes and the file read once
@@ -222,11 +224,14 @@ const BACKUP_TRIES = 4;
 /** A file the repository changed between the plan and its rename. */
 class SourceMovedError extends Error {
   readonly conflict: Record<string, unknown>;
+  /** True for a fetched file saved over after it was placed, found once the engine passed the set: force does not lift it. */
+  readonly afterCheck: boolean;
 
-  constructor(conflict: Record<string, unknown>) {
+  constructor(conflict: Record<string, unknown>, afterCheck = false) {
     super(`the repository changed ${String(conflict.source ?? conflict.fetch)} while the export was checked`);
     this.name = 'SourceMovedError';
     this.conflict = conflict;
+    this.afterCheck = afterCheck;
   }
 }
 
@@ -608,6 +613,13 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
         if (result.ok === false) throw new ExportInvalidError('the exported cut holds an error finding; nothing was written', { findings: result.findings ?? [] });
         validated = true;
       }
+      // The fetched files and their records once more, before any source moves: one saved over after it was placed
+      // (an editor, while the engine checked the set) is not the set the engine passed, and `fetched` would name bytes
+      // the repository no longer holds. The set is refused, forced or not, and the rollback keeps his save and names it.
+      for (const done of restored) {
+        const now = await fileSha(done.target);
+        if (now !== done.sha256) throw new SourceMovedError({ ...done.label, path: done.rel, diskSha256: now, sha256: done.sha256 }, true);
+      }
       for (const p of writes) {
         const l: Landing = { label: { source: p.name }, rel: p.rel, target: p.target, staged: join(staged, 'files', p.rel), disk: p.disk, sha256: p.source.sha256, baseSha256: p.source.baseSha256, forced: p.forced };
         try {
@@ -662,6 +674,13 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
       }
       if (err instanceof ExportInvalidError) {
         return refuse('export_invalid', left.length === 0 ? err.message : `${err.message}; ${undone}`, { ...err.details, ...details });
+      }
+      if (err instanceof SourceMovedError && err.afterCheck) {
+        return refuse(
+          'source_changed',
+          `the repository changed ${String(err.conflict.source ?? err.conflict.fetch)} after the export placed it, while the engine checked the set; ${undone}, and nothing was acknowledged (export again to check the set as it now stands)`,
+          { conflicts: [err.conflict], ...details },
+        );
       }
       if (err instanceof SourceMovedError) {
         return refuse(
