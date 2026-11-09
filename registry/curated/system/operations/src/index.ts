@@ -8,6 +8,7 @@ import { createAlerts } from './alerts/outbox.js';
 import type { Errors, Operations, OpsOptions } from './contract.js';
 import { createContext } from './context.js';
 import { createEvents } from './events/index.js';
+import { fillDailyTotalsOutcome } from './events/totals.js';
 import { createBeats } from './health/beats.js';
 import { SHARED_JOBS, registeredJobs, type DrainCounts } from './jobs/registered.js';
 import { createSweepJob } from './jobs/sweep.js';
@@ -285,7 +286,7 @@ export function createOperations(options: OpsOptions): Operations {
   function registerShared(scheduler: NonNullable<OpsOptions['scheduler']>): void {
     registered = true;
     try {
-      for (const definition of registeredJobs(context, { sweep, totals, drain: drainOutboxes, fill: (days) => events.fill(days) })) {
+      for (const definition of registeredJobs(context, { sweep, totals, drain: drainOutboxes, fill: (days) => fillDailyTotalsOutcome(context, days) })) {
         scheduler.register(definition);
       }
     } catch (error) {

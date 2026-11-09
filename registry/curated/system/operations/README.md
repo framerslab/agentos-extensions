@@ -337,7 +337,7 @@ Given `scheduler`, the scheduler of record `@framers/agentos-ext-triggers` build
 | Job | Schedule | Missed runs | Stalled after |
 |---|---|---|---|
 | `ops_sweep` | `40 * * * *` | `catch_up_once` | 2 hours |
-| `ops_totals` | `20 0 * * *` | `required`: a catch-up covering several due times first fills every day from the day before its first due time to yesterday (`events.fill`, which writes only the days and metrics with no row yet), then writes the night's day | 25 hours |
+| `ops_totals` | `20 0 * * *` | `required`: a run whose first covered due time lies before today (a catch-up of several due times, or of one missed the day before by a process back between midnight and 00:20) first fills every day from the day before that due time to yesterday (as `events.fill` does: only the days and metrics with no row yet), then writes the night's day; a fill that leaves a metric of an owed day unwritten fails the run, so the scheduler runs the owed days again | 25 hours |
 | `ops_outbox` | every minute | `skip` | 5 minutes |
 
 Each is marked safe to run twice. The sweep and the totals keep their try-locks inside their bodies, so through a rolling deploy an old process's timers and a new process's registered job never run one job at once: the one that finds the lock held answers `skipped`. A body asked to run once `stop()` has begun answers `skipped` and begins nothing. Call `operations.start({ shared: true })` before `scheduler.start()`: the scheduler's `register` throws once it has started, and `start` throws it after one `ops_job` line (`job: scheduler`, `step: register`). A process given a scheduler that calls `start({ shared: false })` alone registers nothing.

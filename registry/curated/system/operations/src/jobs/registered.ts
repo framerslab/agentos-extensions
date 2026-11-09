@@ -10,7 +10,7 @@
  */
 import type { OpsContext } from '../context.js';
 import type { OpsJobDefinition } from '../contract.js';
-import { DAY_MS, FILL_DAYS_MAX, dayStartOf } from '../events/totals.js';
+import { DAY_MS, FILL_DAYS_MAX, dayStartOf, type FillOutcome } from '../events/totals.js';
 import { ownLine } from '../own-lines.js';
 import { SWEEP_JOB, type SweepJob } from './sweep.js';
 import { TOTALS_JOB, type TotalsJob } from './totals.js';
@@ -41,18 +41,22 @@ export interface RegisteredParts {
    * begun no further drain begins, and the counts say so.
    */
   drain(nowMs: number): Promise<DrainCounts>;
-  fill(days: number): Promise<number>;
+  /** `events.fill` answering the metrics whose hook failed beside the rows written. */
+  fill(days: number): Promise<FillOutcome>;
 }
 
 /**
- * The days a catch-up of the totals fills: from the day before its first due time (a run at 00:20
- * writes the day before) to yesterday, so a catch-up batch the scheduler cut short of today leaves
- * no day behind; `fill` writes only the days and metrics with no row yet.
+ * The days before today a run of the totals must have written: from the day before its first
+ * covered due time (a run at 00:20 writes the day before) to yesterday. One for a run on its own
+ * day; more for a catch-up, of several due times or of one missed the day before (a process back
+ * between midnight and 00:20), and for a batch the scheduler cut short of today, so no owed day is
+ * left behind; `fill` writes only the days and metrics with no row yet.
  */
-function catchUpDays(context: OpsContext, covers: readonly number[]): number {
+function owedDays(context: OpsContext, covers: readonly number[]): number {
+  if (covers.length === 0) return 1;
   const today = dayStartOf(context.now());
   const first = dayStartOf(Math.min(...covers));
-  return Math.min(FILL_DAYS_MAX, Math.max(covers.length, Math.round((today - first) / DAY_MS) + 1));
+  return Math.min(FILL_DAYS_MAX, Math.max(1, Math.round((today - first) / DAY_MS) + 1));
 }
 
 /** The three shared jobs as definitions for the scheduler of record (the file comment). */
@@ -83,13 +87,17 @@ export function registeredJobs(context: OpsContext, parts: RegisteredParts): rea
       stallAfterMs: 25 * 3_600_000,
       async run(run) {
         if (context.stopped) return { outcome: 'skipped', did: 'stopped' };
-        // A catch-up covering several due times writes every day it missed first (a metric marked fillsBack: false stays
-        // empty, as fill's rule says), then the night's day; a fill that fails leaves the night's day to run and fails the try.
+        // A catch-up writes every day it owes first (a metric marked fillsBack: false stays empty, as fill's rule says), then
+        // the night's day. A fill that throws, or leaves a metric of an owed day unwritten (its hook's own ops_job line names
+        // it), lets the night's day run and fails the try, so the scheduler runs the owed days again rather than count them served.
         let filled = 0;
         let fillFailed = false;
-        if (run.covers.length > 1) {
+        const days = owedDays(context, run.covers);
+        if (days > 1) {
           try {
-            filled = await parts.fill(catchUpDays(context, run.covers));
+            const fill = await parts.fill(days);
+            filled = fill.written;
+            fillFailed = fill.failed.length > 0;
           } catch {
             fillFailed = true;
             ownLine(context.logger, 'warn', 'ops_job', { job: 'totals', step: 'fill', outcome: 'failed' });

@@ -259,6 +259,12 @@ export async function tablesMadeAt(context: OpsContext): Promise<number | null> 
   return row === null || row === undefined ? null : toMs(row.applied_at);
 }
 
+/** What a fill came to: the rows written and the metrics whose hook failed on one of its days, each named once. */
+export interface FillOutcome {
+  readonly written: number;
+  readonly failed: readonly string[];
+}
+
 /**
  * The totals of the last `days` days before today, oldest first, for the days and metrics with no
  * row yet: a host metric for every day unless its entry is marked `fillsBack: false`, an own
@@ -266,6 +272,11 @@ export async function tablesMadeAt(context: OpsContext): Promise<number | null> 
  * metric writes one `ops_job` line and the rest land; a failed write throws.
  */
 export async function fillDailyTotals(context: OpsContext, days: number): Promise<number> {
+  return (await fillDailyTotalsOutcome(context, days)).written;
+}
+
+/** `fillDailyTotals` answering the metrics whose hook failed beside the rows written, for a catch-up that must not count a day it left unwritten as served. */
+export async function fillDailyTotalsOutcome(context: OpsContext, days: number): Promise<FillOutcome> {
   if (typeof days !== 'number' || !Number.isSafeInteger(days) || days < 1 || days > FILL_DAYS_MAX) {
     throw new TypeError(`fill: days must be an integer from 1 to ${FILL_DAYS_MAX}`);
   }
@@ -282,11 +293,14 @@ export async function fillDailyTotals(context: OpsContext, days: number): Promis
   for (const row of held) present.add(`${Number(row.day)}:${row.metric}`);
   const entries = [...metricEntries(context).values()];
   let written = 0;
+  const failed = new Set<string>();
   for (let day = first; day < today; day += DAY_MS) {
     const wanted = (entry: MetricEntry): boolean =>
       entry.fillsBack && !present.has(`${day}:${entry.name}`) && (entry.source !== 'own' || day >= ownFrom);
     if (!entries.some(wanted)) continue;
-    written += (await writeDailyTotals(context, day, { excluded, only: wanted })).written;
+    const outcome = await writeDailyTotals(context, day, { excluded, only: wanted });
+    written += outcome.written;
+    for (const metric of outcome.failed) failed.add(metric);
   }
-  return written;
+  return { written, failed: [...failed] };
 }

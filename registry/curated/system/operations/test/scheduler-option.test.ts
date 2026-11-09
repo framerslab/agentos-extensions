@@ -472,11 +472,13 @@ describeBackends('the scheduler option', (backend: Backend) => {
     const clock = fakeClock(NOON);
     const { ops } = build({ clock, options: { scheduler: fake.scheduler } });
     ops.start({ shared: true });
-    const fill = vi.spyOn(ops.events, 'fill');
+    // Its own due time alone: the night's day, yesterday, and no day before it.
+    expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), [TODAY + TOTALS_MINUTE]))).toMatchObject({ outcome: 'ok' });
+    expect(await daily(TODAY - DAY_MS, 'signups')).toHaveLength(3);
+    expect(await daily(TODAY - 2 * DAY_MS, 'signups')).toEqual([]);
+    // Three due times: the 19th, the 20th and the 21st, and no day before them.
     const covers = [TODAY - 2 * DAY_MS + TOTALS_MINUTE, TODAY - DAY_MS + TOTALS_MINUTE, TODAY + TOTALS_MINUTE];
-    const answer = await definition(fake, 'ops_totals').run(runContext(clock.now(), covers));
-    expect(answer).toMatchObject({ outcome: 'ok' });
-    expect(fill.mock.calls).toEqual([[3]]);
+    expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), covers))).toMatchObject({ outcome: 'ok' });
     for (const day of [TODAY - 3 * DAY_MS, TODAY - 2 * DAY_MS, TODAY - DAY_MS]) {
       expect(await daily(day, 'signups')).toEqual([
         ['all', 4],
@@ -485,9 +487,6 @@ describeBackends('the scheduler option', (backend: Backend) => {
       ]);
     }
     expect(await daily(TODAY - 4 * DAY_MS, 'signups')).toEqual([]);
-    fill.mockClear();
-    expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), [TODAY + TOTALS_MINUTE]))).toMatchObject({ outcome: 'ok' });
-    expect(fill).not.toHaveBeenCalled();
     expect(await beats()).toEqual([]);
   });
 
@@ -497,9 +496,7 @@ describeBackends('the scheduler option', (backend: Backend) => {
     const clock = fakeClock(TODAY + DAY_MS + 10 * MINUTE);
     const { ops } = build({ clock, options: { scheduler: fake.scheduler } });
     ops.start({ shared: true });
-    const fill = vi.spyOn(ops.events, 'fill');
     expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), [TODAY + TOTALS_MINUTE]))).toMatchObject({ outcome: 'ok' });
-    expect(fill.mock.calls).toEqual([[2]]);
     expect(await daily(TODAY - DAY_MS, 'signups')).toHaveLength(3);
     expect(await daily(TODAY, 'signups')).toHaveLength(3);
     expect(await daily(TODAY - 2 * DAY_MS, 'signups')).toEqual([]);
@@ -539,11 +536,9 @@ describeBackends('the scheduler option', (backend: Backend) => {
     const clock = fakeClock(NOON);
     const { ops } = build({ clock, options: { scheduler: fake.scheduler } });
     ops.start({ shared: true });
-    const fill = vi.spyOn(ops.events, 'fill');
     const covers = [TODAY - 12 * DAY_MS + TOTALS_MINUTE, TODAY - 11 * DAY_MS + TOTALS_MINUTE];
     expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), covers))).toMatchObject({ outcome: 'ok' });
-    expect(fill.mock.calls).toEqual([[13]]);
-    expect(await daily(TODAY - 13 * DAY_MS, 'signups')).toHaveLength(3);
+    for (let back = 1; back <= 13; back += 1) expect(await daily(TODAY - back * DAY_MS, 'signups')).toHaveLength(3);
     expect(await daily(TODAY - 14 * DAY_MS, 'signups')).toEqual([]);
   });
 
