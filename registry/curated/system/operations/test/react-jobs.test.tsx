@@ -6,10 +6,10 @@
  * stops after 15 minutes without a successful read; `useJob` reads a job's page the same way and
  * pauses, resumes and runs it by POST, replacing the job only from the server's answer.
  */
-import { act, type ReactNode } from 'react';
+import { act, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { JOBS_GIVE_UP_MS, JOBS_POLL_MS, useJob, useJobs, type OpsClient } from '../src/react/index.js';
+import { JOBS_GIVE_UP_MS, JOBS_POLL_MS, JOBS_READ_TIMEOUT_MS, useJob, useJobs, type OpsClient } from '../src/react/index.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -190,6 +190,73 @@ describe('useJobs', () => {
     expect(hook.current()).toMatchObject({ offline: false, error: null });
   });
 
+  it('mounted while the browser says offline, it reads nothing until the connection returns', async () => {
+    let reads = 0;
+    let online = false;
+    vi.spyOn(navigator, 'onLine', 'get').mockImplementation(() => online);
+    const client: OpsClient = { fetch: async () => (reads += 1, json(PAGE)), base: BASE };
+    const hook = renderHook(() => useJobs(client, {}));
+    await pass(0);
+    expect(reads).toBe(0);
+    expect(hook.current()).toMatchObject({ offline: true, updating: false, jobs: null });
+    online = true;
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await pass(0);
+    expect(reads).toBe(1);
+    expect(hook.current()).toMatchObject({ offline: false, jobs: PAGE.jobs });
+  });
+
+  it('a read slower than the interval is never superseded by a timed read, and its answer shows', async () => {
+    const held: Array<ReturnType<typeof deferred<Response>>> = [];
+    const client: OpsClient = {
+      fetch: async () => {
+        const answer = deferred<Response>();
+        held.push(answer);
+        return answer.promise;
+      },
+      base: BASE,
+    };
+    const hook = renderHook(() => useJobs(client, {}));
+    await pass(0);
+    expect(held).toHaveLength(1);
+    // The tick at 30 seconds finds the read still running and starts none.
+    await pass(40_000);
+    expect(held).toHaveLength(1);
+    await act(async () => {
+      held[0]!.resolve(json(PAGE));
+    });
+    await pass(0);
+    expect(hook.current()).toMatchObject({ jobs: PAGE.jobs, updatedAt: NOW + 40_000, updating: false, error: null });
+    await pass(20_000);
+    expect(held).toHaveLength(2);
+  });
+
+  it('a read with no answer is ended at 45 seconds as a timeout, and the next tick reads again', async () => {
+    expect(JOBS_READ_TIMEOUT_MS).toBe(45_000);
+    let reads = 0;
+    const client: OpsClient = {
+      fetch: (_input, init) => {
+        reads += 1;
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('The read was aborted.', 'AbortError')));
+        });
+      },
+      base: BASE,
+    };
+    const hook = renderHook(() => useJobs(client, {}));
+    await pass(0);
+    await pass(45_000 - 1);
+    expect(reads).toBe(1);
+    expect(hook.current().updating).toBe(true);
+    await pass(1);
+    expect(reads).toBe(1);
+    expect(hook.current()).toMatchObject({ updating: false, error: 'timeout', offline: false });
+    await pass(15_000);
+    expect(reads).toBe(2);
+  });
+
   it('stops reading after 15 minutes without a successful read, and says the list is stale', async () => {
     let reads = 0;
     const client: OpsClient = { fetch: async () => (reads += 1, json({ error: 'unavailable' }, 503)), base: BASE };
@@ -332,6 +399,115 @@ describe('useJob', () => {
     expect(hook.current().job).toEqual(paused);
     await act(async () => {
       reads[1]!.resolve(json(JOB_PAGE));
+    });
+    await pass(0);
+    expect(hook.current().job).toEqual(paused);
+  });
+
+  it("a command while another is in flight answers busy without a request, and the first one's answer shows", async () => {
+    const posts: string[] = [];
+    const held = deferred<Response>();
+    const paused = { ...JOB_OK, state: 'paused', paused: { by: 'acct_1', at: NOW, note: 'x' } };
+    const client: OpsClient = {
+      fetch: async (input, init) => {
+        if ((init?.method ?? 'GET') === 'GET') return json(JOB_PAGE);
+        posts.push(String(input));
+        return held.promise;
+      },
+      base: BASE,
+    };
+    const hook = renderHook(() => useJob(client, 'ticket_routing'));
+    await pass(0);
+    let pausing!: Promise<unknown>;
+    await act(async () => {
+      pausing = hook.current().pause('x');
+    });
+    let second: unknown;
+    await act(async () => {
+      second = await hook.current().resume();
+    });
+    expect(second).toEqual({ error: 'busy', status: 409 });
+    expect(posts).toEqual([`${BASE}/ticket_routing/pause`]);
+    expect(hook.current().acting).toBe('pause');
+    await act(async () => {
+      held.resolve(json(paused));
+      await pausing;
+    });
+    expect(hook.current()).toMatchObject({ acting: null, job: paused });
+  });
+
+  it("another job shows no command in flight, its commands are not held by the first job's, and the first one's answer leaves it as it is", async () => {
+    const posts: string[] = [];
+    const held = deferred<Response>();
+    const client: OpsClient = {
+      fetch: async (input, init) => {
+        const url = String(input);
+        if ((init?.method ?? 'GET') === 'GET') return json({ ...JOB_PAGE, job: { ...JOB_OK, name: url.slice(url.lastIndexOf('/') + 1) } });
+        posts.push(url);
+        if (url.endsWith('/ticket_routing/pause')) return held.promise;
+        return json({ ...JOB_OK, name: 'ops_sweep', handRun: { by: 'acct_1', at: NOW } });
+      },
+      base: BASE,
+    };
+    let choose: (name: string) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [name, setName] = useState('ticket_routing');
+      choose = setName;
+      return useJob(client, name);
+    });
+    await pass(0);
+    let pausing!: Promise<unknown>;
+    await act(async () => {
+      pausing = hook.current().pause();
+    });
+    expect(hook.current().acting).toBe('pause');
+    await act(async () => {
+      choose('ops_sweep');
+    });
+    await pass(0);
+    expect(hook.current()).toMatchObject({ acting: null, job: { name: 'ops_sweep', handRun: null } });
+    let ran: unknown;
+    await act(async () => {
+      ran = await hook.current().runNow();
+    });
+    expect(ran).toMatchObject({ job: { name: 'ops_sweep', handRun: { by: 'acct_1' } } });
+    expect(posts).toEqual([`${BASE}/ticket_routing/pause`, `${BASE}/ops_sweep/run`]);
+    await act(async () => {
+      held.resolve(json({ ...JOB_OK, state: 'paused' }));
+      await pausing;
+    });
+    expect(hook.current()).toMatchObject({ acting: null, job: { name: 'ops_sweep', state: 'ok' } });
+  });
+
+  it('a command answered before the first read lands is not undone by that read: the page is read again', async () => {
+    const reads: Array<ReturnType<typeof deferred<Response>>> = [];
+    const paused = { ...JOB_OK, state: 'paused', paused: { by: 'acct_1', at: NOW, note: null } };
+    const client: OpsClient = {
+      fetch: async (_input, init) => {
+        if ((init?.method ?? 'GET') !== 'GET') return json(paused);
+        const held = deferred<Response>();
+        reads.push(held);
+        return held.promise;
+      },
+      base: BASE,
+    };
+    const hook = renderHook(() => useJob(client, 'ticket_routing'));
+    await pass(0);
+    expect(reads).toHaveLength(1);
+    let result: unknown;
+    await act(async () => {
+      result = await hook.current().pause();
+    });
+    expect(result).toEqual({ job: paused });
+    expect(reads).toHaveLength(2);
+    // The read begun before the pause answers the job as it was: it is dropped.
+    await act(async () => {
+      reads[0]!.resolve(json(JOB_PAGE));
+    });
+    await pass(0);
+    expect(hook.current().job).toBeNull();
+    await act(async () => {
+      reads[1]!.resolve(json({ ...JOB_PAGE, job: paused }));
     });
     await pass(0);
     expect(hook.current().job).toEqual(paused);

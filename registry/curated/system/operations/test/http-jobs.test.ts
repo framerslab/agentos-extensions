@@ -115,6 +115,7 @@ function schedulerDouble(): { readonly scheduler: OpsJobsScheduler; readonly cal
     },
     async resume(name, actor) {
       calls.push(['resume', name, actor]);
+      if (name === 'range') throw new RangeError('a value out of range inside the command');
       const found = known(name);
       if (found === null) return { refused: 'not_found', status: 404 };
       if (found.paused === null) return { refused: 'already', status: 409 };
@@ -305,8 +306,41 @@ describe('the jobs handlers over a scheduler double', () => {
     expect(await read(await handlers.jobs.run(post('/busy/run'), { name: 'busy' }))).toEqual({ status: 429, body: { error: 'hand_runs_used', status: 429, retryAt: NOW + 30 * MINUTE } });
     expect(await read(await handlers.jobs.run(post('/nothing_here/run'), { name: 'nothing_here' }))).toEqual({ status: 404, body: { error: 'not_found', status: 404 } });
     expect(await read(await handlers.jobs.resume(post('/e_ok/resume'), { name: 'e_ok' }))).toEqual({ status: 409, body: { error: 'already', status: 409 } });
-    expect(await read(await handlers.jobs.pause(post('/range/pause', '{}'), { name: 'range' }))).toEqual({ status: 400, body: { error: 'bad_request', status: 400 } });
+    // The scheduler's one RangeError on a pause is its note's bound: a pause carrying a note is bad_request.
+    expect(await read(await handlers.jobs.pause(post('/range/pause', JSON.stringify({ note: 'waiting' })), { name: 'range' }))).toEqual({ status: 400, body: { error: 'bad_request', status: 400 } });
     await expect(handlers.jobs.run(post('/broken/run'), { name: 'broken' })).rejects.toThrow('the database went away');
+  });
+
+  it("a RangeError from a pause with no note, or from another command, is the host's to answer, never bad_request", async () => {
+    const { handlers } = build();
+    await expect(handlers.jobs.pause(post('/range/pause', '{}'), { name: 'range' })).rejects.toThrow(RangeError);
+    await expect(handlers.jobs.resume(post('/range/resume'), { name: 'range' })).rejects.toThrow(RangeError);
+  });
+
+  it("a host's refusal that says it may be cached is answered no-store all the same", async () => {
+    const { handlers } = build({
+      refusal: (refusal) => new Response(JSON.stringify({ error: { kind: refusal.refused } }), { status: refusal.status, headers: { 'cache-control': 'public, max-age=60' } }),
+    });
+    const response = await handlers.jobs.get(get('/nothing_here'), { name: 'nothing_here' });
+    expect(response.status).toBe(404);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('the counts read every page however many there are, and count a job a later page repeats once', async () => {
+    // 150 jobs one a page, past any bound on pages; the page after the first repeats the first job, as a job re-sorted between two reads would.
+    const many = Array.from({ length: 150 }, (_, i) => view(`job_${String(i).padStart(3, '0')}`, i % 10 === 0 ? { state: 'failed' } : {}));
+    const repeated = [many[0]!, ...many];
+    const scheduler: OpsJobsScheduler = {
+      ...schedulerDouble().scheduler,
+      async list(filter = {}) {
+        const offset = filter.cursor === undefined ? 0 : Number(filter.cursor);
+        return { jobs: repeated.slice(offset, offset + 1), cursor: offset + 1 < repeated.length ? String(offset + 1) : null };
+      },
+    };
+    const handlers = createHandlers({ auth: authFor([]), operations: alertsDouble([]), scheduler, changes: async () => [] });
+    const { status, body } = await read(await handlers.jobs.list(get(''), {}));
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ jobs: [many[0]], cursor: '1', counts: { total: 150, failed: 15, attention: 15 } });
   });
 
   it("with a refusal option, every refusal is answered by the host's Response, never cached", async () => {
