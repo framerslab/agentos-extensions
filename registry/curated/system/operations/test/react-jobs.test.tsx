@@ -107,6 +107,14 @@ describe('useJobs', () => {
     expect(calls).toEqual([BASE]);
   });
 
+  it("reads the next page under the cursor the list answered, with the filter's state", async () => {
+    const calls: string[] = [];
+    const client: OpsClient = { fetch: async (input) => (calls.push(String(input)), json({ ...PAGE, cursor: null })), base: BASE };
+    renderHook(() => useJobs(client, { state: 'failed', cursor: '200' }));
+    await pass(0);
+    expect(calls).toEqual([`${BASE}?state=failed&cursor=200`]);
+  });
+
   it('a 401 sets signedOut and no error', async () => {
     const client: OpsClient = { fetch: async () => json({ error: 'signed_out' }, 401), base: BASE };
     const hook = renderHook(() => useJobs(client, {}));

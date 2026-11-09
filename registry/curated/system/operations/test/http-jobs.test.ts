@@ -309,6 +309,20 @@ describe('the jobs handlers over a scheduler double', () => {
     await expect(handlers.jobs.run(post('/broken/run'), { name: 'broken' })).rejects.toThrow('the database went away');
   });
 
+  it('a hand run queued for a job the read after it no longer finds is not_found, never a 200 with no job', async () => {
+    const double = schedulerDouble();
+    const scheduler: OpsJobsScheduler = {
+      ...double.scheduler,
+      async get(name) {
+        double.calls.push(['get', name]);
+        return null;
+      },
+    };
+    const handlers = createHandlers({ auth: authFor([]), operations: alertsDouble(double.calls), scheduler, changes: async () => [] });
+    expect(await read(await handlers.jobs.run(post('/e_ok/run'), { name: 'e_ok' }))).toEqual({ status: 404, body: { error: 'not_found', status: 404 } });
+    expect(double.calls).toContainEqual(['runNow', 'e_ok', { accountId: 'acct_1' }]);
+  });
+
   it("a RangeError from a command is the host's to answer, never bad_request, a pause carrying a note among them: the note's bound is checked before the scheduler is called", async () => {
     const { handlers } = build();
     // The product's audit hook or the database can throw inside the scheduler's transaction; a note within its bound never makes the scheduler throw.
@@ -489,5 +503,22 @@ describeBackends('the jobs handlers over the real scheduler', (backend: Backend)
     expect(resumed).toMatchObject({ status: 200, body: { name: 'safe_job', paused: null } });
     expect(await read(await handlers.jobs.resume(post('/safe_job/resume'), { name: 'safe_job' }))).toEqual({ status: 409, body: { error: 'already', status: 409 } });
     expect(await read(await handlers.jobs.get(get('/nothing_here'), { name: 'nothing_here' }))).toEqual({ status: 404, body: { error: 'not_found', status: 404 } });
+  });
+
+  it("a state filter reaches the real scheduler: the page lists the paused job alone, the counts stay the instance's", async () => {
+    const clock = fakeClock(NOW);
+    const logger = { info() {}, warn() {}, error() {} };
+    scheduler = createSchedulerForTests({ db, prefix: triggersPrefix, process: 'web', logger, now: clock.now });
+    scheduler.register({ name: 'kept_on', title: 'Kept on', process: 'web', schedule: { kind: 'every', everyMs: 5 * MINUTE }, rule: 'skip', safeToRepeat: true, run: async () => ({ did: 'done' }) });
+    scheduler.register({ name: 'held_job', title: 'Held job', process: 'web', schedule: { kind: 'every', everyMs: 5 * MINUTE }, rule: 'skip', safeToRepeat: true, run: async () => ({ did: 'done' }) });
+    await scheduler.start();
+    operations = createOperations(fixtureOptions(db, { prefix }, clock).options);
+    const handlers = createHandlers({ auth: authFor([]), operations, scheduler, changes: async () => [] });
+
+    expect(await read(await handlers.jobs.pause(post('/held_job/pause', JSON.stringify({ note: 'held' })), { name: 'held_job' }))).toMatchObject({ status: 200, body: { name: 'held_job', state: 'paused' } });
+    const filtered = await read(await handlers.jobs.list(get('?state=paused'), {}));
+    expect(filtered).toMatchObject({ status: 200, body: { cursor: null, counts: { total: 2, paused: 1 } } });
+    expect((filtered.body as { jobs: JobView[] }).jobs.map((job) => job.name)).toEqual(['held_job']);
+    expect(await read(await handlers.jobs.list(get('?state=attention'), {}))).toMatchObject({ status: 200, body: { jobs: [], cursor: null, counts: { total: 2, attention: 0 } } });
   });
 });
