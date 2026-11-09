@@ -279,6 +279,24 @@ describe('the jobs handlers over a scheduler double', () => {
     ]);
   });
 
+  it('every read is refused when the staff check refuses ops.read, before the scheduler, the alerts or the changes are asked', async () => {
+    const { handlers, calls, asked, changesAsked } = build();
+    const reads = [
+      ['list', '', {}],
+      ['get', '/e_ok', { name: 'e_ok' }],
+      ['runs', '/e_ok/runs', { name: 'e_ok' }],
+      ['missed', '/e_ok/missed', { name: 'e_ok' }],
+      ['alerts', '/e_ok/alerts', { name: 'e_ok' }],
+      ['changes', '/e_ok/changes', { name: 'e_ok' }],
+    ] as const;
+    for (const [route, path, params] of reads) {
+      expect(await read(await handlers.jobs[route](get(path, 'nobody'), params))).toEqual({ status: 403, body: { error: 'forbidden', status: 403 } });
+    }
+    expect(asked).toEqual(['ops.read', 'ops.read', 'ops.read', 'ops.read', 'ops.read', 'ops.read']);
+    expect(calls).toEqual([]);
+    expect(changesAsked).toEqual([]);
+  });
+
   it('a pause with no body, an empty body or an empty note pauses with no note', async () => {
     const { handlers, calls } = build();
     for (const body of [undefined, '', '{}', JSON.stringify({ note: '  ' })]) {

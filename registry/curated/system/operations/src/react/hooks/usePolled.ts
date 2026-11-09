@@ -6,7 +6,8 @@
  * read through a failed read and says when that was (`updatedAt`), whether a read runs
  * (`updating`), whether the connection is away (`offline`), the refusal's word (`error`), whether a
  * read was answered 401 (`signedOut`), and, after 15 minutes of reads without a success, `stale`,
- * when the timed reads stop until one succeeds. What was read belongs to its client (its `fetch`
+ * when the timed reads stop until one succeeds. A command's answer has every read under the same
+ * base read again at once (`readAgainSince`). What was read belongs to its client (its `fetch`
  * and `session` word) and its address, as `useRead`'s does: under another, the page sees a fresh
  * read, never the one it left.
  */
@@ -55,6 +56,40 @@ export interface Polled<T> extends OpsPolledState {
    * address changed, or after the unmount.
    */
   replace(update: (data: T) => T): boolean;
+}
+
+/** Every read the polled hooks begin, numbered in order across the page: a command's answer tells by it a read begun after it. */
+let readCount = 0;
+
+/** A polled read mounted on the page: reads it again, and the number of its read in flight (null when none runs). */
+interface MountedRead {
+  readonly again: () => void;
+  readonly flight: () => number | null;
+}
+
+/** The polled reads mounted on the page, by their client's base and session word. */
+const mountedReads = new Map<string, Set<MountedRead>>();
+
+/** The key the reads under one base and session word share. */
+const readsKey = (base: string, session: string | undefined): string => `${session ?? ''}\u0000${base}`;
+
+/** The number of the newest read begun on the page, taken when a command's answer arrives and handed to `readAgainSince`. */
+export function readMark(): number {
+  return readCount;
+}
+
+/**
+ * Reads again every polled read mounted under `base` and the session word, unless its read in flight began after `mark`: after a
+ * command's answer, the job's page (its record of changes, its runs) and the list beside it read what the command changed at
+ * once, never 30 seconds later, and a read begun before the answer is ended so it never lands over it. A read begun after the
+ * mark reads the server after the answer already.
+ */
+export function readAgainSince(base: string, session: string | undefined, mark: number): void {
+  for (const read of [...(mountedReads.get(readsKey(base, session)) ?? [])]) {
+    const flight = read.flight();
+    if (flight !== null && flight > mark) continue;
+    read.again();
+  }
 }
 
 /** The state of a client and an address nothing has been read for yet. */
@@ -117,8 +152,8 @@ export function usePolled<T>(client: OpsClient, path: string | null): Polled<T> 
   // When the reads began failing since the last success, and whether they gave up: the address's own, reset when it changes.
   const failingSince = useRef<number | null>(null);
   const gaveUp = useRef(false);
-  // The read in flight: its generation, the controller that ends it and its deadline's timer.
-  const inFlight = useRef<{ readonly mine: number; readonly controller: AbortController; readonly timer: ReturnType<typeof setTimeout> } | null>(null);
+  // The read in flight: its generation, its number on the page, the controller that ends it and its deadline's timer.
+  const inFlight = useRef<{ readonly mine: number; readonly seq: number; readonly controller: AbortController; readonly timer: ReturnType<typeof setTimeout> } | null>(null);
   /** Ends the read in flight, if any: its answer, when it comes, is dropped by its generation. */
   const endFlight = useCallback((): void => {
     const flight = inFlight.current;
@@ -146,7 +181,8 @@ export function usePolled<T>(client: OpsClient, path: string | null): Polled<T> 
       timedOut = true;
       controller.abort();
     }, JOBS_READ_TIMEOUT_MS);
-    inFlight.current = { mine, controller, timer };
+    readCount += 1;
+    inFlight.current = { mine, seq: readCount, controller, timer };
     setState((current) => (belongs(current, url, fetchImpl, session) ? { ...current, updating: true } : { ...fresh<T>(url, fetchImpl, session), updating: true }));
     const answer = await readJson<T>({ fetch: fetchImpl, base }, url, { signal: controller.signal });
     clearTimeout(timer);
@@ -210,7 +246,20 @@ export function usePolled<T>(client: OpsClient, path: string | null): Polled<T> 
     doc?.addEventListener('visibilitychange', onVisibility);
     win?.addEventListener('online', tick);
     win?.addEventListener('offline', markOffline);
+    // Mounted under its client's base, so a command's answer has it read again (readAgainSince).
+    const key = readsKey(base, session);
+    const mountedRead: MountedRead = {
+      again: () => {
+        void refresh();
+      },
+      flight: () => inFlight.current?.seq ?? null,
+    };
+    const reads = mountedReads.get(key) ?? new Set<MountedRead>();
+    reads.add(mountedRead);
+    mountedReads.set(key, reads);
     return () => {
+      reads.delete(mountedRead);
+      if (reads.size === 0 && mountedReads.get(key) === reads) mountedReads.delete(key);
       clearInterval(timer);
       doc?.removeEventListener('visibilitychange', onVisibility);
       win?.removeEventListener('online', tick);
@@ -219,7 +268,7 @@ export function usePolled<T>(client: OpsClient, path: string | null): Polled<T> 
       endFlight();
       generation.current += 1;
     };
-  }, [refresh, endFlight, url, fetchImpl, session]);
+  }, [refresh, endFlight, url, base, fetchImpl, session]);
 
   const replace = useCallback(
     (update: (data: T) => T): boolean => {

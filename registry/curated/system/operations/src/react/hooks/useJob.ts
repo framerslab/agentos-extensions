@@ -3,14 +3,31 @@
  * three commands, `pause(note?)`, `resume()` and `runNow()`, each a `POST <base>/<name>/<command>`.
  * A command replaces the page's job with the job its answer carries, and only then: nothing on the
  * page changes before the server answers, so a command that failed never reads as done, and a read
- * that began before the answer never puts back the job it replaced. One command a job runs at a
- * time: a second while the first awaits its answer is refused as `busy` without a request, so two
- * answers never arrive out of order.
+ * that began before the answer never puts back the job it replaced. The answer then has the page,
+ * and every list under the same base, read again at once, so the record of changes, a hand run's
+ * row and the list's row show the command before the next timed read. One command a job runs at a
+ * time under one client: a second while the first awaits its answer is refused as `busy` without a
+ * request, so two answers never arrive out of order.
  */
 import { useCallback, useRef, useState } from 'react';
 import type { OpsJobPage } from '../../contract.js';
 import { joinPath, readJson, type OpsClient } from '../client.js';
-import { usePolled, type OpsPolledState } from './usePolled.js';
+import { readAgainSince, readMark, usePolled, type OpsPolledState } from './usePolled.js';
+
+/** A number for each `fetch` a command went through, so two clients under one base and session word never share a command's lock. */
+const fetchIds = new WeakMap<typeof fetch, number>();
+let fetchCount = 0;
+
+/** The number of `fetchImpl`, given at its first command or render. */
+function fetchIdOf(fetchImpl: typeof fetch): number {
+  let id = fetchIds.get(fetchImpl);
+  if (id === undefined) {
+    fetchCount += 1;
+    id = fetchCount;
+    fetchIds.set(fetchImpl, id);
+  }
+  return id;
+}
 
 /** The three commands, by the last segment of their path. */
 export type OpsJobCommand = 'pause' | 'resume' | 'run';
@@ -40,8 +57,8 @@ export function useJob<Job = unknown, Run = unknown, Missed = unknown>(client: O
   const read = usePolled<OpsJobPage<Job, Run, Missed>>(client, name === null ? null : `/${encodeURIComponent(name)}`);
   const { fetch: fetchImpl, base, session } = client;
   const { replace } = read;
-  /** A job's key among the commands: the session word and the job's address. */
-  const keyOf = useCallback((job: string): string => `${session ?? ''}\u0000${joinPath(base, `/${encodeURIComponent(job)}`)}`, [base, session]);
+  /** A job's key among the commands: the client (its `fetch` and its session word) and the job's address, as the reads tell a client. */
+  const keyOf = useCallback((job: string): string => `${fetchIdOf(fetchImpl)}\u0000${session ?? ''}\u0000${joinPath(base, `/${encodeURIComponent(job)}`)}`, [fetchImpl, base, session]);
   // The commands awaiting their answers, by job: the ref decides at once whether a job is busy, the state draws `acting`.
   const locks = useRef(new Map<string, OpsJobCommand>());
   const [acting, setActing] = useState<ReadonlyMap<string, OpsJobCommand>>(() => new Map());
@@ -63,15 +80,20 @@ export function useJob<Job = unknown, Run = unknown, Missed = unknown>(client: O
         // A 204 carries no job: nothing to show, so the command reads as failed and the page stays as it was.
         if (answer.data === null) return { error: 'failed', status: 204 };
         const job = answer.data;
+        // Taken before the replacement, whose own read (before the first read landed) begins after it and is left to run.
+        const mark = readMark();
         // Under another job or client by now, the answer replaces nothing: replace answers false there.
         replace((page) => ({ ...page, job }));
+        // What else the command changed (its record of changes, a hand run's row, the list's row and counts) is read again now,
+        // from the page and from every list under the same base; a read begun before the answer is ended first.
+        readAgainSince(base, session, mark);
         return { job };
       } finally {
         locks.current.delete(key);
         setActing(new Map(locks.current));
       }
     },
-    [name, fetchImpl, base, keyOf, replace],
+    [name, fetchImpl, base, session, keyOf, replace],
   );
 
   const pause = useCallback((note?: string) => command('pause', note === undefined ? {} : { note }), [command]);
