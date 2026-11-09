@@ -170,6 +170,23 @@ function beatRecordingDb(jobs: string[]): StorageAdapter {
   return db as unknown as StorageAdapter;
 }
 
+/** An adapter that answers nothing and records the table of every insert, a beat as `beat:<job>`. */
+function insertRecordingDb(writes: string[]): StorageAdapter {
+  const db = {
+    kind: 'sqljs',
+    run: async (sql: string, parameters?: readonly unknown[]) => {
+      const table = /^\s*INSERT INTO (\w+)/.exec(sql)?.[1];
+      if (table !== undefined) writes.push(/_beats$/.test(table) ? `beat:${String(parameters?.[0])}` : table);
+      return { changes: 1 };
+    },
+    get: async () => null,
+    all: async () => [],
+    exec: async () => undefined,
+    transaction: async (work: (trx: unknown) => Promise<unknown>) => work(db),
+  };
+  return db as unknown as StorageAdapter;
+}
+
 describe('the scheduler option, without a database', () => {
   it("given a scheduler, neither the sweep's nor the totals' timer arms in the process that runs the shared jobs; without one both arm, as before the option", () => {
     const jobs: string[] = [];
@@ -218,6 +235,60 @@ describe('the scheduler option, without a database', () => {
       );
     }
     expect(() => createOperations({ ...options, scheduler: fakeScheduler().scheduler })).not.toThrow();
+  });
+
+  it("a registration the scheduler refuses throws from start() after one ops_job line with the process's own flush timer armed all the same; the job registered before it beats, the refused name writes no beat, and the next start({ shared: true }) registers the jobs left and subscribes no second time", async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    try {
+      const writes: string[] = [];
+      const fake = fakeScheduler();
+      // The triggers scheduler refuses a name it holds already (a host's own job of that name), and every name once it has started.
+      let refuse = true;
+      const scheduler: OpsScheduler = {
+        register(entry) {
+          if (refuse && entry.name === TOTALS_JOB) {
+            refuse = false;
+            throw new Error(`duplicate job name: ${entry.name}`);
+          }
+          fake.scheduler.register(entry);
+        },
+        onRun: (handler) => fake.scheduler.onRun(handler),
+      };
+      const fixture = fixtureOptions(insertRecordingDb(writes), { scheduler });
+      const ops = createOperations(fixture.options);
+      expect(() => ops.start({ shared: true })).toThrow(`duplicate job name: ${TOTALS_JOB}`);
+      expect(fixture.recorder.linesOf('ops_job').filter((line) => line.fields?.job === 'scheduler')).toEqual([
+        { level: 'warn', message: 'ops_job', fields: { job: 'scheduler', step: 'register', outcome: 'failed' } },
+      ]);
+      expect(fake.defs.map((entry) => entry.name)).toEqual(['ops_sweep']);
+
+      // The process's own timed flush runs: a line pushed now is written within its 5 seconds.
+      ops.lines.push({ process: 'web', kind: 'job', fields: { ms: 1 } });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(writes).toContain('ops_log_lines');
+
+      // The sweep this process registered beats from its settled runs; the refused name is another job's and writes none.
+      expect(fake.handlers).toHaveLength(1);
+      const endedAt = NOON + 1_000;
+      fake.handlers[0]!({ name: 'ops_sweep' }, { outcome: 'ok', endedAt });
+      fake.handlers[0]!({ name: TOTALS_JOB }, { outcome: 'ok', endedAt });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writes.filter((entry) => entry.startsWith('beat:'))).toEqual(['beat:ops_sweep']);
+
+      // The next start registers the two left, the sweep not again, and subscribes no second time.
+      ops.start({ shared: true });
+      expect(fake.defs.map((entry) => entry.name)).toEqual(SHARED_JOBS);
+      expect(fake.handlers).toHaveLength(1);
+      fake.handlers[0]!({ name: TOTALS_JOB }, { outcome: 'ok', endedAt: endedAt + 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(writes.filter((entry) => entry.startsWith('beat:'))).toEqual(['beat:ops_sweep', `beat:${TOTALS_JOB}`]);
+
+      const stopped = ops.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await stopped;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('the compiler, under the package options, takes the triggers package\'s Scheduler as the option and the definitions this package registers as its JobDefinition, and refuses a scheduler with no onRun', () => {
