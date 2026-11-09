@@ -12,11 +12,19 @@
  * status decides alone (a 429, a 401, a 403, any 4xx); else it is a failed call (`network`, or
  * `timeout` past the deadline), retried as a dropped connection is. Every answer resolves, never
  * throws: `{ ok: true, result }` or
- * `{ ok: false, error: { code, message, status, requestId, findings?, sceneId?, details? } }`.
+ * `{ ok: false, error: { code, message, status, requestId, findings?, sceneId?, details?, refusal? } }`.
+ *
+ * Every refusal is read as the studio gate's one envelope (`StudioRefusal`, the studio v2 spec's
+ * Amendment, A.7): its `message` is the error's, and its capability, tier, required plan, upgrade
+ * address, meter, checkout state and policy version come back as `refusal`. A code the account's
+ * plan or room decides (`plan_required`, `limit_reached`, `budget_exhausted`, `not_open`,
+ * `file_too_large`) is never sent again, whatever its status, since a retry meets the same plan; a
+ * v1 body that names the code alone parses as before.
  */
 import { randomUUID } from 'node:crypto';
 import type { Logger } from './log.js';
 import { maskDeep, maskKeys } from './log.js';
+import { StudioRefusal } from './schemas.js';
 
 /** A refusal: the route's code, or the client's own (`key_missing`, `network`, `timeout`). */
 export interface StudioError {
@@ -28,7 +36,31 @@ export interface StudioError {
   sceneId?: string;
   /** The rest of the route's answer: `stale_write`'s current edit times, `edit_refused`'s refused op, `edit_id_reused`'s seq. */
   details?: Record<string, unknown>;
+  /**
+   * The gate's envelope beside the code, when the route answered one (`plan_required` with the plan
+   * that opens the capability and where to upgrade, `limit_reached` with its meter): what the
+   * account's plan or room decides, never changed by sending the call again.
+   */
+  refusal?: StudioRefusalFields;
 }
+
+/** The fields of the gate's envelope beside its code and its words (`StudioRefusal` less `error` and `message`). */
+export interface StudioRefusalFields {
+  /** The capability refused; null when the refusal names none (key_rejected, rate_limited, scope_required). */
+  capability?: string | null;
+  tier?: string;
+  requiredPlan?: string | null;
+  upgradeUrl?: string;
+  limit?: { meter: string; used: number; max: number; window: string; resetsAt?: number; [field: string]: unknown };
+  checkoutPaused?: boolean;
+  policyVersion?: number;
+}
+
+/** The envelope's fields a refusal carries, beside the code and the words. */
+const ENVELOPE_FIELDS = ['capability', 'tier', 'requiredPlan', 'upgradeUrl', 'limit', 'checkoutPaused', 'policyVersion'] as const;
+
+/** The codes an account's plan, room or the policy decides: never sent again, whatever the status (a 503 `not_open` too). */
+export const FINAL_REFUSAL_CODES: ReadonlySet<string> = new Set(['plan_required', 'limit_reached', 'budget_exhausted', 'not_open', 'file_too_large']);
 
 /** What a call resolves to. */
 export type StudioAnswer<T = unknown> = { ok: true; result: T; status: number; requestId: string } | { ok: false; error: StudioError };
@@ -55,6 +87,8 @@ export interface CallOptions {
   /** Whether a network error or a 502, 503 or 504 may be retried; true for a GET by default. */
   idempotent?: boolean;
   timeoutMs?: number;
+  /** A 2xx answer's body as its bytes (`result` is a Buffer), for a file the files route serves. */
+  binary?: boolean;
 }
 
 /** The waits before the second and third try of an idempotent call. */
@@ -76,11 +110,17 @@ const CODE_MESSAGES: Record<string, string> = {
   key_missing: 'no studio key: set WILDWEAVE_STUDIO_KEY or the options.key of the pack',
   key_rejected: 'the studio key was refused: unknown, revoked or expired',
   forge_required: 'the account behind the key is not on the Forge tier, or the studio is not open to it',
+  plan_required: "the account's plan does not include this; the refusal names the plan that does and where to upgrade",
+  limit_reached: "the account's room for this is used; the refusal names the meter",
+  budget_exhausted: "the account's budget for this window is used; it opens again when the window resets",
+  insufficient_credits: 'the account holds too few credits for this',
+  file_too_large: 'the file is over the size the studio takes',
+  demo_not_ready: 'the demo film is being prepared',
   sign_in_required: 'no active account answers to the key',
   scope_required: "the studio key's scopes lack the one this route needs",
   rate_limited: "the studio key's rate was reached",
   not_found: 'the account holds no such film, document or proposal',
-  not_open: 'the render worker is not open on the box; render with the local engine',
+  not_open: 'this piece of the studio is not open yet (the render worker on the box among them); render with the local engine',
   stale_write: 'a document changed since it was read: read the film again and decide',
   edit_refused: 'the edit was refused: an op the module refuses, or a cut the engine refuses',
   edit_id_reused: 'the editId was used for another edit',
@@ -119,6 +159,26 @@ function retryAfterMs(header: string | null): number {
 /** A path segment, encoded. */
 const seg = (value: string): string => encodeURIComponent(value);
 
+/** The path the studio serves a film's files at (`STUDIO_FILES_PATH` on wilds.ai). */
+const STUDIO_FILES_PATH = '/api/v1/wildweave/studio/files';
+
+/**
+ * The key of a files-route address the export route lists, `/api/v1/wildweave/studio/files/<sha256>?key=<key>`,
+ * or null for any other address: another origin, another path, another file's hash, or no key.
+ */
+export function studioFileAddress(url: string, sha256: string): { key: string } | null {
+  if (!/^[0-9a-f]{64}$/.test(sha256) || !url.startsWith('/') || url.startsWith('//')) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(url, 'http://studio.invalid');
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== 'http://studio.invalid' || parsed.pathname !== `${STUDIO_FILES_PATH}/${sha256}`) return null;
+  const key = parsed.searchParams.get('key');
+  return key === null || key === '' ? null : { key };
+}
+
 /** The client over the studio's routes. */
 export class WildweaveStudioClient {
   private readonly base: string;
@@ -142,6 +202,9 @@ export class WildweaveStudioClient {
     if (!this.hasKey) return { ok: false, error: { code: 'key_missing', message: CODE_MESSAGES.key_missing! } };
     const requestId = this.opts.requestId?.() ?? randomUUID();
     const url = `${this.base}${path}`;
+    // The path as the log lines name it: a files-route address's `key` query is the storage path of the account's own
+    // folder, which no log line repeats.
+    const logged = path.replace(/([?&]key=)[^&#]*/g, '$1-');
     const idempotent = callOpts.idempotent ?? method === 'GET';
     const timeoutMs = callOpts.timeoutMs ?? this.opts.timeoutMs ?? 30_000;
     const doFetch = this.opts.fetch ?? fetch;
@@ -167,64 +230,74 @@ export class WildweaveStudioClient {
         if (idempotent && transientTries < RETRY_WAITS_MS.length) {
           const wait = RETRY_WAITS_MS[transientTries]!;
           transientTries += 1;
-          this.opts.log?.info({ event: 'wildweave_film.retry', path, attempt: transientTries, afterMs: wait, cause: timedOut ? 'timeout' : 'network' }, 'retrying after a network error');
+          this.opts.log?.info({ event: 'wildweave_film.retry', path: logged, attempt: transientTries, afterMs: wait, cause: timedOut ? 'timeout' : 'network' }, 'retrying after a network error');
           await sleep(wait);
           continue;
         }
         const message = timedOut ? `no answer within ${timeoutMs} ms` : maskKeys(err instanceof Error ? err.message : String(err), this.secrets);
-        this.opts.log?.info({ event: 'wildweave_film.refused', path, code: timedOut ? 'timeout' : 'network' }, 'the studio did not answer');
+        this.opts.log?.info({ event: 'wildweave_film.refused', path: logged, code: timedOut ? 'timeout' : 'network' }, 'the studio did not answer');
         return { ok: false, error: { code: timedOut ? 'timeout' : 'network', message, requestId } };
       }
       const id = response.headers.get('x-request-id') ?? requestId;
       const status = response.status;
       let text: string;
+      let bytes: Buffer | undefined;
       try {
-        text = await response.text();
+        if (callOpts.binary && status >= 200 && status < 300) {
+          bytes = Buffer.from(await response.arrayBuffer());
+          text = '';
+        } else {
+          text = await response.text();
+        }
       } catch (err) {
         // The headers came and the body was cut off (the connection dropped, or the deadline passed mid-answer). The
         // status still rules where it decides alone: a 429 waits out its Retry-After below, and any other 4xx is the
         // refusal its status names, never retried. Otherwise the route may have acted and its answer is unknown, so
         // the call failed; an idempotent call is tried again as after a dropped connection.
         if (status >= 400 && status < 500) {
+          // The code is in the body that was cut off, so a 429 here is the rate's, as its status says.
           if (status === 429 && rateTries < RATE_RETRIES) {
             const wait = retryAfterMs(response.headers.get('retry-after'));
             rateTries += 1;
-            this.opts.log?.info({ event: 'wildweave_film.retry', path, attempt: rateTries, afterMs: wait, status }, 'retrying after the rate limit');
+            this.opts.log?.info({ event: 'wildweave_film.retry', path: logged, attempt: rateTries, afterMs: wait, status }, 'retrying after the rate limit');
             await sleep(wait);
             continue;
           }
           const error = this.refusal(status, null, '', id);
-          this.opts.log?.info({ event: 'wildweave_film.refused', path, status, code: error.code, requestId: id }, 'the studio refused the call; its answer was cut off');
+          this.opts.log?.info({ event: 'wildweave_film.refused', path: logged, status, code: error.code, requestId: id }, 'the studio refused the call; its answer was cut off');
           return { ok: false, error };
         }
         const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
         if (idempotent && transientTries < RETRY_WAITS_MS.length) {
           const wait = RETRY_WAITS_MS[transientTries]!;
           transientTries += 1;
-          this.opts.log?.info({ event: 'wildweave_film.retry', path, attempt: transientTries, afterMs: wait, status, cause: timedOut ? 'timeout' : 'answer_cut_off' }, 'retrying after an answer was cut off');
+          this.opts.log?.info({ event: 'wildweave_film.retry', path: logged, attempt: transientTries, afterMs: wait, status, cause: timedOut ? 'timeout' : 'answer_cut_off' }, 'retrying after an answer was cut off');
           await sleep(wait);
           continue;
         }
         const code = timedOut ? 'timeout' : 'network';
-        this.opts.log?.info({ event: 'wildweave_film.refused', path, status, code, requestId: id }, 'the answer was cut off');
+        this.opts.log?.info({ event: 'wildweave_film.refused', path: logged, status, code, requestId: id }, 'the answer was cut off');
         const message = `the answer to HTTP ${status} was cut off${timedOut ? ` past ${timeoutMs} ms` : ''}: the route may have acted on the call, so read its state before sending it again`;
         return { ok: false, error: { code, message, status, requestId: id } };
       }
+      if (bytes !== undefined) return { ok: true, result: bytes as unknown as T, status, requestId: id };
       const json = parseJson(text);
       const routeCode = isRec(json) && typeof json.error === 'string' ? json.error : undefined;
+      // A code the account's plan or room decides is answered as it is: a retry meets the same plan.
+      const final = routeCode !== undefined && FINAL_REFUSAL_CODES.has(routeCode);
 
-      if (status === 429 && rateTries < RATE_RETRIES) {
+      if (status === 429 && !final && rateTries < RATE_RETRIES) {
         const wait = retryAfterMs(response.headers.get('retry-after'));
         rateTries += 1;
-        this.opts.log?.info({ event: 'wildweave_film.retry', path, attempt: rateTries, afterMs: wait, status }, 'retrying after the rate limit');
+        this.opts.log?.info({ event: 'wildweave_film.retry', path: logged, attempt: rateTries, afterMs: wait, status }, 'retrying after the rate limit');
         await sleep(wait);
         continue;
       }
-      const transient = status === 502 || status === 504 || (status === 503 && routeCode !== 'not_open');
+      const transient = !final && (status === 502 || status === 504 || status === 503);
       if (transient && idempotent && transientTries < RETRY_WAITS_MS.length) {
         const wait = RETRY_WAITS_MS[transientTries]!;
         transientTries += 1;
-        this.opts.log?.info({ event: 'wildweave_film.retry', path, attempt: transientTries, afterMs: wait, status }, 'retrying after a gateway answer');
+        this.opts.log?.info({ event: 'wildweave_film.retry', path: logged, attempt: transientTries, afterMs: wait, status }, 'retrying after a gateway answer');
         await sleep(wait);
         continue;
       }
@@ -233,7 +306,7 @@ export class WildweaveStudioClient {
         return { ok: true, result: (json === undefined ? { text: maskKeys(text, this.secrets) } : json) as T, status, requestId: id };
       }
       const error = this.refusal(status, json, text, id);
-      this.opts.log?.info({ event: 'wildweave_film.refused', path, status, code: error.code, requestId: id }, 'the studio refused the call');
+      this.opts.log?.info({ event: 'wildweave_film.refused', path: logged, status, code: error.code, requestId: id }, 'the studio refused the call');
       return { ok: false, error };
     }
   }
@@ -259,6 +332,12 @@ export class WildweaveStudioClient {
     if (Array.isArray(findings)) error.findings = maskDeep(findings, this.secrets) as unknown[];
     if (typeof sceneId === 'string') error.sceneId = sceneId;
     if (Object.keys(rest).length > 0) error.details = maskDeep(rest, this.secrets) as Record<string, unknown>;
+    // The gate's envelope: its fields beside the code, when the body is one and carries any (a v1 body names the code alone).
+    const envelope = named === undefined ? undefined : StudioRefusal.safeParse(body);
+    if (envelope?.success) {
+      const fields = Object.fromEntries(ENVELOPE_FIELDS.filter((field) => envelope.data[field] !== undefined).map((field) => [field, envelope.data[field]]));
+      if (Object.keys(fields).length > 0) error.refusal = maskDeep(fields, this.secrets) as StudioRefusalFields;
+    }
     return error;
   }
 
@@ -331,6 +410,28 @@ export class WildweaveStudioClient {
   /** POST /films/:filmId/proposals: retried only when it carries its proposalId (the submit tool always names one), which makes it idempotent on the route. */
   submitProposal(filmId: string, body: Record<string, unknown>) {
     return this.call('POST', `/films/${seg(filmId)}/proposals`, body, { idempotent: typeof body.proposalId === 'string' });
+  }
+  /**
+   * GET /templates: the template registry's definitions, the transition kinds the render box draws
+   * and the account's saved templates; with `filmId`, GET /films/:filmId/templates, the film's own
+   * templates table.
+   */
+  templates(filmId?: string) {
+    return this.call('GET', filmId === undefined ? '/templates' : `/films/${seg(filmId)}/templates`);
+  }
+  /**
+   * GET /files/:sha256?key=: one file of the account's own folder, as its bytes. `url` is the
+   * address the export route lists: the files route's own path, for `sha256`, with its `key` query;
+   * any other address is refused here (`fetch_failed`, naming the address without its query), so
+   * the key goes to the studio alone.
+   */
+  file(url: string, sha256: string): Promise<StudioAnswer<Buffer>> {
+    const parsed = studioFileAddress(url, sha256);
+    if (!parsed) {
+      const shown = (url.split(/[?#]/, 1)[0] ?? '').slice(0, 200);
+      return Promise.resolve({ ok: false, error: { code: 'fetch_failed', message: `${shown} is not the studio's files route for ${sha256}` } });
+    }
+    return this.call<Buffer>('GET', `/files/${seg(sha256)}?key=${encodeURIComponent(parsed.key)}`, undefined, { binary: true, timeoutMs: LONG_CALL_TIMEOUT_MS });
   }
   /** POST /films/:filmId/proposals/:proposalId/decision: the route answers the same decision sent again with the one that stands, so retried. */
   decideProposal(filmId: string, proposalId: string, body: { verdict: string; words: string; source: string }) {

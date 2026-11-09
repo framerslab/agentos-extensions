@@ -68,6 +68,11 @@ const ROUTES: Record<string, ScriptedAnswer> = {
   [`GET ${F}/preview`]: { status: 200, body: fixture('preview') },
   [`GET ${F}/proposals`]: { status: 200, body: fixture('proposals') },
   [`POST ${F}/proposals`]: { status: 201, body: { proposal: { proposalId: PROPOSAL_ID, filmId: FILM_ID, status: 'proposed' } } },
+  'GET /templates': {
+    status: 200,
+    body: { definitions: [{ id: 'title.serif', kind: 'title', name: 'Serif title', editable: ['type'], defaults: {}, params: { type: 'object' }, thumbnailAtMs: 1200 }], transitions: ['cut', 'crossfade'], saved: [] },
+  },
+  [`GET ${F}/templates`]: { status: 200, body: { templates: {} } },
 };
 
 /** The route's answer to a request, as the table holds it; a decision answers the proposal it names. */
@@ -112,6 +117,28 @@ const EDIT_OPS = [
       { kind: 'text-frame', title: 'The keeper', body: 'He kept the lamp.', atMs: 3000, durMs: 1500 },
     ],
   },
+  // v2 (studio v2 spec 8.2): every op the edit module on wilds.ai master admits beyond v1's, and the new transition kinds.
+  { op: 'transition', sceneId: 's01', out: { kind: 'wipe-diagonal', durMs: 600, direction: 'from-bottom-right' } },
+  { op: 'transition', sceneId: 's02', out: { kind: 'slide', durMs: 400, direction: 'from-top' } },
+  { op: 'templates_table', templates: { 'my-credits': { base: 'credits.roll', params: { linesPerSecond: 1 }, name: 'Our credits' } } },
+  { op: 'template_layer', sceneId: 's03', at: null, layer: { kind: 'credits', id: 'credits-1', template: '@my-credits', params: {}, atMs: 0, durMs: 6000, opacity: [{ atMs: 0, value: 0, ease: 'smoother' }, { atMs: 800, value: 1, ease: 'linear' }] } },
+  { op: 'template_layer', sceneId: 's02', at: 0, layer: { kind: 'lower-third', id: 'lt-1', template: 'lower-third.band', params: { name: 'The keeper', role: 'Keeper' }, atMs: 500, durMs: 3000, place: { xPct: 5, yPct: 80, wPct: 40 } } },
+  {
+    op: 'overlay',
+    sceneId: 's01',
+    at: null,
+    overlay: { id: 'ov-1', asset: 'gull-still', place: { xPct: 70, yPct: 10, wPct: 25 }, atMs: 0, durMs: 2000, opacity: 0.9, move: { fromScale: 1, toScale: 1.1, fromXPct: 50, fromYPct: 50, toXPct: 55, toYPct: 45 } },
+  },
+  { op: 'layer_update', sceneId: 's01', layerId: 'ov-1', set: { place: [{ atMs: 0, value: { xPct: 70, yPct: 10, wPct: 25 }, ease: 'linear' }, { atMs: 1500, value: { xPct: 10, yPct: 10, wPct: 25 }, ease: 'hold' }] } },
+  { op: 'layer_remove', sceneId: 's02', layerId: 'lt-1' },
+  { op: 'layer_ids' },
+  { op: 'keyframes', sceneId: 's01', target: { kind: 'layer', layerId: 'ov-1' }, property: 'opacity', points: [{ atMs: 0, value: 1, ease: 'linear' }, { atMs: 1000, value: 0.2, ease: 'hold' }] },
+  { op: 'bed_edit', run: 's01', edit: { gain: -4, fadeOutMs: 1200, duck: null } },
+  { op: 'sting', sceneId: 's02', sfx: [{ asset: 'gull', atMs: 1200, kind: 'mark', gainKeyframes: [{ atMs: 0, value: 0, ease: 'linear' }] }] },
+  { op: 'asset_add', sceneId: 's02', assetId: 'harbour-clip', assetRow: 'row-7f3a', changes: 'cropped to 16:9' },
+  { op: 'visual', sceneId: 's02', asset: 'harbour-clip' },
+  { op: 'assets_rights', entries: { 'harbour-clip': { changes: 'cropped and graded' } } },
+  { op: 'asset_remove', sceneId: 's03', assetId: 'old-still' },
 ];
 
 const SUBMIT = {
@@ -171,6 +198,7 @@ const REMOTE_ROWS: RemoteRow[] = [
   },
   { label: 'wildweave_film_records (a job on the box: not_open)', tool: 'wildweave_film_records', args: { filmId: FILM_ID, jobId: 'job-1' }, method: 'GET', path: `${F}/jobs/job-1` },
   { label: 'wildweave_film_preview', tool: 'wildweave_film_preview', args: { filmId: FILM_ID }, method: 'GET', path: `${F}/preview` },
+  { label: 'wildweave_film_templates (the registry)', tool: 'wildweave_film_templates', args: {}, method: 'GET', path: '/templates' },
   { label: 'wildweave_film_proposals (by status)', tool: 'wildweave_film_proposals', args: { filmId: FILM_ID, status: 'noted' }, method: 'GET', path: `${F}/proposals?status=noted` },
   {
     label: 'wildweave_film_proposal_submit (every field)',
@@ -428,6 +456,7 @@ const TABLE: Record<ToolName, { mode: 'remote' | 'local' | 'both'; scopes: Scope
   wildweave_film_proposals: { mode: 'remote', scopes: ['read'], sideEffects: false },
   wildweave_film_proposal_submit: { mode: 'remote', scopes: ['write'], sideEffects: true },
   wildweave_film_proposal_decide: { mode: 'remote', scopes: ['write'], sideEffects: true },
+  wildweave_film_templates: { mode: 'remote', scopes: ['read'], sideEffects: false },
 };
 
 describe("each tool's mode, scope and side effects, as the spec's table sets them", () => {
@@ -478,6 +507,13 @@ const ROUTE_CODES: Array<[string, number]> = [
   ['already_decided', 409],
   ['proposal_id_reused', 409],
   ['body_too_large', 413],
+  // The gate's one envelope (the Amendment's A.7): a plan or a room decides these, so none is ever sent again.
+  ['plan_required', 403],
+  ['limit_reached', 402],
+  ['insufficient_credits', 402],
+  ['budget_exhausted', 402],
+  ['file_too_large', 413],
+  ['not_open', 503],
   ['edit_refused', 422],
   ['cut_refused', 422],
   ['preview_refused', 422],

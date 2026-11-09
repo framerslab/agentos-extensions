@@ -184,4 +184,22 @@ describe('the studio client', () => {
     expect(JSON.stringify(lines)).not.toContain(FAKE_KEY);
     expect(lines.filter((l) => l.event === 'wildweave_film.retry')).toHaveLength(2);
   });
+
+  it("keeps a file's storage key out of the log lines of its fetch, and out of the refusal of an address that is not the files route", async () => {
+    const sha = 'a'.repeat(64);
+    const storageKey = `wildweave-film/account-7f3e/studio/${sha}`;
+    const { log, lines } = capturedLogger([FAKE_KEY]);
+    const { fetchStub, calls } = scripted([json(503, { error: 'storage_unavailable' }), json(404, { error: 'not_found' })]);
+    const c = new WildweaveStudioClient({ baseUrl: 'https://studio.example.invalid', key: FAKE_KEY, fetch: fetchStub, sleep: async () => undefined, log });
+    const answer = await c.file(`/api/v1/wildweave/studio/files/${sha}?key=${encodeURIComponent(storageKey)}`, sha);
+    expect(answer).toMatchObject({ ok: false, error: { code: 'not_found', status: 404 } });
+    // The key reached the route, and no log line repeats it.
+    expect(calls.map((call) => new URL(call.url).searchParams.get('key'))).toEqual([storageKey, storageKey]);
+    expect(lines.filter((l) => l.event === 'wildweave_film.retry')).toHaveLength(1);
+    expect(lines.filter((l) => l.event === 'wildweave_film.refused')).toHaveLength(1);
+    expect(JSON.stringify(lines)).not.toContain('account-7f3e');
+    const elsewhere = await c.file(`https://elsewhere.example.invalid/files/${sha}?key=${encodeURIComponent(storageKey)}`, sha);
+    expect(elsewhere).toMatchObject({ ok: false, error: { code: 'fetch_failed' } });
+    expect(JSON.stringify(elsewhere)).not.toContain('account-7f3e');
+  });
 });

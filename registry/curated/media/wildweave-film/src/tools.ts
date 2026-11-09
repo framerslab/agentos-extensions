@@ -1,7 +1,7 @@
 /**
  * @module @framers/agentos-ext-wildweave-film/tools
  *
- * The 22 tool definitions, shared by the AgentOS pack and the MCP server: each one's name, what it
+ * The 23 tool definitions, shared by the AgentOS pack and the MCP server: each one's name, what it
  * does and its refusal codes, its mode (remote, local or both), its scope, whether it has side
  * effects, and `run`, which checks the arguments against the tool's schema and answers one object:
  * `{ ok: true, result }` or `{ ok: false, error: { code, message, ... } }`.
@@ -32,6 +32,8 @@ export interface ToolContext {
   key?: string;
   /** True when an engine directory is configured: the export then cuts and validates what it writes. */
   engineConfigured: boolean;
+  /** The engine clone, when one is configured: the export reads its floor before it writes. */
+  engineDir?: string;
   log: Logger;
 }
 
@@ -48,6 +50,8 @@ export interface ToolDefinition {
 }
 
 const refuse = (code: string, message: string, details?: Record<string, unknown>): ToolAnswer => ({ ok: false, error: { code, message, ...(details ? { details } : {}) } });
+
+const isRec = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** A route's answer as a tool's: the result and its request id, or the refusal. */
 function fromStudio(answer: StudioAnswer): ToolAnswer {
@@ -136,7 +140,14 @@ async function readRecords(out: string): Promise<ToolAnswer> {
   return { ok: true, result };
 }
 
-/** The 22 tools, in the order of the studio's tool surface. */
+/**
+ * What every remote tool may meet beside its own codes: the studio gate's envelope, whose `message` is the policy's
+ * words and whose `refusal` names the plan or the room that decides it. None of these changes on a retry.
+ */
+const GATE_REFUSALS =
+  'plan_required (the account\'s plan lacks the capability: refusal.requiredPlan and refusal.upgradeUrl name the plan that has it), limit_reached (the account\'s room is used: refusal.limit names the meter), budget_exhausted (the window\'s budget is used until it resets), not_open (the piece is not open yet), file_too_large; each is the account\'s plan or room, so tell the person and never send the call again';
+
+/** The 23 tools, in the order of the studio's tool surface. */
 export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   define('wildweave_film_list', 'WildWeave Film List', 'remote', 'read', "Lists the films the account's studio holds (v1: at most one), each with its id, title, scene count, length and whether it was edited since the import. Refusals: key_missing, key_rejected, forge_required, scope_required.", async (_input, ctx) =>
     fromStudio(await ctx.client.listFilms()),
@@ -160,7 +171,7 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     if (!assets) return refuse('arg_invalid', 'assets: the film repository the cut reads (or set WILDWEAVE_FILM_REPO)');
     return ctx.engine('validate', { cut: abs(ctx, input.cut), assets, draft: input.draft, strict: input.strict });
   }),
-  define('wildweave_film_edit', 'WildWeave Film Edit', 'remote', 'write', "Applies edit ops to the film's timeline unit (reorder, move, trim, clip_window, clip_sound, transition, bed, beds, marks, marks_table, layers), guarded by the edit times read with wildweave_film_timeline, then validates; answers seq, the findings and the new hashes and edit times. A retry with the same editId and body is applied once. Refusals: stale_write (read again and decide), edit_refused (an op's code, or the engine's findings), edit_id_reused, record_reimport_required, not_found.", async (input, ctx) =>
+  define('wildweave_film_edit', 'WildWeave Film Edit', 'remote', 'write', `Applies edit ops to the film's timeline unit, guarded by the edit times read with wildweave_film_timeline, then validates; answers seq, the findings and the new hashes and edit times. The ops: reorder, move, trim, clip_window, clip_sound, transition (cut, crossfade, dip-to-black, wipe, dip-to-white, slide, circle-open, circle-close, wipe-diagonal), bed, beds, marks, marks_table, layers; and by a layer's stable id: template_layer (a title, credits or lower third from wildweave_film_templates), templates_table (the film's own templates), overlay (a picture of the scene over its visual), layer_update, layer_remove, layer_ids (send once before naming layers by id), keyframes (move, opacity, place, gain), bed_edit (one run of a bed), sting (a scene's marks with level, fades and envelope), asset_add (a staged studio file; its rights come from its row), asset_remove, visual, assets_rights (the changes line alone). A retry with the same editId and body is applied once. Refusals: stale_write (read again and decide), edit_refused (an op's code, such as template_unknown, layer_unknown, keyframe_outside_layer, asset_not_eligible, rights_field_protected, or the engine's findings), edit_id_reused, record_reimport_required, not_found, and the gate's: ${GATE_REFUSALS}; an edit refused for one op's plan names the op's index and writes nothing.`, async (input, ctx) =>
     fromStudio(await ctx.client.edit(input.filmId, { editId: input.editId, ifUpdatedAtMs: input.ifUpdatedAtMs, ops: input.ops, ...(input.dryRun === undefined ? {} : { dryRun: input.dryRun }) })),
   ),
   define('wildweave_film_edits', 'WildWeave Film Edit Log', 'remote', 'read', "Reads the film's edit log after a seq, oldest first: each row's seq, kind (edit, revert, import or ack), editId, time, who made it (the account, and the key when a key did), its ops and the hashes after it. Refusals: not_found, key_missing.", async (input, ctx) =>
@@ -184,10 +195,14 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
     };
     return ctx.engine('import', args, input.target === 'production' && ctx.key ? { WILDS_IMPORT_TOKEN: ctx.key } : {});
   }),
-  define('wildweave_film_export', 'WildWeave Film Export', 'remote', 'read', "Exports the film's sources (script, beat sheet, takes, timeline, sidecar) from the account: each text, its sha256 and baseSha256 (the file as the repository last held it). With writeTo it writes them into the film repository all or nothing (a rollback the file system refuses is named in details.unrestored and details.notRemoved, never claimed done), refusing a file that changed there since (source_changed, unless force), cuts and validates the set with the local engine when one is configured (export_invalid on an error), then acknowledges the written hashes to the studio; the texts are then left out of the answer. Refusals: source_changed, export_invalid, path_outside_repo, film_repo_missing, stale_write (the acknowledgement), export_refused, not_found.", async (input, ctx) =>
+  define('wildweave_film_export', 'WildWeave Film Export', 'remote', 'read', "Exports the film's sources (script, beat sheet, takes, timeline, sidecar) from the account: each text, its sha256 and baseSha256 (the file as the repository last held it), and fetch: the studio files (stock, catalog, generated) the timeline names that the repository does not hold. With writeTo it writes them into the film repository all or nothing (a rollback the file system refuses is named in details.unrestored and details.notRemoved, never claimed done): each listed file fetched through the files route, checked by its sha256 and written at its path with its stock.json beside it (a file the repository holds with that hash is never fetched again), refusing a file that changed there since (source_changed, unless force), cuts and validates the whole set with the local engine when one is configured (export_invalid on an error; an engine clone older than the shapes need answers engine_too_old with the floor first), then acknowledges the written sources' hashes to the studio; the texts are then left out of the answer, and fetched names the files written. Refusals: fetch_failed (a listed file the files route did not give, or whose bytes are not its hash; nothing written), engine_too_old, source_changed, export_invalid, path_outside_repo, film_repo_missing, stale_write (the acknowledgement), export_refused, not_found.", async (input, ctx) =>
     exportFilm(
       { filmId: input.filmId, writeTo: input.writeTo, force: input.force, paths: input.paths },
-      { client: ctx.client, filmRepo: ctx.filmRepo, ...(ctx.engineConfigured ? { engine: (subcommand: string, args: EngineArgs) => ctx.engine(subcommand, args) } : {}) },
+      {
+        client: ctx.client,
+        filmRepo: ctx.filmRepo,
+        ...(ctx.engineConfigured ? { engine: (subcommand: string, args: EngineArgs) => ctx.engine(subcommand, args), ...(ctx.engineDir ? { engineDir: ctx.engineDir } : {}) } : {}),
+      },
     ),
   ),
   define('wildweave_film_inspect', 'WildWeave Film Inspect', 'both', 'read', "Inspects the cut: with filmId, the engine's inspect over the cut the account's documents give; with cut, the local engine's inspect over a cut.json. Answers the scenes in order with their starts, lengths, lines, visuals and transitions, the chapters and the findings' counts. Refusals: cut_refused, arg_invalid, not_found, engine_missing.", async (input, ctx) => {
@@ -258,6 +273,14 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   define('wildweave_film_proposal_decide', 'WildWeave Film Proposal Decide', 'remote', 'write', "Records his verdict on a proposal (yes, no or note) with his words verbatim and where he said it; a note can still be decided, a yes or a no stands. The same decision sent again answers the one that stands. Refusals: already_decided, source_app_needs_session (a key sends source relayed), not_found, key_missing.", async (input, ctx) =>
     fromStudio(await ctx.client.decideProposal(input.filmId, input.proposalId, { verdict: input.verdict, words: input.words, source: input.source })),
   ),
+  define('wildweave_film_templates', 'WildWeave Film Templates', 'remote', 'read', `Reads the template registry: each look's id (the template a template_layer names), kind (title, credits, lower-third, transition), name, editable groups, defaults and parameter schema; the transition kinds the render box draws; and the account's saved templates where its plan authors them. With filmId it adds the film's own templates table (a layer names an entry as @<id>). Refusals: not_found, key_missing, key_rejected, scope_required, and the gate's: ${GATE_REFUSALS}.`, async (input, ctx) => {
+    const registry = await ctx.client.templates();
+    if (!registry.ok || input.filmId === undefined) return fromStudio(registry);
+    const film = await ctx.client.templates(input.filmId);
+    if (!film.ok) return film;
+    const own = isRec(film.result) ? film.result : {};
+    return { ok: true, result: { ...(isRec(registry.result) ? registry.result : {}), film: { filmId: input.filmId, ...own } }, requestId: film.requestId };
+  }),
 ];
 
 /** The definition of a tool by its name. */

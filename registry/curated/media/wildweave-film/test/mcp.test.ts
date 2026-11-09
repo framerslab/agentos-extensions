@@ -57,7 +57,7 @@ describe('the MCP server', () => {
     await studio.close();
   });
 
-  it('lists the 22 tools, each with its draft-07 input schema as the pack defines it', async () => {
+  it('lists the 23 tools, each with its draft-07 input schema as the pack defines it', async () => {
     const { client, close } = await inProcessClient();
     try {
       const tools = await allTools(client);

@@ -4,9 +4,22 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createToolContext, resolveConfig } from '../src/index.js';
 import { engineArgv, runEngine } from '../src/local.js';
-import { toolDefinition } from '../src/tools.js';
+import { TOOL_DEFINITIONS, toolDefinition, type ToolContext } from '../src/tools.js';
 import { DEFAULT_SOURCE_PATHS } from '../src/export.js';
-import { FAKE_KEY, FILM_ID, engineStub, fixture, sha256Hex, silentLog, startFakeStudio, type FakeStudio } from './helpers.js';
+import { TOOL_SCHEMAS } from '../src/schemas.js';
+import {
+  FAKE_KEY,
+  FILM_ID,
+  SAMPLE_ARGS,
+  engineStub,
+  fixture,
+  sha256Hex,
+  silentLog,
+  startFakeStudio,
+  startScriptedStudio,
+  type FakeStudio,
+  type ScriptedStudio,
+} from './helpers.js';
 
 let scratch: string;
 beforeEach(() => {
@@ -321,5 +334,122 @@ describe('the export written into the film repository', () => {
   it('returns the texts without writeTo, and writes nothing', async () => {
     const answer = await toolDefinition('wildweave_film_export').run({ filmId: FILM_ID }, await exportContext(repo()));
     expect(answer).toMatchObject({ ok: true, result: { recordFormat: 2, sources: { script: { text: texts().script } } } });
+  });
+});
+
+/** The registry as GET /templates answers it, and a film's own table as GET /films/:id/templates answers it: synthetic. */
+const REGISTRY = {
+  definitions: [
+    { id: 'title.serif', kind: 'title', name: 'Serif title', editable: ['type', 'colours', 'timing', 'content'], defaults: { lines: ['Title'] }, params: { type: 'object' }, thumbnailAtMs: 1200 },
+    { id: 'credits.roll', kind: 'credits', name: 'Roll', editable: ['colours', 'timing', 'content'], defaults: { linesPerSecond: 1 }, params: { type: 'object' }, thumbnailAtMs: 2000 },
+  ],
+  transitions: ['cut', 'crossfade', 'dip-to-black', 'wipe', 'dip-to-white'],
+  saved: [{ templateId: 'my-title', base: 'title.serif', params: { lines: ['Ours'] }, name: 'Our title', createdAtMs: 1761955300000, updatedAtMs: 1761955300000 }],
+};
+const FILM_TEMPLATES = { templates: { 'my-credits': { base: 'credits.roll', params: { linesPerSecond: 1 }, name: 'Our credits' } } };
+
+describe('the templates and the refusal envelope, through the tools over the studio', () => {
+  let scripted: ScriptedStudio;
+  const waits: number[] = [];
+  beforeEach(async () => {
+    scripted = await startScriptedStudio();
+    waits.length = 0;
+  });
+  afterEach(async () => {
+    await scripted.close();
+  });
+
+  async function remoteContext(): Promise<ToolContext> {
+    const config = await resolveConfig({ key: FAKE_KEY, baseUrl: scripted.baseUrl }, undefined, {});
+    return createToolContext(config, silentLog, { sleep: async (ms) => void waits.push(ms) });
+  }
+
+  const templatesTool = () => TOOL_DEFINITIONS.find((def) => def.name === 'wildweave_film_templates');
+
+  it("reads the registry's definitions, the transition kinds the box draws and the saved templates", async () => {
+    scripted.answer = (request) => (request.method === 'GET' && request.path === '/templates' ? { status: 200, body: REGISTRY } : { status: 404, body: { error: 'not_found' } });
+    const tool = templatesTool();
+    expect(tool).toBeDefined();
+    const answer = await tool!.run({}, await remoteContext());
+    expect(answer).toMatchObject({ ok: true, result: REGISTRY });
+    expect(scripted.requests.map((r) => `${r.method} ${r.path}`)).toEqual(['GET /templates']);
+    expect(scripted.requests[0]!.authorization).toBe(`Bearer ${FAKE_KEY}`);
+  });
+
+  it("with filmId, adds the film's own templates table beside the registry", async () => {
+    scripted.answer = (request) => {
+      if (request.method === 'GET' && request.path === '/templates') return { status: 200, body: REGISTRY };
+      if (request.method === 'GET' && request.path === `/films/${FILM_ID}/templates`) return { status: 200, body: FILM_TEMPLATES };
+      return { status: 404, body: { error: 'not_found' } };
+    };
+    const tool = templatesTool();
+    expect(tool).toBeDefined();
+    const answer = await tool!.run({ filmId: FILM_ID }, await remoteContext());
+    expect(answer).toMatchObject({ ok: true, result: { ...REGISTRY, film: { filmId: FILM_ID, ...FILM_TEMPLATES } } });
+    expect(scripted.requests.map((r) => `${r.method} ${r.path}`).sort()).toEqual(['GET /films/film-demo-0001/templates', 'GET /templates']);
+  });
+
+  /** The gate's one envelope (the Amendment's A.7), as a route answers it for each code a plan or a room decides. */
+  const ENVELOPE_CODES: Array<[string, number]> = [
+    ['plan_required', 403],
+    ['limit_reached', 402],
+    ['budget_exhausted', 402],
+    ['not_open', 503],
+    ['file_too_large', 413],
+  ];
+  const envelope = (code: string) => ({
+    error: code,
+    capability: 'edit.keyframes',
+    tier: 'plus',
+    requiredPlan: code === 'plan_required' ? 'pro' : null,
+    upgradeUrl: '/pricing',
+    ...(code === 'limit_reached' ? { limit: { meter: 'films', used: 3, max: 3, window: 'account' } } : {}),
+    checkoutPaused: false,
+    policyVersion: 2,
+    message: `The words for ${code}, as the policy module writes them.`,
+  });
+
+  it.each(ENVELOPE_CODES)('%s (HTTP %i) reaches the agent with the envelope\'s message and its fields, sent once, on a read and on a write', async (code, status) => {
+    const body = envelope(code);
+    scripted.answer = () => ({ status, body });
+    const ctx = await remoteContext();
+    for (const name of ['wildweave_film_timeline', 'wildweave_film_edit'] as const) {
+      scripted.requests.length = 0;
+      const answer = await toolDefinition(name).run(SAMPLE_ARGS[name], ctx);
+      const { error: _code, message, ...fields } = body;
+      expect(answer, name).toMatchObject({ ok: false, error: { code, status, message, refusal: fields } });
+      expect(scripted.requests, name).toHaveLength(1);
+    }
+    expect(waits).toEqual([]);
+  });
+
+  it.each([
+    ['key_rejected', 401, 'visitor'],
+    ['scope_required', 403, 'forge'],
+  ] as Array<[string, number, string]>)('%s (HTTP %i) with capability null keeps the envelope\'s fields, and the answer is the tool\'s output', async (code, status, tier) => {
+    const body = { error: code, capability: null, tier, requiredPlan: null, upgradeUrl: '/pricing', checkoutPaused: false, policyVersion: 1, message: `The words for ${code}.` };
+    scripted.answer = () => ({ status, body });
+    const answer = await toolDefinition('wildweave_film_timeline').run({ filmId: FILM_ID }, await remoteContext());
+    expect(answer).toMatchObject({ ok: false, error: { code, status, message: body.message, refusal: { capability: null, tier, requiredPlan: null, upgradeUrl: '/pricing', checkoutPaused: false, policyVersion: 1 } } });
+    expect(TOOL_SCHEMAS.wildweave_film_timeline.output.safeParse(answer).success).toBe(true);
+    expect(scripted.requests).toHaveLength(1);
+  });
+
+  it("reads a v1 { error: 'forge_required' } body as before: its code, the client's words, and no envelope", async () => {
+    scripted.answer = () => ({ status: 403, body: { error: 'forge_required' } });
+    const answer = await toolDefinition('wildweave_film_list').run({}, await remoteContext());
+    expect(answer).toMatchObject({ ok: false, error: { code: 'forge_required', status: 403 } });
+    expect((answer as { error: { message: string } }).error.message).toMatch(/Forge/);
+    expect((answer as unknown as { error: Record<string, unknown> }).error.refusal).toBeUndefined();
+    expect(scripted.requests).toHaveLength(1);
+  });
+
+  it('waits out rate_limited by its Retry-After, then answers', async () => {
+    scripted.answer = () =>
+      scripted.requests.length === 1 ? { status: 429, body: { ...envelope('rate_limited'), requiredPlan: null }, headers: { 'retry-after': '2' } } : { status: 200, body: fixture('timeline') };
+    const answer = await toolDefinition('wildweave_film_timeline').run({ filmId: FILM_ID }, await remoteContext());
+    expect(answer.ok).toBe(true);
+    expect(scripted.requests).toHaveLength(2);
+    expect(waits).toEqual([2000]);
   });
 });
