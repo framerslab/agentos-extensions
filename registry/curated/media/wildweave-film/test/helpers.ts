@@ -281,6 +281,8 @@ export interface ScriptedRequest {
 export interface ScriptedAnswer {
   status: number;
   body?: unknown;
+  /** Bytes sent as they are, in place of a JSON body: a file the files route serves. */
+  raw?: Buffer;
   headers?: Record<string, string>;
 }
 
@@ -315,6 +317,10 @@ export async function startScriptedStudio(): Promise<ScriptedStudio> {
       };
       state.requests.push(request);
       const out = state.answer(request);
+      if (out.raw !== undefined) {
+        res.writeHead(out.status, { 'content-type': 'application/octet-stream', 'content-length': String(out.raw.byteLength), ...(out.headers ?? {}) });
+        return void res.end(out.raw);
+      }
       res.writeHead(out.status, { 'content-type': 'application/json', ...(out.headers ?? {}) });
       res.end(out.body === undefined ? '' : JSON.stringify(out.body));
     });
