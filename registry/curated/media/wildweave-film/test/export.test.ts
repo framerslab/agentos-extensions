@@ -24,6 +24,8 @@ interface Staged {
   stockJson: string;
   /** The address the route names; the files route's own by default. */
   url?: string;
+  /** The size the route lists; the bytes' own by default. */
+  listedBytes?: number;
 }
 
 function staged(path: string, content: string): Staged {
@@ -39,7 +41,7 @@ function entryOf(file: Staged): Record<string, unknown> {
   return {
     path: file.path,
     sha256,
-    bytes: file.bytes.byteLength,
+    bytes: file.listedBytes ?? file.bytes.byteLength,
     url: file.url ?? `${FILES}/${sha256}?key=${encodeURIComponent(`wildweave-film/account-demo/studio/${sha256}`)}`,
     rights: { licence: 'Pexels License', licenceId: 'pexels-license', licenceUrl: 'https://www.pexels.com/license/', attribution: '', rights: 'licensed', changes: '', notice: '', sourceUrl: 'https://www.pexels.com/video/2041/', provider: 'pexels', sourceId: '2041' },
     stockJson: file.stockJson,
@@ -65,13 +67,13 @@ afterEach(async () => {
  * holds the old texts, so every source is written; `same`: it holds the exported texts already), the acknowledgement,
  * and the files route serving each staged file by its sha256 unless `refuse` names it.
  */
-function serve(files: Staged[], opts: { bases: 'old' | 'same'; refuse?: (file: Staged) => ScriptedAnswer | undefined }): void {
+function serve(files: Staged[], opts: { bases: 'old' | 'same'; refuse?: (file: Staged) => ScriptedAnswer | undefined; ack?: ScriptedAnswer }): void {
   studio.answer = (request: ScriptedRequest): ScriptedAnswer => {
     const path = request.path.split('?')[0]!;
     if (request.method === 'GET' && path === `/films/${FILM_ID}/timeline`) return { status: 200, body: fixture('timeline') };
     if (request.method === 'POST' && path === `/films/${FILM_ID}/export`) {
       const ack = (request.body as { ack?: Record<string, string> } | undefined)?.ack;
-      if (ack) return { status: 200, body: { seq: 9, sources: {}, rebound: false } };
+      if (ack) return opts.ack ?? { status: 200, body: { seq: 9, sources: {}, rebound: false } };
       const sources = Object.fromEntries(
         Object.entries(texts()).map(([name, text]) => {
           const sha256 = sha256Hex(text);
@@ -106,6 +108,7 @@ function engineClone(version: string, keyframes = true): string {
 }
 
 const PASSES = '{"ok":true,"result":{"ok":true,"findings":[]},"records":[]}\n';
+const REFUSES = '{"ok":true,"result":{"ok":false,"findings":[{"level":"error","code":"asset_missing","message":"x"}]},"records":[]}\n';
 
 async function context(root: string, engineDir: string, stub: ReturnType<typeof engineStub>) {
   const config = await resolveConfig({ key: FAKE_KEY, baseUrl: studio.baseUrl, filmRepo: root, engineDir }, undefined, {});
@@ -190,10 +193,13 @@ describe('the export fetches the studio files its timeline names into the film r
 
   it('refuses an address outside the files route, and sends the key nowhere else', async () => {
     const root = repo('same');
-    const clip = { ...staged('assets/stock/pexels/2041/harbour.mp4', 'harbour clip bytes'), url: 'https://elsewhere.example.invalid/files/x?key=k' };
+    const clip = { ...staged('assets/stock/pexels/2041/harbour.mp4', 'harbour clip bytes'), url: 'https://elsewhere.example.invalid/files/x?key=wildweave-film%2Faccount-7f3e%2Fx' };
     serve([clip], { bases: 'same' });
     const answer = await run(root, engineClone('0.1.0'), engineStub(() => ({ stdout: PASSES })));
     expect(answer).toMatchObject({ ok: false, error: { code: 'fetch_failed', details: { path: clip.path } } });
+    // The refusal names the address without its query: the storage key it carries is not repeated to the caller.
+    expect(JSON.stringify(answer)).not.toContain('account-7f3e');
+    expect(answer.error!.message).toContain('https://elsewhere.example.invalid/files/x');
     expect(fileRequests()).toEqual([]);
     expect(existsSync(join(root, 'assets'))).toBe(false);
   });
@@ -222,6 +228,95 @@ describe('the export fetches the studio files its timeline names into the film r
     expect(existsSync(join(root, 'assets'))).toBe(false);
     expect(acks()).toEqual([]);
     expect(leftovers(root)).toEqual([]);
+  });
+});
+
+describe('the fetched files when the repository moves under the export, or the route lists them oddly', () => {
+  it('keeps a save made to a fetched file while the engine checks the set, and names it, when the engine then refuses the set', async () => {
+    const root = repo('same');
+    const clip = staged('assets/stock/pexels/2041/harbour.mp4', 'harbour clip bytes');
+    serve([clip], { bases: 'same' });
+    const stub = engineStub((call) => {
+      // An editor saves over the fetched clip while the engine cuts the set.
+      if (call.argv[1] === 'cut') writeFileSync(join(root, clip.path), 'his own trim');
+      return { stdout: call.argv[1] === 'validate' ? REFUSES : PASSES };
+    });
+    const answer = await run(root, engineClone('0.1.0'), stub);
+    expect(answer).toMatchObject({ ok: false, error: { code: 'export_invalid', details: { kept: [{ fetch: clip.path, path: clip.path, diskSha256: sha256Hex('his own trim') }] } } });
+    expect(answer.error!.message).toContain(clip.path);
+    // His save stays; the record the export placed, which nobody touched, comes out again.
+    expect(readFileSync(join(root, clip.path), 'utf8')).toBe('his own trim');
+    expect(existsSync(join(root, stockOf(clip.path)))).toBe(false);
+    expect(acks()).toEqual([]);
+    expect(leftovers(root)).toEqual([]);
+  });
+
+  it('reports a fetched file as forced when force wrote over one that appeared at its path while it was fetched', async () => {
+    const root = repo('same');
+    const clip = staged('assets/stock/pexels/2041/harbour.mp4', 'harbour clip bytes');
+    serve([clip], {
+      bases: 'same',
+      refuse: () => {
+        mkdirSync(join(root, dirname(clip.path)), { recursive: true });
+        writeFileSync(join(root, clip.path), 'saved meanwhile');
+        return undefined;
+      },
+    });
+    const answer = await run(root, engineClone('0.1.0'), engineStub(() => ({ stdout: PASSES })), { force: true });
+    expect(answer).toMatchObject({ ok: true, result: { fetched: [{ path: clip.path, forced: true }] } });
+    expect(readFileSync(join(root, clip.path))).toEqual(clip.bytes);
+  });
+
+  it('writes the stock.json of a file the repository already holds with its hash when the record is missing, without fetching the file', async () => {
+    const root = repo('same');
+    const clip = staged('assets/stock/pexels/2041/harbour.mp4', 'harbour clip bytes');
+    mkdirSync(join(root, dirname(clip.path)), { recursive: true });
+    writeFileSync(join(root, clip.path), clip.bytes);
+    serve([clip], { bases: 'same' });
+    const answer = await run(root, engineClone('0.1.0'), engineStub(() => ({ stdout: PASSES })));
+    expect(answer).toMatchObject({ ok: true, result: { fetched: [], fetchUnchanged: [clip.path], stockWritten: [{ path: stockOf(clip.path), file: clip.path, forced: false }] } });
+    expect(readFileSync(join(root, stockOf(clip.path)), 'utf8')).toBe(clip.stockJson);
+    expect(fileRequests()).toEqual([]);
+  });
+
+  it('refuses a held file whose stock.json holds another record: source_changed names the record, and nothing is written', async () => {
+    const root = repo('old');
+    const clip = staged('assets/stock/pexels/2041/harbour.mp4', 'harbour clip bytes');
+    mkdirSync(join(root, dirname(clip.path)), { recursive: true });
+    writeFileSync(join(root, clip.path), clip.bytes);
+    writeFileSync(join(root, stockOf(clip.path)), '{"edited":"by the librarian"}\n');
+    serve([clip], { bases: 'old' });
+    const answer = await run(root, engineClone('0.1.0'), engineStub(() => ({ stdout: PASSES })));
+    expect(answer).toMatchObject({ ok: false, error: { code: 'source_changed', details: { conflicts: [{ fetch: stockOf(clip.path), path: stockOf(clip.path), diskSha256: sha256Hex('{"edited":"by the librarian"}\n') }] } } });
+    expect(readFileSync(join(root, stockOf(clip.path)), 'utf8')).toBe('{"edited":"by the librarian"}\n');
+    expect(readFileSync(join(root, DEFAULT_SOURCE_PATHS.timeline), 'utf8')).toBe('old timeline\n');
+    expect(fileRequests()).toEqual([]);
+  });
+
+  it('checks the listed size of every entry, a second entry sharing a file's hash included', async () => {
+    const root = repo('same');
+    const clip = staged('assets/stock/pexels/2041/harbour.mp4', 'harbour clip bytes');
+    const twin = { ...staged('assets/stock/pexels/2042/harbour.mp4', 'harbour clip bytes'), listedBytes: 999 };
+    serve([clip, twin], { bases: 'same' });
+    const answer = await run(root, engineClone('0.1.0'), engineStub(() => ({ stdout: PASSES })));
+    expect(answer).toMatchObject({ ok: false, error: { code: 'fetch_failed', details: { path: twin.path, code: 'size_mismatch' } } });
+    expect(fileRequests()).toHaveLength(1);
+    expect(existsSync(join(root, 'assets'))).toBe(false);
+    expect(leftovers(root)).toEqual([]);
+  });
+
+  it('names the fetched files beside the written sources when the acknowledgement is refused', async () => {
+    const root = repo('old');
+    const clip = staged('assets/stock/pexels/2041/harbour.mp4', 'harbour clip bytes');
+    serve([clip], { bases: 'old', ack: { status: 409, body: { error: 'stale_write', current: {} } } });
+    const answer = await run(root, engineClone('0.1.0'), engineStub(() => ({ stdout: PASSES })));
+    expect(answer).toMatchObject({
+      ok: false,
+      error: { code: 'stale_write', details: { fetched: [{ path: clip.path, sha256: sha256Hex(clip.bytes), stock: stockOf(clip.path) }] } },
+    });
+    expect((answer.error!.details!.written as unknown[]).length).toBe(Object.keys(DEFAULT_SOURCE_PATHS).length);
+    expect(answer.error!.message).toContain('fetched');
+    expect(readFileSync(join(root, clip.path))).toEqual(clip.bytes);
   });
 });
 
