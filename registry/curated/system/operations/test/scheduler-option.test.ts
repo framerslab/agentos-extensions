@@ -170,6 +170,43 @@ function beatRecordingDb(jobs: string[]): StorageAdapter {
   return db as unknown as StorageAdapter;
 }
 
+/**
+ * `db` that records every call made through it, and through its transactions, once `mark()` has run: a statement
+ * begun after the host was told it may close its database.
+ */
+function markingDb(db: StorageAdapter): { readonly db: StorageAdapter; readonly after: string[]; mark(): void } {
+  const after: string[] = [];
+  let marked = false;
+  const calls = new Set(['run', 'get', 'all', 'exec', 'batch']);
+  const wrap = (target: StorageAdapter): StorageAdapter =>
+    new Proxy(target, {
+      get(object, property) {
+        const value: unknown = Reflect.get(object, property, object);
+        if (typeof value !== 'function') return value;
+        if (property === 'transaction') {
+          return (work: (trx: StorageAdapter) => Promise<unknown>, options?: unknown) => {
+            if (marked) after.push('transaction');
+            return object.transaction((trx) => work(wrap(trx)), options as never);
+          };
+        }
+        if (calls.has(String(property))) {
+          return (...args: unknown[]) => {
+            if (marked) after.push(`${String(property)}: ${String(args[0]).trim().split(/\s+/).slice(0, 4).join(' ')}`);
+            return (value as (...parameters: unknown[]) => unknown).apply(object, args);
+          };
+        }
+        return (value as (...parameters: unknown[]) => unknown).bind(object);
+      },
+    });
+  return {
+    db: wrap(db),
+    after,
+    mark: () => {
+      marked = true;
+    },
+  };
+}
+
 /** An adapter that answers nothing and records the table of every insert, a beat as `beat:<job>`. */
 function insertRecordingDb(writes: string[]): StorageAdapter {
   const db = {
@@ -492,7 +529,10 @@ describeBackends('the scheduler option', (backend: Backend) => {
     // A run asked for once stop() has begun begins nothing.
     expect(await definition(fake, 'ops_outbox').run(runContext(NOON))).toEqual({ outcome: 'skipped', did: 'stopped' });
     expect(await definition(fake, 'ops_sweep').run(runContext(NOON))).toEqual({ outcome: 'skipped', did: 'stopped' });
-    expect(await definition(fake, 'ops_totals').run(runContext(NOON))).toEqual({ outcome: 'skipped', did: 'stopped' });
+    // The totals answer failed, not skipped: the scheduler counts any other outcome as serving the due times a run covers,
+    // and the rule is required, so a skipped run would leave their days unwritten for good.
+    expect(await definition(fake, 'ops_totals').run(runContext(NOON))).toEqual({ outcome: 'failed', did: 'stopped' });
+    expect(fixture.recorder.linesOf('ops_job')).toContainEqual({ level: 'warn', message: 'ops_job', fields: { job: 'totals', outcome: 'stopped' } });
   });
 
   it('a drain that rejects fails the run with its error once the drains behind it have run, and names the drain on one ops_job line with no word of the error', async () => {
@@ -626,6 +666,41 @@ describeBackends('the scheduler option', (backend: Backend) => {
       expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), covers))).toMatchObject({ outcome: 'ok' });
     }
     for (const day of [TODAY - 3 * DAY_MS, TODAY - 2 * DAY_MS, TODAY - DAY_MS]) expect(await daily(day, 'signups')).toHaveLength(3);
+  });
+
+  it("stop() while a catch-up waits on the product's excluded hook: once stop() has answered no statement begins and no second hook is called, and the run answers failed with one ops_job line, so the scheduler keeps the owed due times", async () => {
+    const fake = fakeScheduler();
+    const clock = fakeClock(NOON);
+    const marking = markingDb(db);
+    let calls = 0;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const inHook = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const excluded = async (): Promise<string[]> => {
+      calls += 1;
+      entered();
+      await gate;
+      return [];
+    };
+    const { ops, fixture } = build({ db: marking.db, clock, options: { scheduler: fake.scheduler, metrics: { plans: FIXTURE_PLANS, metrics: FIXTURE_METRICS, excluded } } });
+    ops.start({ shared: true });
+    const covers = [TODAY - 2 * DAY_MS + TOTALS_MINUTE, TODAY - DAY_MS + TOTALS_MINUTE, TODAY + TOTALS_MINUTE];
+    const run = definition(fake, 'ops_totals').run(runContext(clock.now(), covers));
+    await inHook;
+    // The host closes its database once stop() answers: from here nothing the package began may reach it.
+    await ops.stop();
+    marking.mark();
+    release();
+    expect(await run).toEqual({ outcome: 'failed', did: 'stopped' });
+    expect(marking.after).toEqual([]);
+    expect(calls).toBe(1);
+    expect(fixture.recorder.linesOf('ops_job')).toContainEqual({ level: 'warn', message: 'ops_job', fields: { job: 'totals', outcome: 'stopped' } });
+    for (const day of [TODAY - 3 * DAY_MS, TODAY - 2 * DAY_MS, TODAY - DAY_MS]) expect(await daily(day, 'signups')).toEqual([]);
   });
 
   it('a catch-up batch whose due times all lie before today fills from the first day it covers to yesterday, so a batch the scheduler cut leaves no day behind', async () => {
