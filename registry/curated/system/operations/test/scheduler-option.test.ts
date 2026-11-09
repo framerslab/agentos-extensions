@@ -531,6 +531,32 @@ describeBackends('the scheduler option', (backend: Backend) => {
     expect(await daily(TODAY - 3 * DAY_MS, 'signups')).toHaveLength(3);
   });
 
+  it("a catch-up fills under the totals lock: on PostgreSQL, while another process holds it (an old process's nightly run), the fill writes nothing and the run fails so the owed days are tried again; SQLite has no lock and fills", async () => {
+    const fake = fakeScheduler();
+    const clock = fakeClock(NOON);
+    const { ops, fixture } = build({ clock, options: { scheduler: fake.scheduler } });
+    ops.start({ shared: true });
+    const covers = [TODAY - 2 * DAY_MS + TOTALS_MINUTE, TODAY - DAY_MS + TOTALS_MINUTE, TODAY + TOTALS_MINUTE];
+    if (backend.name === 'postgres') {
+      const other = await backend.open();
+      try {
+        await other.transaction(async (trx) => {
+          await trx.get('SELECT pg_advisory_xact_lock(?)', [fixture.options.locks[2]]);
+          expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), covers))).toMatchObject({ outcome: 'failed' });
+        });
+      } finally {
+        await other.close();
+      }
+      for (const day of [TODAY - 3 * DAY_MS, TODAY - 2 * DAY_MS, TODAY - DAY_MS]) expect(await daily(day, 'signups')).toEqual([]);
+      expect(fixture.recorder.linesOf('ops_job')).toContainEqual({ level: 'warn', message: 'ops_job', fields: { job: 'totals', step: 'fill', outcome: 'skipped' } });
+      // Once the lock is free the try fills the owed days.
+      expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), covers))).toMatchObject({ outcome: 'ok' });
+    } else {
+      expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), covers))).toMatchObject({ outcome: 'ok' });
+    }
+    for (const day of [TODAY - 3 * DAY_MS, TODAY - 2 * DAY_MS, TODAY - DAY_MS]) expect(await daily(day, 'signups')).toHaveLength(3);
+  });
+
   it('a catch-up batch whose due times all lie before today fills from the first day it covers to yesterday, so a batch the scheduler cut leaves no day behind', async () => {
     const fake = fakeScheduler();
     const clock = fakeClock(NOON);
