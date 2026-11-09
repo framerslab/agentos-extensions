@@ -4,7 +4,6 @@ import { installReporter, reportError } from '../src/browser/index.js';
 import { runOpsCheck } from '../src/check/index.js';
 import { createErrors } from '../src/errors/index.js';
 import { createHealth } from '../src/health/index.js';
-import { createHandlers } from '../src/http/index.js';
 import { createOperations, migrateOperations } from '../src/index.js';
 import { OpsNotBuilt } from '../src/not-built.js';
 import { createRemote } from '../src/remote/index.js';
@@ -38,7 +37,6 @@ describe('the surfaces of the next minor release', () => {
     const entries: ReadonlyArray<readonly [string, () => unknown]> = [
       ['errors', createErrors],
       ['health', createHealth],
-      ['http', createHandlers],
       ['remote', createRemote],
       ['browser.installReporter', installReporter],
       ['browser.reportError', reportError],
