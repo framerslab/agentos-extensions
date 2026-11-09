@@ -32,6 +32,18 @@
                   "properties": {
                     "id": {
                       "type": "string",
+                      "enum": [
+                        "title.morph",
+                        "title.serif",
+                        "title.slate",
+                        "title.bookend",
+                        "credits.roll",
+                        "credits.cards",
+                        "credits.bookend",
+                        "lower-third.band",
+                        "lower-third.plate",
+                        "lower-third.cite"
+                      ],
                       "description": "The look's id, such as title.morph, the template a layer names"
                     },
                     "kind": {
@@ -80,7 +92,20 @@
                       "type": "string"
                     },
                     "base": {
-                      "type": "string"
+                      "type": "string",
+                      "enum": [
+                        "title.morph",
+                        "title.serif",
+                        "title.slate",
+                        "title.bookend",
+                        "credits.roll",
+                        "credits.cards",
+                        "credits.bookend",
+                        "lower-third.band",
+                        "lower-third.plate",
+                        "lower-third.cite"
+                      ],
+                      "description": "The registry look it is based on"
                     },
                     "params": {},
                     "name": {
@@ -179,7 +204,10 @@
                 "type": "object",
                 "properties": {
                   "capability": {
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "tier": {
                     "type": "string"

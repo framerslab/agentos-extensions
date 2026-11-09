@@ -251,6 +251,23 @@ describe('the fetched files when the repository moves under the export, or the r
     expect(leftovers(root)).toEqual([]);
   });
 
+  it.each([false, true])('refuses the set when a fetched file is saved over while the engine validates it and the engine passes (force %s): his save stays, the sources are put back, nothing is acknowledged', async (force) => {
+    const root = repo('old');
+    const clip = staged('assets/stock/pexels/2041/harbour.mp4', 'harbour clip bytes');
+    serve([clip], { bases: 'old' });
+    const stub = engineStub((call) => {
+      // An editor saves over the fetched clip after the engine read it; the engine still passes the set it read.
+      if (call.argv[1] === 'validate') writeFileSync(join(root, clip.path), 'his own trim');
+      return { stdout: PASSES };
+    });
+    const answer = await run(root, engineClone('0.1.0'), stub, force ? { force: true } : {});
+    expect(answer).toMatchObject({ ok: false, error: { code: 'source_changed', details: { conflicts: [{ fetch: clip.path, path: clip.path, diskSha256: sha256Hex('his own trim') }], kept: [{ fetch: clip.path, path: clip.path }] } } });
+    expect(readFileSync(join(root, clip.path), 'utf8')).toBe('his own trim');
+    expect(readFileSync(join(root, DEFAULT_SOURCE_PATHS.timeline), 'utf8')).toBe('old timeline\n');
+    expect(acks()).toEqual([]);
+    expect(leftovers(root)).toEqual([]);
+  });
+
   it('reports a fetched file as forced when force wrote over one that appeared at its path while it was fetched', async () => {
     const root = repo('same');
     const clip = staged('assets/stock/pexels/2041/harbour.mp4', 'harbour clip bytes');

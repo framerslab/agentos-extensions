@@ -179,6 +179,25 @@ const layerWindow = {
   durMs: z.number().int().gt(0).describe('Inside the scene (layer_past_end otherwise)'),
 };
 
+/**
+ * The template registry's ids: the ten seeded looks of studio v2 spec 4.7, in the registry's order (the titles, the
+ * credits, the lower thirds). The registry is frozen: a new look enters with a release of the studio and of this pack.
+ * They are the enum of a definition's id in wildweave_film_templates's output schema, so a film repository's checker
+ * reads them from dist/schemas/wildweave_film_templates.json.
+ */
+export const TEMPLATE_IDS = [
+  'title.morph',
+  'title.serif',
+  'title.slate',
+  'title.bookend',
+  'credits.roll',
+  'credits.cards',
+  'credits.bookend',
+  'lower-third.band',
+  'lower-third.plate',
+  'lower-third.cite',
+] as const;
+
 const templateRef = z
   .string()
   .min(1)
@@ -365,7 +384,7 @@ export const toolError = z.looseObject({
   details: z.record(z.string(), z.unknown()).optional().describe("The rest of the route's answer, such as stale_write's current edit times"),
   refusal: z
     .looseObject({
-      capability: z.string(),
+      capability: z.string().nullable(),
       tier: z.string(),
       requiredPlan: z.string().nullable(),
       upgradeUrl: z.string(),
@@ -408,7 +427,7 @@ export const STUDIO_REFUSAL_CODES = [
 export const StudioRefusal = z
   .looseObject({
     error: z.string().min(1).describe('The refusal code, such as plan_required or limit_reached'),
-    capability: z.string().optional().describe('The capability key refused, such as edit.keyframes'),
+    capability: z.string().nullable().optional().describe('The capability key refused, such as edit.keyframes; null when the refusal names none (key_rejected, rate_limited, scope_required)'),
     tier: z.string().optional().describe("The caller's identity: visitor, free, plus, pro or forge"),
     requiredPlan: z.string().nullable().optional().describe('The lowest plan that opens the capability (free, plus, pro or forge), or null'),
     upgradeUrl: z.string().optional().describe('Where the account holder upgrades, such as /pricing'),
@@ -841,7 +860,7 @@ export const TOOL_SCHEMAS = {
         definitions: z
           .array(
             answer({
-              id: z.string().describe('The look\'s id, such as title.morph, the template a layer names'),
+              id: z.enum(TEMPLATE_IDS).describe('The look\'s id, such as title.morph, the template a layer names'),
               kind: z.enum(['title', 'credits', 'lower-third', 'transition']),
               name: z.string(),
               editable: z.unknown().describe('The groups of the look a person edits: type, colours, motion, timing, content'),
@@ -853,7 +872,7 @@ export const TOOL_SCHEMAS = {
           .describe("The template registry's definitions"),
         transitions: z.array(z.string()).describe('The transition kinds the render box draws'),
         saved: z
-          .array(answer({ templateId: z.string(), base: z.string(), params: z.unknown(), name: z.string(), createdAtMs: z.number(), updatedAtMs: z.number() }))
+          .array(answer({ templateId: z.string(), base: z.enum(TEMPLATE_IDS).describe('The registry look it is based on'), params: z.unknown(), name: z.string(), createdAtMs: z.number(), updatedAtMs: z.number() }))
           .describe("The account's saved templates, where its plan authors them; none otherwise"),
         film: answer({ filmId: z.string(), templates: z.record(z.string(), z.unknown()) }).describe("With filmId: the film's own templates table"),
       }),
