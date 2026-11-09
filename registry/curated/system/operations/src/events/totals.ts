@@ -281,6 +281,12 @@ export interface FillOptions {
   readonly writer?: Pick<StorageAdapter, 'run'>;
   /** The excluded ids, read by the caller before the lock's transaction opened, so no transaction waits on the host's hook. */
   readonly excluded?: readonly string[];
+  /**
+   * The UTC day start the `days` are counted back from (that day itself not written), when the caller counted them:
+   * today's when the caller read its clock, so a fill that begins after UTC midnight, behind the host's hook or the lock,
+   * still writes the days the caller counted, never the day after them in place of the first. Today's by default.
+   */
+  readonly today?: number;
 }
 
 /**
@@ -292,7 +298,7 @@ export async function fillDailyTotalsOutcome(context: OpsContext, days: number, 
   if (typeof days !== 'number' || !Number.isSafeInteger(days) || days < 1 || days > FILL_DAYS_MAX) {
     throw new TypeError(`fill: days must be an integer from 1 to ${FILL_DAYS_MAX}`);
   }
-  const today = dayStartOf(context.now());
+  const today = dayStartOf(options.today ?? context.now());
   const first = today - days * DAY_MS;
   const excluded = options.excluded ?? (await readExcluded(context));
   if (context.closed) return { written: 0, failed: [] };

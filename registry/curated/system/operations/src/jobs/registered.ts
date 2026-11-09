@@ -62,11 +62,11 @@ function stoppedTotals(context: OpsContext): { readonly outcome: 'failed'; reado
  * covered due time (a run at 00:20 writes the day before) to yesterday. One for a run on its own
  * day; more for a catch-up, of several due times or of one missed the day before (a process back
  * between midnight and 00:20), and for a batch the scheduler cut short of today, so no owed day is
- * left behind; `fill` writes only the days and metrics with no row yet.
+ * left behind; `fill` writes only the days and metrics with no row yet. Counted back from `today`, the day start the
+ * fill is given too, so a fill that begins after UTC midnight writes these days.
  */
-function owedDays(context: OpsContext, covers: readonly number[]): number {
+function owedDays(today: number, covers: readonly number[]): number {
   if (covers.length === 0) return 1;
-  const today = dayStartOf(context.now());
   const first = dayStartOf(Math.min(...covers));
   return Math.min(FILL_DAYS_MAX, Math.max(1, Math.round((today - first) / DAY_MS) + 1));
 }
@@ -106,14 +106,17 @@ export function registeredJobs(context: OpsContext, parts: RegisteredParts): rea
         // the night's day run and fails the try, so the scheduler runs the owed days again rather than count them served.
         let filled = 0;
         let fillFailed = false;
-        const days = owedDays(context, run.covers);
+        // The window's day is read once and handed to the fill: the hook and the lock below can carry the fill past UTC midnight,
+        // and a fill counting back from the next day would write the day after the window in place of its first owed day.
+        const today = dayStartOf(context.now());
+        const days = owedDays(today, run.covers);
         if (days > 1) {
           try {
             // The excluded ids are read before the lock's transaction opens, as the nightly run reads them, so no transaction
             // waits on the host's hook, and a stop() begun while the hook runs begins no fill.
             const excluded = await readExcluded(context);
             if (context.stopped) return stoppedTotals(context);
-            const held = await withTryLock(context.db, context.options.locks[2], (writer) => parts.fill(days, writer === null ? { excluded } : { excluded, writer }));
+            const held = await withTryLock(context.db, context.options.locks[2], (writer) => parts.fill(days, writer === null ? { excluded, today } : { excluded, writer, today }));
             if (!held.taken) {
               fillFailed = true;
               ownLine(context.logger, 'warn', 'ops_job', { job: 'totals', step: 'fill', outcome: 'skipped' });
