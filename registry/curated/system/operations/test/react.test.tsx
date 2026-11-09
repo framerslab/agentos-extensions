@@ -809,6 +809,16 @@ describe('the client (D39)', () => {
     expect(await readJson({ fetch: refused, base: '' }, '/z')).toEqual({ error: 'not_found', status: 404 });
   });
 
+  it("readJson reads a refusal's word from a host's own error shape, { error: { kind } }, and its retryAt from either shape", async () => {
+    const answering = (body: unknown, status: number): typeof fetch => async () => new Response(JSON.stringify(body), { status });
+    expect(await readJson({ fetch: answering({ error: { kind: 'job_not_safe', message: 'Not safe.' } }, 409), base: '' }, '/a')).toEqual({ error: 'job_not_safe', status: 409 });
+    expect(await readJson({ fetch: answering({ error: 'hand_runs_used', status: 429, retryAt: 1_000 }, 429), base: '' }, '/b')).toEqual({ error: 'hand_runs_used', status: 429, retryAt: 1_000 });
+    expect(await readJson({ fetch: answering({ error: { kind: 'hand_runs_used', retryAt: 2_000 } }, 429), base: '' }, '/c')).toEqual({ error: 'hand_runs_used', status: 429, retryAt: 2_000 });
+    // An error object without a string kind, or a retryAt that is not a number, reads as before: failed, no retryAt.
+    expect(await readJson({ fetch: answering({ error: { kind: 7 } }, 500), base: '' }, '/d')).toEqual({ error: 'failed', status: 500 });
+    expect(await readJson({ fetch: answering({ error: 'busy', retryAt: 'soon' }, 503), base: '' }, '/e')).toEqual({ error: 'busy', status: 503 });
+  });
+
   it('SseParser reads every line ending the format allows, a CRLF pair split across two chunks included, so no frame is merged into another or lost at a chunk boundary', () => {
     const parser = new SseParser();
     // A CRLF pair split between two pushes: the carriage return that ends the first push already ends the line, and the line feed that opens the next is no second line ending.

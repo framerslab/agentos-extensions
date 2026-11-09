@@ -258,6 +258,125 @@ export interface OpsHttpAuth {
   staff(request: Request, permission: OpsPermission): Promise<OpsStaff | OpsRefusal>;
 }
 
+/** One row of the product's staff record for a job, newest first: a pause, a resume or a hand run, who asked, and the pause's note. */
+export interface OpsJobChange {
+  readonly at: number;
+  readonly kind: 'job_paused' | 'job_resumed' | 'job_run';
+  readonly staffAccountId: string;
+  /** The staff member's name as the product shows it, or null. */
+  readonly staffName: string | null;
+  readonly note: string | null;
+}
+
+/**
+ * The scheduler's reads and commands the jobs handlers call, declared here so the package builds
+ * without the scheduler's own declarations: `@framers/agentos-ext-triggers`'s `Scheduler` satisfies
+ * it. Its views (`JobView`, `RunView`, `MissedView`) pass through the handlers as they are; the
+ * list's counts read a view's `state` and `missed24h`, and a command's answer is a refusal when it
+ * carries `refused`.
+ */
+export interface OpsJobsScheduler {
+  list(filter?: { readonly state?: string; readonly process?: string; readonly cursor?: string }): Promise<{ readonly jobs: readonly unknown[]; readonly cursor: string | null }>;
+  get(name: string): Promise<unknown | null>;
+  runs(name: string, options?: { readonly limit?: number }): Promise<readonly unknown[]>;
+  missed(name: string, options?: { readonly sinceMs?: number }): Promise<readonly unknown[]>;
+  /** Answers the job's view or a refusal; throws a `RangeError` for a note past the scheduler's bound. */
+  pause(name: string, actor: { readonly accountId: string }, note?: string): Promise<unknown>;
+  /** Answers the job's view or a refusal. */
+  resume(name: string, actor: { readonly accountId: string }): Promise<unknown>;
+  /** Answers `{ queued: true }` or a refusal; the handler reads the job after a queue and answers the view. */
+  runNow(name: string, actor: { readonly accountId: string }): Promise<{ readonly queued: true } | { readonly refused: string; readonly status: number; readonly retryAt?: number }>;
+}
+
+/**
+ * A refusal as the jobs handlers answer it: the host's staff check's (`forbidden`, with its
+ * `retryAfter` when it gave one), the scheduler's (`not_found`, `not_safe`, `in_flight`,
+ * `hand_runs_used` with `retryAt`, `reports_only`, `already`), or the handlers' own (`not_found`
+ * for a name outside the scheduler's rule, `bad_request` for a body or a filter outside the rule).
+ */
+export interface OpsJobsRefusal {
+  readonly refused: string;
+  readonly status: number;
+  /** When the next hand run is allowed, with `hand_runs_used`. */
+  readonly retryAt?: number;
+  /** The host's own wait, when its staff check gave one. */
+  readonly retryAfter?: number;
+}
+
+/** What `./http`'s `createHandlers` takes: the host's staff check, the operations' alerts, the scheduler of record and the product's staff record. */
+export interface OpsHandlersOptions {
+  readonly auth: OpsHttpAuth;
+  readonly operations: Pick<Operations, 'alerts'>;
+  readonly scheduler: OpsJobsScheduler;
+  /** The product's staff record for one job, newest first, `limit` rows at most. */
+  changes(name: string, limit: number): Promise<readonly OpsJobChange[]>;
+  /**
+   * How a refusal is answered, for a product whose routes answer an error shape of their own (an
+   * `{ error: { kind, message } }` with its own kinds and statuses, which its contract tests check).
+   * The default answers `{ error: <word>, status }` (with `retryAt` for `hand_runs_used` and
+   * `retryAfter` when the staff check gave one) with the refusal's status. Either answer carries
+   * `cache-control: no-store`: the handlers write it into the host's `Response`, in place of any directive it carries.
+   */
+  refusal?(refusal: OpsJobsRefusal): Response;
+}
+
+/** One route's handler: the request and the route's parameters (the job's `name` under `/jobs/:name`). */
+export type OpsHandler = (request: Request, params: { readonly name?: string }) => Promise<Response>;
+
+/**
+ * The jobs routes a product mounts under its own prefix (`/api/v1/admin/jobs`): `list` (`GET /jobs`)
+ * and `get` (`GET /jobs/:name`), the four full lists (`GET /jobs/:name/runs`, `/missed`, `/alerts`,
+ * `/changes`) under `ops.read`, and the three commands (`POST /jobs/:name/pause`, `/resume`, `/run`)
+ * under `ops.manage`.
+ */
+export interface OpsJobsHandlers {
+  readonly list: OpsHandler;
+  readonly get: OpsHandler;
+  readonly runs: OpsHandler;
+  readonly missed: OpsHandler;
+  readonly alerts: OpsHandler;
+  readonly changes: OpsHandler;
+  readonly pause: OpsHandler;
+  readonly resume: OpsHandler;
+  readonly run: OpsHandler;
+}
+
+/** What `createHandlers` answers: one handler a route, by route family. */
+export interface OpsHandlers {
+  readonly jobs: OpsJobsHandlers;
+}
+
+/**
+ * The jobs list's counts, over every job on the instance whatever the list's filter: the jobs, the
+ * failed, stalled and paused ones, the ones needing attention (failed, stalled or missed, as the
+ * scheduler's `attention` filter reads), and the due times every job missed in the last 24 hours.
+ */
+export interface OpsJobCounts {
+  readonly total: number;
+  readonly failed: number;
+  readonly stalled: number;
+  readonly missed24h: number;
+  readonly paused: number;
+  readonly attention: number;
+}
+
+/** What `GET /jobs` answers: one page of the scheduler's views, the next page's cursor, and the counts. */
+export interface OpsJobsPage<Job = unknown> {
+  readonly jobs: readonly Job[];
+  readonly cursor: string | null;
+  readonly counts: OpsJobCounts;
+}
+
+/** What `GET /jobs/:name` answers: the job, its 20 newest runs, its missed runs of 7 days, 10 alerts, 10 changes, and how many of each the full lists keep. */
+export interface OpsJobPage<Job = unknown, Run = unknown, Missed = unknown> {
+  readonly job: Job;
+  readonly runs: readonly Run[];
+  readonly missed: readonly Missed[];
+  readonly alerts: readonly OpsAlertRow[];
+  readonly changes: readonly OpsJobChange[];
+  readonly kept: { readonly runs: number; readonly alerts: number; readonly changes: number };
+}
+
 /** What `migrateOperations` takes besides the adapter (D3). */
 export interface OpsMigrateOptions {
   readonly prefix?: string;
