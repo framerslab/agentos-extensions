@@ -21,12 +21,13 @@ export const OUTBOX_JOB = 'ops_outbox';
 /** The shared jobs' names, in the order they are registered. */
 export const SHARED_JOBS: readonly string[] = [SWEEP_JOB, TOTALS_JOB, OUTBOX_JOB];
 
-/** What one minute drain came to: the mails sent, the bell rows tried, the Discord rows delivered and the lifecycle rows delivered. */
+/** What one minute drain came to: the mails sent, the bell rows tried, the Discord rows delivered, the lifecycle rows delivered, and whether `stop()` began before every drain had begun. */
 export interface DrainCounts {
   readonly mail: number;
   readonly bell: number;
   readonly discord: number;
   readonly lifecycle: number;
+  readonly stopped: boolean;
 }
 
 /** The jobs the definitions run, and the drain and the fill they call. */
@@ -36,7 +37,8 @@ export interface RegisteredParts {
   /**
    * The minute drain: the ticket mail and bell outboxes, the Discord outbox and the lifecycle
    * outbox, in that order, each run whatever the one before it did. Rejects with the first drain's
-   * error once every drain has run, each failed drain named on one `ops_job` line.
+   * error once every drain has run, each failed drain named on one `ops_job` line. Once `stop()` has
+   * begun no further drain begins, and the counts say so.
    */
   drain(nowMs: number): Promise<DrainCounts>;
   fill(days: number): Promise<number>;
@@ -108,7 +110,8 @@ export function registeredJobs(context: OpsContext, parts: RegisteredParts): rea
       async run(run) {
         if (context.stopped) return { outcome: 'skipped', did: 'stopped' };
         const counts = await parts.drain(run.now);
-        return { outcome: 'ok', did: `mail ${counts.mail}, bell ${counts.bell}, discord ${counts.discord}, lifecycle ${counts.lifecycle}` };
+        // A drain cut short by stop() answers skipped: the drains behind it begin at the next process's run.
+        return { outcome: counts.stopped ? 'skipped' : 'ok', did: `mail ${counts.mail}, bell ${counts.bell}, discord ${counts.discord}, lifecycle ${counts.lifecycle}` };
       },
     },
   ];

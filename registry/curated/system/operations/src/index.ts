@@ -166,7 +166,9 @@ const LATE = Symbol('late');
  * days it covers first) and `ops_outbox`, the minute drain of the four outboxes (`skip`); every
  * one safe to run twice, the sweep's and the totals' try-locks kept inside their bodies, so an old
  * process's timers and a new process's registered job never run one job at once. Their beats are
- * written from the scheduler's `onRun` at each settled run's end, one beat a run. The product calls
+ * written from the scheduler's `onRun` at each settled run's end, one beat a run. `stop()` waits for
+ * a running minute drain within its 3 seconds, and once it has begun no drain behind the running one
+ * begins and no registered job's body begins anything. The product calls
  * `start({ shared: true })` before `scheduler.start()`, since `register` throws once it has started.
  * Without a scheduler, a product that wants the mails, the alerts and the lifecycle rows delivered
  * calls the four drains from a minute timer of its own.
@@ -230,16 +232,27 @@ export function createOperations(options: OpsOptions): Operations {
   // The Discord outbox, under its own name: `alerts` above is the new request's team alert sender, which the tickets module takes.
   const discordOutbox = createAlerts(context);
 
+  /** The minute drain running now, which `stop()` waits for within its deadline, as it waits for a flush. */
+  let draining: Promise<unknown> | null = null;
+  context.flushers.add(() => (draining === null ? Promise.resolve() : draining.then(() => undefined, () => undefined)));
+
   /**
    * The minute drain the scheduler runs as `ops_outbox`: the ticket mail and bell outboxes, the
    * Discord outbox, the lifecycle outbox, each run whatever the one before it did, so a mail outbox
    * the database refuses never holds back the staff alerts. A drain that rejects is named on one
    * `ops_job` line, never with its error's words, and the run rejects with the first error once
-   * every drain has run, so the scheduler counts the try failed.
+   * every drain has run, so the scheduler counts the try failed. `stop()` waits for it within its
+   * deadline, and once `stop()` has begun no drain behind the running one begins (one `ops_job`
+   * line counts them), since the host closes its database once `stop()` answers (D47).
    */
   async function drainOutboxes(nowMs: number): Promise<DrainCounts> {
     const failures: unknown[] = [];
+    let passedOver = 0;
     const step = async (word: string, work: () => Promise<number>): Promise<number> => {
+      if (context.stopped) {
+        passedOver += 1;
+        return 0;
+      }
       try {
         return await work();
       } catch (error) {
@@ -248,12 +261,21 @@ export function createOperations(options: OpsOptions): Operations {
         return 0;
       }
     };
-    const mail = await step('mail', async () => (tickets === null ? 0 : (await tickets.sendDue(nowMs)).sent));
-    const bell = await step('bell', async () => (tickets === null ? 0 : await tickets.notifyDue(nowMs)));
-    const discord = await step('discord', async () => (await discordOutbox.sendDue(nowMs)).sent);
-    const lifecycle = await step('lifecycle', async () => (await events.drainLifecycle()).delivered);
-    if (failures.length > 0) throw failures[0];
-    return { mail, bell, discord, lifecycle };
+    const run = (async (): Promise<DrainCounts> => {
+      const mail = await step('mail', async () => (tickets === null ? 0 : (await tickets.sendDue(nowMs)).sent));
+      const bell = await step('bell', async () => (tickets === null ? 0 : await tickets.notifyDue(nowMs)));
+      const discord = await step('discord', async () => (await discordOutbox.sendDue(nowMs)).sent);
+      const lifecycle = await step('lifecycle', async () => (await events.drainLifecycle()).delivered);
+      if (passedOver > 0) ownLine(context.logger, 'warn', 'ops_job', { job: 'outbox', outcome: 'stopped', count: passedOver });
+      if (failures.length > 0) throw failures[0];
+      return { mail, bell, discord, lifecycle, stopped: passedOver > 0 };
+    })();
+    draining = run;
+    try {
+      return await run;
+    } finally {
+      if (draining === run) draining = null;
+    }
   }
 
   /** Whether the shared jobs are registered on the scheduler: once, at the first `start({ shared: true })`. */
