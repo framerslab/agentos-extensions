@@ -2,8 +2,9 @@
  * @fileoverview The Discord outbox (`<prefix>_discord_outbox`, migration 0004): the alerts a product's jobs post to its staff
  * channels through the host's `discord` hook. `post` writes one pending row a fact under a unique `dedupKey`, its lines joined with
  * line feeds into `content`, and refuses a line, key or source that carries a run of 32 hexadecimal characters (the package's own
- * ids and most products'), a UUID or an address, so no person's id or address reaches Discord through it; a key holds no control
- * character, a tab and line breaks included. A channel holds 50 pending rows: the post past them drops the oldest whose hook is not
+ * ids and most products'), a UUID or an address, a backstop for the shapes it can see: keeping a person's name, a short account id
+ * or a person's words out of an alert is the product's, before it posts. A key holds no control character, a tab and line breaks
+ * included. A channel holds 50 pending rows: the post past them drops the oldest whose hook is not
  * running, counted on one `ops_discord` line, and each drain drops what still stands past the bound.
  *
  * `sendDue(now)` takes each due row in turn and claims it for the whole of its try. On PostgreSQL the claim is one transaction a
