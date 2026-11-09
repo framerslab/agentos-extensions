@@ -22,17 +22,15 @@ const SHOWN = { runs: 20, alerts: 10, changes: 10 } as const;
 const KEPT = { runs: 100, alerts: 50, changes: 50 } as const;
 /** The most bytes a pause's body may hold: a 200-character note fits written every character as an escape, and a body past it is refused unread. */
 const BODY_MAX = 4_096;
-/** The most list pages the counts read: 200 jobs a page, so 20,000 jobs. */
-const COUNT_PAGES_MAX = 100;
 
 /** A JSON answer that is never cached. */
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 }
 
-/** `response` with `cache-control: no-store`, added when it has none; a response whose headers cannot change is copied. */
+/** `response` with `cache-control: no-store`, in place of any it carries; a response whose headers cannot change is copied. */
 function noStore(response: Response): Response {
-  if (response.headers.has('cache-control')) return response;
+  if (response.headers.get('cache-control') === 'no-store') return response;
   try {
     response.headers.set('cache-control', 'no-store');
     return response;
@@ -159,14 +157,23 @@ export function createJobsHandlers(options: OpsHandlersOptions): OpsJobsHandlers
     return typeof name === 'string' && NAME.test(name) ? name : null;
   };
 
-  /** The counts over every job on the instance: `first` is the unfiltered first page when the request read it already. */
+  /**
+   * The counts over every job on the instance, read page by page to the last: `first` is the unfiltered first page when the
+   * request read it already. On one page (200 jobs) the counts are one read's; past it a job is counted once by its name,
+   * so one the scheduler re-sorts onto a later page between two reads is not counted twice.
+   */
   const countAll = async (first: { readonly jobs: readonly unknown[]; readonly cursor: string | null } | null): Promise<OpsJobCounts> => {
     const counts = { total: 0, failed: 0, stalled: 0, missed24h: 0, paused: 0, attention: 0 };
     let page = first ?? (await scheduler.list({}));
-    const seen = new Set<string>();
-    for (let pages = 1; ; pages += 1) {
+    const cursors = new Set<string>();
+    const names = new Set<string>();
+    for (;;) {
       for (const job of page.jobs) {
-        const { state, missed24h } = (job ?? {}) as { readonly state?: unknown; readonly missed24h?: unknown };
+        const { name, state, missed24h } = (job ?? {}) as { readonly name?: unknown; readonly state?: unknown; readonly missed24h?: unknown };
+        if (typeof name === 'string') {
+          if (names.has(name)) continue;
+          names.add(name);
+        }
         counts.total += 1;
         if (state === 'failed') counts.failed += 1;
         if (state === 'stalled') counts.stalled += 1;
@@ -175,9 +182,9 @@ export function createJobsHandlers(options: OpsHandlersOptions): OpsJobsHandlers
         if (typeof missed24h === 'number' && Number.isFinite(missed24h) && missed24h > 0) counts.missed24h += missed24h;
       }
       const next = page.cursor;
-      // A cursor seen before, or past the page bound, ends the count, so a scheduler whose pages never end cannot hold the answer.
-      if (next === null || seen.has(next) || pages >= COUNT_PAGES_MAX) return counts;
-      seen.add(next);
+      // A cursor seen before, or one after an empty page, ends the count, so a scheduler whose pages go round cannot hold the answer.
+      if (next === null || cursors.has(next) || page.jobs.length === 0) return counts;
+      cursors.add(next);
       page = await scheduler.list({ cursor: next });
     }
   };
@@ -194,13 +201,17 @@ export function createJobsHandlers(options: OpsHandlersOptions): OpsJobsHandlers
       return json(await read(name));
     };
 
-  /** A command's answer: a refusal with its word and status, else the job's view; a `RangeError` from the scheduler is `bad_request`. */
-  const commandAnswer = async (run: () => Promise<unknown>): Promise<Response> => {
+  /**
+   * A command's answer: a refusal with its word and status, else the job's view. `noteBound` says the command carried a note,
+   * whose bound is the one `RangeError` the scheduler throws for it: that one is `bad_request`; any other throw, a `RangeError`
+   * from the product's audit hook or the database among them, is the host's to answer.
+   */
+  const commandAnswer = async (run: () => Promise<unknown>, noteBound = false): Promise<Response> => {
     let answer: unknown;
     try {
       answer = await run();
     } catch (error) {
-      if (error instanceof RangeError) return badRequest();
+      if (noteBound && error instanceof RangeError) return badRequest();
       throw error;
     }
     if (isRefusal(answer)) return refused(answer);
@@ -256,7 +267,7 @@ export function createJobsHandlers(options: OpsHandlersOptions): OpsJobsHandlers
       const read = await noteOf(request);
       if (read === 'no_zod') return json({ error: 'missing_peer', status: 500, peer: 'zod' }, 500);
       if (read === 'bad_request') return badRequest();
-      return commandAnswer(() => scheduler.pause(name, { accountId: staff.accountId }, read.note));
+      return commandAnswer(() => scheduler.pause(name, { accountId: staff.accountId }, read.note), read.note !== undefined);
     },
 
     async resume(request, params) {

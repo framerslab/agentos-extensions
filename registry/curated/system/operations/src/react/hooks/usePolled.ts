@@ -1,7 +1,8 @@
 /**
  * @fileoverview The polled read the jobs hooks share: one JSON read of a path under the client's
  * base, read again every 30 seconds while the page is visible, at once when the page shows again
- * or the connection returns, and never while the browser says it is offline. It keeps what it last
+ * or the connection returns, and never while the browser says it is offline. A timed read never
+ * starts while one runs, and a read running 45 seconds is ended as `timeout`. It keeps what it last
  * read through a failed read and says when that was (`updatedAt`), whether a read runs
  * (`updating`), whether the connection is away (`offline`), the refusal's word (`error`), whether a
  * read was answered 401 (`signedOut`), and, after 15 minutes of reads without a success, `stale`,
@@ -16,6 +17,8 @@ import { joinPath, pageVisible, readJson, type OpsClient } from '../client.js';
 export const JOBS_POLL_MS = 30_000;
 /** How long the reads may fail before the timed reads stop. */
 export const JOBS_GIVE_UP_MS = 15 * 60_000;
+/** How long one read may run: past it the read is ended and fails as `timeout`. Longer than the interval, so a slow read still lands. */
+export const JOBS_READ_TIMEOUT_MS = 45_000;
 
 /** What a polled read says about itself, for the page's time line. */
 export interface OpsPolledState {
@@ -25,7 +28,7 @@ export interface OpsPolledState {
   readonly updating: boolean;
   /** Whether the browser says the connection is away, or the last read got no answer. */
   readonly offline: boolean;
-  /** The last read's refusal word (`failed` when no answer came), or null after a success or a 401. */
+  /** The last read's refusal word (`failed` when no answer came, `timeout` when it ran 45 seconds), or null after a success or a 401. */
   readonly error: string | null;
   /** Whether the last read was answered 401: the sign-in ended. */
   readonly signedOut: boolean;
@@ -46,8 +49,10 @@ export interface Polled<T> extends OpsPolledState {
   refresh(): Promise<void>;
   /**
    * Replaces the data with `update(data)`, as a command's answer does: a read still in flight is
-   * dropped, so it never puts back what the command replaced. Answers false and changes nothing
-   * once the client or the address changed, after the unmount, or before the first read.
+   * ended and dropped, so it never puts back what the command replaced. Before the first read has
+   * landed there is nothing to replace: the read in flight is dropped all the same and the page is
+   * read again, and it answers false. Answers false and changes nothing once the client or the
+   * address changed, or after the unmount.
    */
   replace(update: (data: T) => T): boolean;
 }
@@ -112,6 +117,16 @@ export function usePolled<T>(client: OpsClient, path: string | null): Polled<T> 
   // When the reads began failing since the last success, and whether they gave up: the address's own, reset when it changes.
   const failingSince = useRef<number | null>(null);
   const gaveUp = useRef(false);
+  // The read in flight: its generation, the controller that ends it and its deadline's timer.
+  const inFlight = useRef<{ readonly mine: number; readonly controller: AbortController; readonly timer: ReturnType<typeof setTimeout> } | null>(null);
+  /** Ends the read in flight, if any: its answer, when it comes, is dropped by its generation. */
+  const endFlight = useCallback((): void => {
+    const flight = inFlight.current;
+    if (flight === null) return;
+    inFlight.current = null;
+    clearTimeout(flight.timer);
+    flight.controller.abort();
+  }, []);
 
   const isActive = useCallback((): boolean => {
     const now = active.current;
@@ -121,10 +136,21 @@ export function usePolled<T>(client: OpsClient, path: string | null): Polled<T> 
   const refresh = useCallback(async (): Promise<void> => {
     // A read for a client or an address the page has left, or after the unmount, does nothing.
     if (url === null || !isActive()) return;
+    // A read asked for while one runs ends that one: two reads of one page never run at once.
+    endFlight();
     generation.current += 1;
     const mine = generation.current;
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, JOBS_READ_TIMEOUT_MS);
+    inFlight.current = { mine, controller, timer };
     setState((current) => (belongs(current, url, fetchImpl, session) ? { ...current, updating: true } : { ...fresh<T>(url, fetchImpl, session), updating: true }));
-    const answer = await readJson<T>({ fetch: fetchImpl, base }, url);
+    const answer = await readJson<T>({ fetch: fetchImpl, base }, url, { signal: controller.signal });
+    clearTimeout(timer);
+    if (inFlight.current?.mine === mine) inFlight.current = null;
     if (mine !== generation.current) return;
     const at = Date.now();
     if ('data' in answer) {
@@ -140,30 +166,35 @@ export function usePolled<T>(client: OpsClient, path: string | null): Polled<T> 
     setState((current) => ({
       ...(belongs(current, url, fetchImpl, session) ? current : fresh<T>(url, fetchImpl, session)),
       updating: false,
-      offline: answer.status === 0 || browserOffline(),
-      error: answer.status === 401 ? null : answer.error,
-      signedOut: answer.status === 401,
+      offline: (answer.status === 0 && !timedOut) || browserOffline(),
+      error: timedOut ? 'timeout' : answer.status === 401 ? null : answer.error,
+      signedOut: !timedOut && answer.status === 401,
       stale,
     }));
-  }, [fetchImpl, base, session, url, isActive]);
+  }, [fetchImpl, base, session, url, isActive, endFlight]);
 
   useEffect(() => {
     if (url === null) return undefined;
     failingSince.current = null;
     gaveUp.current = false;
     const markOffline = (): void => {
-      setState((current) => (belongs(current, url, fetchImpl, session) && !current.offline ? { ...current, offline: true } : current));
+      // With no read in flight nothing is being read: a page mounted offline reads as offline, not as updating.
+      const reading = inFlight.current !== null;
+      setState((current) => (belongs(current, url, fetchImpl, session) && (!current.offline || (current.updating && !reading)) ? { ...current, offline: true, updating: current.updating && reading } : current));
     };
-    // A timed read: none once the reads gave up, none behind a hidden page, and none while the browser says it is offline.
+    // A timed read: none once the reads gave up, none behind a hidden page, none while the browser says it is offline, and none while a read runs.
     const tick = (): void => {
       if (gaveUp.current || !pageVisible()) return;
       if (browserOffline()) {
         markOffline();
         return;
       }
+      if (inFlight.current !== null) return;
       void refresh();
     };
-    void refresh();
+    // The first read, unless the browser says it is offline: the connection's return reads at once.
+    if (browserOffline()) markOffline();
+    else void refresh();
     const timer = setInterval(tick, JOBS_POLL_MS);
     const doc = listenable((globalThis as { document?: unknown }).document);
     const win = listenable((globalThis as { window?: unknown }).window);
@@ -179,21 +210,28 @@ export function usePolled<T>(client: OpsClient, path: string | null): Polled<T> 
       doc?.removeEventListener('visibilitychange', onVisibility);
       win?.removeEventListener('online', tick);
       win?.removeEventListener('offline', markOffline);
-      // An answer that arrives after the client or the address changed, or the page left, is dropped.
+      // An answer that arrives after the client or the address changed, or the page left, is dropped, and its read ended.
+      endFlight();
       generation.current += 1;
     };
-  }, [refresh, url, fetchImpl, session]);
+  }, [refresh, endFlight, url, fetchImpl, session]);
 
   const replace = useCallback(
     (update: (data: T) => T): boolean => {
       if (!isActive()) return false;
       const current = latest.current;
-      if (!belongs(current, url, fetchImpl, session) || current.data === null) return false;
+      if (!belongs(current, url, fetchImpl, session)) return false;
+      endFlight();
       generation.current += 1;
+      if (current.data === null) {
+        // The first read has not landed: what it would show is older than the command's answer, so the page is read again.
+        void refresh();
+        return false;
+      }
       setState((now) => (belongs(now, url, fetchImpl, session) && now.data !== null ? { ...now, data: update(now.data), updating: false } : now));
       return true;
     },
-    [isActive, url, fetchImpl, session],
+    [isActive, endFlight, refresh, url, fetchImpl, session],
   );
 
   // Under a client or an address the state does not belong to (the effect that reads it has not run yet), the page sees a fresh read.

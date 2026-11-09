@@ -315,7 +315,7 @@ export interface OpsHandlersOptions {
    * `{ error: { kind, message } }` with its own kinds and statuses, which its contract tests check).
    * The default answers `{ error: <word>, status }` (with `retryAt` for `hand_runs_used` and
    * `retryAfter` when the staff check gave one) with the refusal's status. Either answer carries
-   * `cache-control: no-store`: the handlers add it to the host's `Response` when it has none.
+   * `cache-control: no-store`: the handlers write it into the host's `Response`, in place of any directive it carries.
    */
   refusal?(refusal: OpsJobsRefusal): Response;
 }

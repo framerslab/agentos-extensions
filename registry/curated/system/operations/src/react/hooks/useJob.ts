@@ -3,7 +3,9 @@
  * three commands, `pause(note?)`, `resume()` and `runNow()`, each a `POST <base>/<name>/<command>`.
  * A command replaces the page's job with the job its answer carries, and only then: nothing on the
  * page changes before the server answers, so a command that failed never reads as done, and a read
- * that began before the answer never puts back the job it replaced.
+ * that began before the answer never puts back the job it replaced. One command a job runs at a
+ * time: a second while the first awaits its answer is refused as `busy` without a request, so two
+ * answers never arrive out of order.
  */
 import { useCallback, useRef, useState } from 'react';
 import type { OpsJobPage } from '../../contract.js';
@@ -13,14 +15,17 @@ import { usePolled, type OpsPolledState } from './usePolled.js';
 /** The three commands, by the last segment of their path. */
 export type OpsJobCommand = 'pause' | 'resume' | 'run';
 
-/** A command's answer: the job as the server answered it, or the refusal's word with its status (and `retryAt` for `hand_runs_used`). */
+/**
+ * A command's answer: the job as the server answered it, or the refusal's word with its status (and
+ * `retryAt` for `hand_runs_used`); `busy` (409) when a command of the same job still awaits its answer.
+ */
 export type OpsJobCommandAnswer<Job = unknown> = { readonly job: Job } | { readonly error: string; readonly status: number; readonly retryAt?: number };
 
 /** What `useJob` answers: the page (null before the first read), its job, the read's state, the command in flight, the commands, and a read now. */
 export interface UseJobResult<Job = unknown, Run = unknown, Missed = unknown> extends OpsPolledState {
   readonly page: OpsJobPage<Job, Run, Missed> | null;
   readonly job: Job | null;
-  /** The command whose answer is awaited, or null. */
+  /** The command of this job whose answer is awaited, or null; a command of another job the page left is not this one's. */
   readonly acting: OpsJobCommand | null;
   /** Pauses the job, with a note of at most 200 characters when given. */
   pause(note?: string): Promise<OpsJobCommandAnswer<Job>>;
@@ -33,18 +38,21 @@ export interface UseJobResult<Job = unknown, Run = unknown, Missed = unknown> ex
 /** The job `name`'s page, polled, and its commands; null reads nothing and its commands answer `not_found`. */
 export function useJob<Job = unknown, Run = unknown, Missed = unknown>(client: OpsClient, name: string | null): UseJobResult<Job, Run, Missed> {
   const read = usePolled<OpsJobPage<Job, Run, Missed>>(client, name === null ? null : `/${encodeURIComponent(name)}`);
-  const [acting, setActing] = useState<OpsJobCommand | null>(null);
-  // The newest command: a command that answers after a newer one began leaves `acting` to it.
-  const newest = useRef(0);
-  const { fetch: fetchImpl, base } = client;
+  const { fetch: fetchImpl, base, session } = client;
   const { replace } = read;
+  /** A job's key among the commands: the session word and the job's address. */
+  const keyOf = useCallback((job: string): string => `${session ?? ''}\u0000${joinPath(base, `/${encodeURIComponent(job)}`)}`, [base, session]);
+  // The commands awaiting their answers, by job: the ref decides at once whether a job is busy, the state draws `acting`.
+  const locks = useRef(new Map<string, OpsJobCommand>());
+  const [acting, setActing] = useState<ReadonlyMap<string, OpsJobCommand>>(() => new Map());
 
   const command = useCallback(
     async (verb: OpsJobCommand, body: Readonly<Record<string, unknown>>): Promise<OpsJobCommandAnswer<Job>> => {
       if (name === null) return { error: 'not_found', status: 404 };
-      newest.current += 1;
-      const mine = newest.current;
-      setActing(verb);
+      const key = keyOf(name);
+      if (locks.current.has(key)) return { error: 'busy', status: 409 };
+      locks.current.set(key, verb);
+      setActing(new Map(locks.current));
       try {
         const answer = await readJson<Job>({ fetch: fetchImpl, base }, joinPath(base, `/${encodeURIComponent(name)}/${verb}`), {
           method: 'POST',
@@ -55,13 +63,15 @@ export function useJob<Job = unknown, Run = unknown, Missed = unknown>(client: O
         // A 204 carries no job: nothing to show, so the command reads as failed and the page stays as it was.
         if (answer.data === null) return { error: 'failed', status: 204 };
         const job = answer.data;
+        // Under another job or client by now, the answer replaces nothing: replace answers false there.
         replace((page) => ({ ...page, job }));
         return { job };
       } finally {
-        if (mine === newest.current) setActing(null);
+        locks.current.delete(key);
+        setActing(new Map(locks.current));
       }
     },
-    [name, fetchImpl, base, replace],
+    [name, fetchImpl, base, keyOf, replace],
   );
 
   const pause = useCallback((note?: string) => command('pause', note === undefined ? {} : { note }), [command]);
@@ -71,7 +81,7 @@ export function useJob<Job = unknown, Run = unknown, Missed = unknown>(client: O
   return {
     page: read.data,
     job: read.data?.job ?? null,
-    acting,
+    acting: name === null ? null : (acting.get(keyOf(name)) ?? null),
     updatedAt: read.updatedAt,
     updating: read.updating,
     offline: read.offline,

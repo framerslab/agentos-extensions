@@ -15,4 +15,4 @@ export { useStaffRequest, type OpsStaffRequestView } from './hooks/useStaffReque
 export { useStream, STREAM_POLL_MS, STREAM_RECONNECT_MAX_MS, STREAM_RECONNECT_MS, type StreamMode, type UseStreamOptions, type UseStreamResult } from './hooks/useStream.js';
 export { useJobs, type OpsJobsFilter, type UseJobsResult } from './hooks/useJobs.js';
 export { useJob, type OpsJobCommand, type OpsJobCommandAnswer, type UseJobResult } from './hooks/useJob.js';
-export { JOBS_GIVE_UP_MS, JOBS_POLL_MS, type OpsPolledState } from './hooks/usePolled.js';
+export { JOBS_GIVE_UP_MS, JOBS_POLL_MS, JOBS_READ_TIMEOUT_MS, type OpsPolledState } from './hooks/usePolled.js';
