@@ -6,6 +6,7 @@ import { createToolContext, resolveConfig } from '../src/index.js';
 import { engineArgv, runEngine } from '../src/local.js';
 import { TOOL_DEFINITIONS, toolDefinition, type ToolContext } from '../src/tools.js';
 import { DEFAULT_SOURCE_PATHS } from '../src/export.js';
+import { TOOL_SCHEMAS } from '../src/schemas.js';
 import {
   FAKE_KEY,
   FILM_ID,
@@ -420,6 +421,18 @@ describe('the templates and the refusal envelope, through the tools over the stu
       expect(scripted.requests, name).toHaveLength(1);
     }
     expect(waits).toEqual([]);
+  });
+
+  it.each([
+    ['key_rejected', 401, 'visitor'],
+    ['scope_required', 403, 'forge'],
+  ] as Array<[string, number, string]>)('%s (HTTP %i) with capability null keeps the envelope\'s fields, and the answer is the tool\'s output', async (code, status, tier) => {
+    const body = { error: code, capability: null, tier, requiredPlan: null, upgradeUrl: '/pricing', checkoutPaused: false, policyVersion: 1, message: `The words for ${code}.` };
+    scripted.answer = () => ({ status, body });
+    const answer = await toolDefinition('wildweave_film_timeline').run({ filmId: FILM_ID }, await remoteContext());
+    expect(answer).toMatchObject({ ok: false, error: { code, status, message: body.message, refusal: { capability: null, tier, requiredPlan: null, upgradeUrl: '/pricing', checkoutPaused: false, policyVersion: 1 } } });
+    expect(TOOL_SCHEMAS.wildweave_film_timeline.output.safeParse(answer).success).toBe(true);
+    expect(scripted.requests).toHaveLength(1);
   });
 
   it("reads a v1 { error: 'forge_required' } body as before: its code, the client's words, and no envelope", async () => {

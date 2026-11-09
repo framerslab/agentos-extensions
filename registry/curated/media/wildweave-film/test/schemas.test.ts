@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import * as schemaModule from '../src/schemas.js';
 import { StudioRefusal, TOOL_SCHEMAS, toolJsonSchema, type ToolName } from '../src/schemas.js';
 
 /** The 23 tools of the studio's tool surface, in its order. */
@@ -186,5 +187,35 @@ describe('the refusal envelope', () => {
       index: 0,
     };
     expect(envelope.safeParse(whole).success).toBe(true);
+  });
+
+  it('parses the envelope the gate sends with no capability (capability null: key_rejected, rate_limited, scope_required)', () => {
+    const noCapability = {
+      error: 'scope_required',
+      capability: null,
+      tier: 'forge',
+      requiredPlan: null,
+      upgradeUrl: '/pricing',
+      checkoutPaused: false,
+      policyVersion: 1,
+      message: "The key lacks the route's scope.",
+    };
+    expect(envelope.safeParse(noCapability).success).toBe(true);
+  });
+});
+
+describe("the template registry's ids", () => {
+  /** The ten seeded looks of studio v2 spec 4.7, as wilds.ai's film-templates/specs.ts holds them. */
+  const SEEDED = ['title.morph', 'title.serif', 'title.slate', 'title.bookend', 'credits.roll', 'credits.cards', 'credits.bookend', 'lower-third.band', 'lower-third.plate', 'lower-third.cite'];
+
+  it('are exported in the registry order', () => {
+    expect((schemaModule as Record<string, unknown>).TEMPLATE_IDS).toEqual(SEEDED);
+  });
+
+  it("are the enum of a definition's id in the templates tool's JSON Schema, which a film repository's checker reads", () => {
+    const output = toolJsonSchema('wildweave_film_templates').output as { anyOf: Array<{ properties: Record<string, any> }> };
+    const result = output.anyOf[0]!.properties.result;
+    expect(result.properties.definitions.items.properties.id.enum).toEqual(SEEDED);
+    expect(result.properties.saved.items.properties.base.enum).toEqual(SEEDED);
   });
 });
