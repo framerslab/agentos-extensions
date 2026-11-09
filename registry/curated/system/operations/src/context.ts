@@ -3,7 +3,7 @@
  * options, the limits, the clock, the field gate with the timer that writes its held `ops_refused`
  * lines, the four bounded queues and the flushers `stop()` runs. The checks: a logger with `info`,
  * `warn` and `error`, three distinct lock integers, a non-empty `fields` rule, 2 to 12 category
- * words.
+ * words, and a scheduler, when given, with `register` and `onRun`.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsLimits, OpsLogger, OpsOptions } from './contract.js';
@@ -77,6 +77,12 @@ export interface OpsContext {
   table(name: OpsTableName): string;
   /** Set by the first `start({ shared: true })` and kept: whether this process runs the shared jobs. */
   shared: boolean;
+  /**
+   * Set by `createOperations` when the options give `scheduler`: the shared jobs then run as the
+   * scheduler's registered jobs, so their own timers never arm and their bodies write no beat
+   * (the scheduler's `onRun` writes it).
+   */
+  scheduled: boolean;
   started: boolean;
   stopped: boolean;
   /**
@@ -199,6 +205,12 @@ export function createContext(options: OpsOptions): OpsContext {
   if (options.audit !== undefined && !isFunction(options.audit)) throw new TypeError('createOperations: audit must be a function when given');
   if (options.now !== undefined && !isFunction(options.now)) throw new TypeError('createOperations: now must be a function when given');
   if (options.discord !== undefined && !isFunction(options.discord)) throw new TypeError('createOperations: discord must be a function when given');
+  if (options.scheduler !== undefined) {
+    const scheduler = options.scheduler as { register?: unknown; onRun?: unknown } | null;
+    if (typeof scheduler !== 'object' || scheduler === null || !isFunction(scheduler.register) || !isFunction(scheduler.onRun)) {
+      throw new TypeError('createOperations: scheduler must have register and onRun functions when given');
+    }
+  }
   const rule = requireFieldRules(options.fields);
   if (options.tickets !== undefined) {
     const tickets = options.tickets;
@@ -277,6 +289,7 @@ export function createContext(options: OpsOptions): OpsContext {
     timers: new Set<OpsTimer>([refusedTimer(fields)]),
     table: (name) => tableName(prefix, name),
     shared: false,
+    scheduled: false,
     started: false,
     stopped: false,
     closed: false,

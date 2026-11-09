@@ -29,7 +29,9 @@
  * it still run. A run still going when `stop()` answers begins no further statement, inside a batch
  * too, whose transaction then rolls back whole, and writes no beat, since the host closes its
  * database then (D47). The sweep runs from the tables' first row, whatever the product's own
- * switches say (D45).
+ * switches say (D45). Given a scheduler (`context.scheduled`) the timer never arms and a run writes
+ * no beat: the scheduler runs the sweep as its registered `ops_sweep` (`registered.ts`), and its
+ * `onRun` writes the beat once the run has settled.
  */
 import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext, OpsTimer } from '../context.js';
@@ -337,7 +339,8 @@ export function createSweepJob(context: OpsContext): SweepJob {
       // A step's own failure is caught in sweepAll; this is the run's last guard, and it never throws further.
       ownLine(context.logger, 'warn', 'ops_job', { job: 'sweep', outcome: 'failed' });
     }
-    if (!context.closed) await writeBeat(context, SWEEP_JOB, 'sweep', at, outcome);
+    // Run as the scheduler's registered job, the scheduler's onRun writes the beat once the run has settled: one beat a run.
+    if (!context.closed && !context.scheduled) await writeBeat(context, SWEEP_JOB, 'sweep', at, outcome);
     return { outcome, removed, failed };
   }
 
@@ -362,7 +365,8 @@ export function createSweepJob(context: OpsContext): SweepJob {
       return timer !== null;
     },
     start() {
-      if (!context.shared || timer !== null) return;
+      // Given a scheduler, the job runs as its registered job and its own timer never arms.
+      if (context.scheduled || !context.shared || timer !== null) return;
       arm();
     },
     stop() {

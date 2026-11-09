@@ -10,7 +10,9 @@
  * re-arms after each run for the next day's, and ends at `stop()`. A run still counting when
  * `stop()` answers writes no row and no beat, and one still writing runs no further statement, its
  * transaction rolled back whole, since the host closes its database then (D47); `fill` writes that
- * day later, as it writes a day a stopped process missed.
+ * day later, as it writes a day a stopped process missed. Given a scheduler (`context.scheduled`)
+ * the timer never arms and a run writes no beat: the scheduler runs the job as its registered
+ * `ops_totals` (`registered.ts`) and its `onRun` writes the beat once the run has settled.
  */
 import type { OpsContext, OpsTimer } from '../context.js';
 import type { OpsBeatOutcome } from '../contract.js';
@@ -77,7 +79,8 @@ export function createTotalsJob(context: OpsContext): TotalsJob {
     } catch {
       ownLine(context.logger, 'warn', 'ops_job', { job: 'totals', outcome: 'failed' });
     }
-    if (!context.closed) await writeBeat(context, TOTALS_JOB, 'totals', at, outcome);
+    // Run as the scheduler's registered job, the scheduler's onRun writes the beat once the run has settled: one beat a run.
+    if (!context.closed && !context.scheduled) await writeBeat(context, TOTALS_JOB, 'totals', at, outcome);
     return { day, outcome, written, failed };
   }
 
@@ -102,7 +105,8 @@ export function createTotalsJob(context: OpsContext): TotalsJob {
       return timer !== null;
     },
     start() {
-      if (!context.shared || timer !== null) return;
+      // Given a scheduler, the job runs as its registered job and its own timer never arms.
+      if (context.scheduled || !context.shared || timer !== null) return;
       arm();
     },
     stop() {

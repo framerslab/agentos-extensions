@@ -35,6 +35,7 @@
     "The Analytics views (Figures, Funnel and retention, Money) as React components a product renders behind its own staff check, with English words it may replace",
     "A field rule every line and event is checked against: a closed list of keys the product declares, with refusals counted and never stored",
     "Shared jobs under try-locks: the nightly totals at 00:20 UTC and an hourly sweep that resolves and closes requests by their silence and runs every retention",
+    "The shared jobs on the scheduler of record: given the triggers package's scheduler, the sweep, the totals and a minute drain of the mail, bell, Discord and lifecycle outboxes run as its registered jobs, a catch-up of the totals filling the days it missed, and each job's beat is written from its settled runs",
     "Support requests: a thread a person opens from the app and staff work from the admin, each request under an anonymous id of its own, with a live stream, mail to a person who has not read a reply, the product's bell, pictures decoded and written again as WebP with no metadata, links to token paths cut before they are stored, deletion of one request or a whole account, and an export as a zip",
     "Job beats: each shared job and each job of the product's own writes its last run's time and outcome, and health.status() reads them all",
     "A Discord outbox for staff alerts: one row a fact under its key, delivered through the product's hook with retries, given up after 24 hours into one team mail, and a post carrying an id or an address refused",

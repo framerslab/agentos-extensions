@@ -8,7 +8,8 @@ import { createAlerts } from './alerts/outbox.js';
 import type { Errors, Operations, OpsOptions } from './contract.js';
 import { createContext } from './context.js';
 import { createEvents } from './events/index.js';
-import { createBeatsHealth } from './health/beats.js';
+import { createBeats } from './health/beats.js';
+import { SHARED_JOBS, registeredJobs, type DrainCounts } from './jobs/registered.js';
 import { createSweepJob } from './jobs/sweep.js';
 import { createTotalsJob } from './jobs/totals.js';
 import { createLines } from './logs/index.js';
@@ -67,6 +68,7 @@ export type {
   OpsHttpAuth,
   OpsIdentity,
   OpsIdentityState,
+  OpsJobDefinition,
   OpsLimits,
   OpsLineInput,
   OpsLogger,
@@ -97,6 +99,9 @@ export type {
   OpsReporterOptions,
   OpsRequestMail,
   OpsRetention,
+  OpsRunContext,
+  OpsScheduledRun,
+  OpsScheduler,
   OpsSearch,
   OpsStaff,
   OpsStaffFilter,
@@ -147,17 +152,24 @@ const LATE = Symbol('late');
  * mail, behind `open`'s answer; `stop()` waits for one still in flight within its 3 seconds, and
  * none starts once `stop()` has begun (one `ops_mail` line with the word `stopped` says so). The
  * next minor release's alert throttle gathers the lines under their gap in its place.
- * The mail and bell outboxes (D14, D15) are drained by `tickets.sendDue` and `tickets.notifyDue`,
- * which the next minor release's minute tick calls; until then a product that wants the mails
- * calls them from a timer of its own.
+ * The mail and bell outboxes (D14, D15) are drained by `tickets.sendDue` and `tickets.notifyDue`.
  * The lifecycle outbox is drained by `events.drainLifecycle`, which a product calls after each
- * commit that wrote a row and from a minute timer; `stop()` waits for a running drain within its
- * 3 seconds.
+ * commit that wrote a row too; `stop()` waits for a running drain within its 3 seconds.
  * The Discord outbox (`alerts`) holds the alerts a product's jobs post to its staff channels through
- * the `discord` hook: `alerts.post` writes a row, and `alerts.sendDue`, which a product calls from
- * a minute timer of its own until the scheduler's minute job calls it, delivers, retries, and 24
+ * the `discord` hook: `alerts.post` writes a row, and `alerts.sendDue` delivers, retries, and 24
  * hours after a row's first try gives it up into one team mail; `stop()` waits for a running drain
  * within its 3 seconds, and no row begins once `stop()` has begun.
+ *
+ * Given `scheduler` (the scheduler of record, `@framers/agentos-ext-triggers`), the first
+ * `start({ shared: true })` registers the shared jobs on it in place of their timers: `ops_sweep`
+ * (40 past each hour, `catch_up_once`), `ops_totals` (00:20 UTC, `required`, a catch-up filling the
+ * days it covers first) and `ops_outbox`, the minute drain of the four outboxes (`skip`); every
+ * one safe to run twice, the sweep's and the totals' try-locks kept inside their bodies, so an old
+ * process's timers and a new process's registered job never run one job at once. Their beats are
+ * written from the scheduler's `onRun` at each settled run's end, one beat a run. The product calls
+ * `start({ shared: true })` before `scheduler.start()`, since `register` throws once it has started.
+ * Without a scheduler, a product that wants the mails, the alerts and the lifecycle rows delivered
+ * calls the four drains from a minute timer of its own.
  */
 export function createOperations(options: OpsOptions): Operations {
   const context = createContext(options);
@@ -171,9 +183,12 @@ export function createOperations(options: OpsOptions): Operations {
     }
   };
 
-  createTotalsJob(context);
-  createSweepJob(context);
+  // Given the scheduler of record, the shared jobs run as its registered jobs: their timers never arm and their bodies write no beat.
+  context.scheduled = options.scheduler !== undefined;
+  const totals = createTotalsJob(context);
+  const sweep = createSweepJob(context);
   const events = createEvents(context);
+  const beats = createBeats(context);
 
   /**
    * The team alerts still in flight, each settled to undefined: the person's answer does not wait
@@ -215,17 +230,66 @@ export function createOperations(options: OpsOptions): Operations {
   // The Discord outbox, under its own name: `alerts` above is the new request's team alert sender, which the tickets module takes.
   const discordOutbox = createAlerts(context);
 
+  /**
+   * The minute drain the scheduler runs as `ops_outbox`: the ticket mail and bell outboxes, the
+   * Discord outbox, the lifecycle outbox, each run whatever the one before it did, so a mail outbox
+   * the database refuses never holds back the staff alerts. A drain that rejects is named on one
+   * `ops_job` line, never with its error's words, and the run rejects with the first error once
+   * every drain has run, so the scheduler counts the try failed.
+   */
+  async function drainOutboxes(nowMs: number): Promise<DrainCounts> {
+    const failures: unknown[] = [];
+    const step = async (word: string, work: () => Promise<number>): Promise<number> => {
+      try {
+        return await work();
+      } catch (error) {
+        failures.push(error);
+        ownLine(context.logger, 'warn', 'ops_job', { job: 'outbox', step: word, outcome: 'failed' });
+        return 0;
+      }
+    };
+    const mail = await step('mail', async () => (tickets === null ? 0 : (await tickets.sendDue(nowMs)).sent));
+    const bell = await step('bell', async () => (tickets === null ? 0 : await tickets.notifyDue(nowMs)));
+    const discord = await step('discord', async () => (await discordOutbox.sendDue(nowMs)).sent);
+    const lifecycle = await step('lifecycle', async () => (await events.drainLifecycle()).delivered);
+    if (failures.length > 0) throw failures[0];
+    return { mail, bell, discord, lifecycle };
+  }
+
+  /** Whether the shared jobs are registered on the scheduler: once, at the first `start({ shared: true })`. */
+  let registered = false;
+
+  /** Registers the shared jobs on the scheduler and writes each one's beat from its settled runs; throws what `register` throws. */
+  function registerShared(scheduler: NonNullable<OpsOptions['scheduler']>): void {
+    registered = true;
+    try {
+      for (const definition of registeredJobs(context, { sweep, totals, drain: drainOutboxes, fill: (days) => events.fill(days) })) {
+        scheduler.register(definition);
+      }
+    } catch (error) {
+      ownLine(context.logger, 'warn', 'ops_job', { job: 'scheduler', step: 'register', outcome: 'failed' });
+      throw error;
+    }
+    // One beat a run: the bodies write none, and a run the scheduler hands over once it has settled writes it at the run's end.
+    scheduler.onRun((job, run) => {
+      if (run.outcome === 'running' || run.endedAt === null || !SHARED_JOBS.includes(job.name)) return;
+      beats.beatAt(job.name, run.endedAt, run.outcome);
+    });
+  }
+
   return {
     tickets,
     alerts: discordOutbox,
     errors: notBuiltSurface<Errors>('errors', ['capture', 'report', 'groups', 'group', 'setState']),
     lines: createLines(context),
     events,
-    health: createBeatsHealth(context),
+    health: beats.health,
     start({ shared }) {
       if (context.stopped) return;
       if (shared === true) context.shared = true;
       context.started = true;
+      // Given a scheduler, the shared jobs are registered on it once, before the product starts it; its own timers stay unarmed.
+      if (options.scheduler !== undefined && context.shared && !registered) registerShared(options.scheduler);
       // Each timer's start is idempotent, so a second call arms only what the first left unarmed.
       for (const timer of context.timers) timer.start();
     },

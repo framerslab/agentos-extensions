@@ -23,7 +23,7 @@ export const WEEK_MS = 7 * DAY_MS;
 /** The migration whose `applied_at` says when the package's tables were made. */
 export const FIRST_MIGRATION = '0001_operations.sql';
 /** How many days `fill` may go back: ten years. */
-const FILL_DAYS_MAX = 3_660;
+export const FILL_DAYS_MAX = 3_660;
 
 /** The UTC day start holding `ms`. */
 export const dayStartOf = (ms: number): number => Math.floor(ms / DAY_MS) * DAY_MS;

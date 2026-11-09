@@ -464,9 +464,11 @@ describeBackends('the scheduler option', (backend: Backend) => {
 
   it('an old process without the option arms its timers as before; on PostgreSQL its sweep skips while the registered sweep holds the lock, and the registered sweep skips while the old one holds it; SQLite has no lock and both run', async () => {
     const clock = fakeClock(NOON);
-    const oldDb = await backend.open();
+    // On PostgreSQL the old process holds a pool of its own, as a second process does; an in-memory SQLite database is the one handle.
+    const second = backend.name === 'postgres' ? await backend.open() : null;
+    const oldDb = second ?? db;
     try {
-      // The old process: built without the option, as a 0.3 release builds it, on a database handle of its own.
+      // The old process: built without the option, as a 0.3 release builds it.
       const oldHolding = holdingLock(oldDb);
       const oldContext = createContext(fixtureOptions(oldHolding.db, { prefix }, clock).options);
       const oldSweep = createSweepJob(oldContext);
@@ -504,7 +506,7 @@ describeBackends('the scheduler option', (backend: Backend) => {
       // The old process writes its own beats; the registered sweep wrote none.
       expect((await beatOf('ops_sweep'))?.outcome).toBe('ok');
     } finally {
-      await oldDb.close();
+      await second?.close();
     }
   });
 
