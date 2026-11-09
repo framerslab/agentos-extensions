@@ -514,6 +514,47 @@ describe('useJob', () => {
     expect(hook.current().job).toEqual(paused);
   });
 
+  it('a job chosen while the browser says offline shows offline, never a read in flight, and is read when the connection returns', async () => {
+    let online = true;
+    vi.spyOn(navigator, 'onLine', 'get').mockImplementation(() => online);
+    const calls: string[] = [];
+    const client: OpsClient = {
+      fetch: async (input) => {
+        const url = String(input);
+        calls.push(url);
+        return json({ ...JOB_PAGE, job: { ...JOB_OK, name: url.slice(url.lastIndexOf('/') + 1) } });
+      },
+      base: BASE,
+    };
+    let choose: (name: string) => void = () => undefined;
+    const hook = renderHook(() => {
+      const [name, setName] = useState('ticket_routing');
+      choose = setName;
+      return useJob(client, name);
+    });
+    await pass(0);
+    expect(calls).toEqual([`${BASE}/ticket_routing`]);
+    online = false;
+    await act(async () => {
+      window.dispatchEvent(new Event('offline'));
+    });
+    await act(async () => {
+      choose('ops_sweep');
+    });
+    await pass(0);
+    expect(hook.current()).toMatchObject({ offline: true, updating: false, job: null });
+    await pass(JOBS_POLL_MS);
+    expect(hook.current()).toMatchObject({ offline: true, updating: false, job: null });
+    expect(calls).toHaveLength(1);
+    online = true;
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await pass(0);
+    expect(calls).toEqual([`${BASE}/ticket_routing`, `${BASE}/ops_sweep`]);
+    expect(hook.current()).toMatchObject({ offline: false, job: { name: 'ops_sweep' } });
+  });
+
   it('reads nothing for a null name, and its commands answer not_found without a request', async () => {
     const fetchStub = vi.fn(async () => json(JOB_PAGE));
     const hook = renderHook(() => useJob({ fetch: fetchStub, base: BASE }, null));

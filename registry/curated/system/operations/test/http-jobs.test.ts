@@ -300,19 +300,19 @@ describe('the jobs handlers over a scheduler double', () => {
     expect((await read(await handlers.jobs.pause(post('/e_ok/pause', JSON.stringify({ note: 'x'.repeat(200) })), { name: 'e_ok' }))).status).toBe(200);
   });
 
-  it("a scheduler's refusal is answered with its word and status, retryAt with hand_runs_used; a RangeError is bad_request; another throw is the host's", async () => {
+  it("a scheduler's refusal is answered with its word and status, retryAt with hand_runs_used; a throw is the host's", async () => {
     const { handlers } = build();
     expect(await read(await handlers.jobs.run(post('/unsafe/run'), { name: 'unsafe' }))).toEqual({ status: 409, body: { error: 'not_safe', status: 409 } });
     expect(await read(await handlers.jobs.run(post('/busy/run'), { name: 'busy' }))).toEqual({ status: 429, body: { error: 'hand_runs_used', status: 429, retryAt: NOW + 30 * MINUTE } });
     expect(await read(await handlers.jobs.run(post('/nothing_here/run'), { name: 'nothing_here' }))).toEqual({ status: 404, body: { error: 'not_found', status: 404 } });
     expect(await read(await handlers.jobs.resume(post('/e_ok/resume'), { name: 'e_ok' }))).toEqual({ status: 409, body: { error: 'already', status: 409 } });
-    // The scheduler's one RangeError on a pause is its note's bound: a pause carrying a note is bad_request.
-    expect(await read(await handlers.jobs.pause(post('/range/pause', JSON.stringify({ note: 'waiting' })), { name: 'range' }))).toEqual({ status: 400, body: { error: 'bad_request', status: 400 } });
     await expect(handlers.jobs.run(post('/broken/run'), { name: 'broken' })).rejects.toThrow('the database went away');
   });
 
-  it("a RangeError from a pause with no note, or from another command, is the host's to answer, never bad_request", async () => {
+  it("a RangeError from a command is the host's to answer, never bad_request, a pause carrying a note among them: the note's bound is checked before the scheduler is called", async () => {
     const { handlers } = build();
+    // The product's audit hook or the database can throw inside the scheduler's transaction; a note within its bound never makes the scheduler throw.
+    await expect(handlers.jobs.pause(post('/range/pause', JSON.stringify({ note: 'waiting' })), { name: 'range' })).rejects.toThrow(RangeError);
     await expect(handlers.jobs.pause(post('/range/pause', '{}'), { name: 'range' })).rejects.toThrow(RangeError);
     await expect(handlers.jobs.resume(post('/range/resume'), { name: 'range' })).rejects.toThrow(RangeError);
   });
