@@ -252,7 +252,8 @@
                       "description": "Where its stock.json was written"
                     },
                     "forced": {
-                      "type": "boolean"
+                      "type": "boolean",
+                      "description": "True when force wrote over the file or its stock.json, which the repository held with other bytes"
                     }
                   },
                   "additionalProperties": {}
@@ -265,6 +266,27 @@
                   "type": "string"
                 },
                 "description": "With writeTo: each listed path the repository already held with the same sha256, never fetched"
+              },
+              "stockWritten": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Where the stock.json was written"
+                    },
+                    "file": {
+                      "type": "string",
+                      "description": "The held file it records"
+                    },
+                    "forced": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "description": "With writeTo: each stock.json written beside a file the repository already held with its sha256 and lacked the record of"
               }
             },
             "additionalProperties": {}

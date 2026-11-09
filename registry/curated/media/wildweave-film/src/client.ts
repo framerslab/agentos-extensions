@@ -201,6 +201,9 @@ export class WildweaveStudioClient {
     if (!this.hasKey) return { ok: false, error: { code: 'key_missing', message: CODE_MESSAGES.key_missing! } };
     const requestId = this.opts.requestId?.() ?? randomUUID();
     const url = `${this.base}${path}`;
+    // The path as the log lines name it: a files-route address's `key` query is the storage path of the account's own
+    // folder, which no log line repeats.
+    const logged = path.replace(/([?&]key=)[^&#]*/g, '$1-');
     const idempotent = callOpts.idempotent ?? method === 'GET';
     const timeoutMs = callOpts.timeoutMs ?? this.opts.timeoutMs ?? 30_000;
     const doFetch = this.opts.fetch ?? fetch;
@@ -226,12 +229,12 @@ export class WildweaveStudioClient {
         if (idempotent && transientTries < RETRY_WAITS_MS.length) {
           const wait = RETRY_WAITS_MS[transientTries]!;
           transientTries += 1;
-          this.opts.log?.info({ event: 'wildweave_film.retry', path, attempt: transientTries, afterMs: wait, cause: timedOut ? 'timeout' : 'network' }, 'retrying after a network error');
+          this.opts.log?.info({ event: 'wildweave_film.retry', path: logged, attempt: transientTries, afterMs: wait, cause: timedOut ? 'timeout' : 'network' }, 'retrying after a network error');
           await sleep(wait);
           continue;
         }
         const message = timedOut ? `no answer within ${timeoutMs} ms` : maskKeys(err instanceof Error ? err.message : String(err), this.secrets);
-        this.opts.log?.info({ event: 'wildweave_film.refused', path, code: timedOut ? 'timeout' : 'network' }, 'the studio did not answer');
+        this.opts.log?.info({ event: 'wildweave_film.refused', path: logged, code: timedOut ? 'timeout' : 'network' }, 'the studio did not answer');
         return { ok: false, error: { code: timedOut ? 'timeout' : 'network', message, requestId } };
       }
       const id = response.headers.get('x-request-id') ?? requestId;
@@ -255,24 +258,24 @@ export class WildweaveStudioClient {
           if (status === 429 && rateTries < RATE_RETRIES) {
             const wait = retryAfterMs(response.headers.get('retry-after'));
             rateTries += 1;
-            this.opts.log?.info({ event: 'wildweave_film.retry', path, attempt: rateTries, afterMs: wait, status }, 'retrying after the rate limit');
+            this.opts.log?.info({ event: 'wildweave_film.retry', path: logged, attempt: rateTries, afterMs: wait, status }, 'retrying after the rate limit');
             await sleep(wait);
             continue;
           }
           const error = this.refusal(status, null, '', id);
-          this.opts.log?.info({ event: 'wildweave_film.refused', path, status, code: error.code, requestId: id }, 'the studio refused the call; its answer was cut off');
+          this.opts.log?.info({ event: 'wildweave_film.refused', path: logged, status, code: error.code, requestId: id }, 'the studio refused the call; its answer was cut off');
           return { ok: false, error };
         }
         const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
         if (idempotent && transientTries < RETRY_WAITS_MS.length) {
           const wait = RETRY_WAITS_MS[transientTries]!;
           transientTries += 1;
-          this.opts.log?.info({ event: 'wildweave_film.retry', path, attempt: transientTries, afterMs: wait, status, cause: timedOut ? 'timeout' : 'answer_cut_off' }, 'retrying after an answer was cut off');
+          this.opts.log?.info({ event: 'wildweave_film.retry', path: logged, attempt: transientTries, afterMs: wait, status, cause: timedOut ? 'timeout' : 'answer_cut_off' }, 'retrying after an answer was cut off');
           await sleep(wait);
           continue;
         }
         const code = timedOut ? 'timeout' : 'network';
-        this.opts.log?.info({ event: 'wildweave_film.refused', path, status, code, requestId: id }, 'the answer was cut off');
+        this.opts.log?.info({ event: 'wildweave_film.refused', path: logged, status, code, requestId: id }, 'the answer was cut off');
         const message = `the answer to HTTP ${status} was cut off${timedOut ? ` past ${timeoutMs} ms` : ''}: the route may have acted on the call, so read its state before sending it again`;
         return { ok: false, error: { code, message, status, requestId: id } };
       }
@@ -285,7 +288,7 @@ export class WildweaveStudioClient {
       if (status === 429 && !final && rateTries < RATE_RETRIES) {
         const wait = retryAfterMs(response.headers.get('retry-after'));
         rateTries += 1;
-        this.opts.log?.info({ event: 'wildweave_film.retry', path, attempt: rateTries, afterMs: wait, status }, 'retrying after the rate limit');
+        this.opts.log?.info({ event: 'wildweave_film.retry', path: logged, attempt: rateTries, afterMs: wait, status }, 'retrying after the rate limit');
         await sleep(wait);
         continue;
       }
@@ -293,7 +296,7 @@ export class WildweaveStudioClient {
       if (transient && idempotent && transientTries < RETRY_WAITS_MS.length) {
         const wait = RETRY_WAITS_MS[transientTries]!;
         transientTries += 1;
-        this.opts.log?.info({ event: 'wildweave_film.retry', path, attempt: transientTries, afterMs: wait, status }, 'retrying after a gateway answer');
+        this.opts.log?.info({ event: 'wildweave_film.retry', path: logged, attempt: transientTries, afterMs: wait, status }, 'retrying after a gateway answer');
         await sleep(wait);
         continue;
       }
@@ -302,7 +305,7 @@ export class WildweaveStudioClient {
         return { ok: true, result: (json === undefined ? { text: maskKeys(text, this.secrets) } : json) as T, status, requestId: id };
       }
       const error = this.refusal(status, json, text, id);
-      this.opts.log?.info({ event: 'wildweave_film.refused', path, status, code: error.code, requestId: id }, 'the studio refused the call');
+      this.opts.log?.info({ event: 'wildweave_film.refused', path: logged, status, code: error.code, requestId: id }, 'the studio refused the call');
       return { ok: false, error };
     }
   }
@@ -418,12 +421,14 @@ export class WildweaveStudioClient {
   /**
    * GET /files/:sha256?key=: one file of the account's own folder, as its bytes. `url` is the
    * address the export route lists: the files route's own path, for `sha256`, with its `key` query;
-   * any other address is refused here (`fetch_failed`), so the key goes to the studio alone.
+   * any other address is refused here (`fetch_failed`, naming the address without its query), so
+   * the key goes to the studio alone.
    */
   file(url: string, sha256: string): Promise<StudioAnswer<Buffer>> {
     const parsed = studioFileAddress(url, sha256);
     if (!parsed) {
-      return Promise.resolve({ ok: false, error: { code: 'fetch_failed', message: `${url.slice(0, 200)} is not the studio's files route for ${sha256}` } });
+      const shown = (url.split(/[?#]/, 1)[0] ?? '').slice(0, 200);
+      return Promise.resolve({ ok: false, error: { code: 'fetch_failed', message: `${shown} is not the studio's files route for ${sha256}` } });
     }
     return this.call<Buffer>('GET', `/files/${seg(sha256)}?key=${encodeURIComponent(parsed.key)}`, undefined, { binary: true, timeoutMs: LONG_CALL_TIMEOUT_MS });
   }

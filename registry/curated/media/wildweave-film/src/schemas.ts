@@ -666,9 +666,20 @@ export const TOOL_SCHEMAS = {
         ack: answer({ seq: z.number().int().nullable(), sources: z.record(z.string(), z.unknown()), rebound: z.boolean() }),
         fetch: z.array(exportFetchEntry).describe('Without writeTo: the staged files the timeline names that the repository does not hold yet, as the route lists them'),
         fetched: z
-          .array(answer({ path: z.string(), sha256: z.string(), bytes: z.number().int(), stock: z.string().describe('Where its stock.json was written'), forced: z.boolean() }))
+          .array(
+            answer({
+              path: z.string(),
+              sha256: z.string(),
+              bytes: z.number().int(),
+              stock: z.string().describe('Where its stock.json was written'),
+              forced: z.boolean().describe('True when force wrote over the file or its stock.json, which the repository held with other bytes'),
+            }),
+          )
           .describe('With writeTo: each staged file fetched, checked by its sha256 and written at its path'),
         fetchUnchanged: z.array(z.string()).describe('With writeTo: each listed path the repository already held with the same sha256, never fetched'),
+        stockWritten: z
+          .array(answer({ path: z.string().describe('Where the stock.json was written'), file: z.string().describe('The held file it records'), forced: z.boolean() }))
+          .describe('With writeTo: each stock.json written beside a file the repository already held with its sha256 and lacked the record of'),
       }),
     ),
   },
