@@ -714,6 +714,26 @@ describeBackends('the scheduler option', (backend: Backend) => {
     expect(await daily(TODAY - 14 * DAY_MS, 'signups')).toEqual([]);
   });
 
+  it('a catch-up that crosses UTC midnight while it reads the excluded ids fills the days it counted before midnight, so the first day its due times owe is written before they are served', async () => {
+    const fake = fakeScheduler();
+    // 23:59:59 UTC on 22 October: the 20th's due time, which owes the 19th, is caught up a second before midnight.
+    const clock = fakeClock(TODAY + DAY_MS - 1_000);
+    let crossed = false;
+    const excluded = async (): Promise<string[]> => {
+      // The product's hook answers two seconds later, on the 23rd.
+      if (!crossed) {
+        crossed = true;
+        clock.advance(2_000);
+      }
+      return [];
+    };
+    const { ops } = build({ clock, options: { scheduler: fake.scheduler, metrics: { plans: FIXTURE_PLANS, metrics: FIXTURE_METRICS, excluded } } });
+    ops.start({ shared: true });
+    expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), [TODAY - 2 * DAY_MS + TOTALS_MINUTE]))).toMatchObject({ outcome: 'ok' });
+    // The 19th, owed by the 20th's due time, and the days after it up to the 21st, counted on the 22nd.
+    for (const day of [TODAY - 3 * DAY_MS, TODAY - 2 * DAY_MS, TODAY - DAY_MS]) expect(await daily(day, 'signups')).toHaveLength(3);
+  });
+
   it('an old process without the option arms its timers as before; on PostgreSQL its sweep skips while the registered sweep holds the lock, and the registered sweep skips while the old one holds it; SQLite has no lock and both run', async () => {
     const clock = fakeClock(NOON);
     // On PostgreSQL the old process holds a pool of its own, as a second process does; an in-memory SQLite database is the one handle.
