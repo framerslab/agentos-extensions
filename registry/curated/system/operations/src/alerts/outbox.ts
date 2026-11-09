@@ -28,8 +28,10 @@
  * after its first try a row gives up: `failed` with `gave_up`, and its lines go as one `teamAlert` mail through the host's `mail`,
  * keyed by the row's `dedupKey`, tried twice a minute apart as the ticket mail outbox tries, `suppressed` at once. On PostgreSQL the
  * hook and the mail run from a savepoint the claim settles once they return, as the ticket outboxes' hooks do: a statement they fail
- * through the handle is undone back to it and counts as a failed try, so the claim's own writes land and the row never repeats its
- * try unrecorded. A row with no hook to try is marked `failed` with `no_hook`. Settled rows (delivered, failed with their mail
+ * through the handle is undone back to it, so the claim's own writes land and the row never repeats its try unrecorded. One that
+ * throws is a failed try; a mail that swallowed its failed statement is a failed one too, sent again under its key, while a hook that
+ * did keeps its answer, since its post is in Discord whatever the database did. A `sent` answer's message id is stored cleaned of
+ * control characters. A row with no hook to try is marked `failed` with `no_hook`. Settled rows (delivered, failed with their mail
  * settled, dropped) go 30 days after they settled, by the hourly sweep's `discord_outbox` step.
  *
  * One drain at a time a process (a call while one runs joins it); `stop()` waits for a running drain within its 3 seconds, and no
@@ -156,12 +158,17 @@ const rowView = (row: Row): OpsAlertRow => ({
 /** A status code as an integer, or null for anything else. */
 const statusOf = (value: unknown): number | null => (typeof value === 'number' && Number.isSafeInteger(value) ? value : null);
 
-/** The hook's answer read as one of the three; anything else is a failed try with no answer. */
+/**
+ * The hook's answer read as one of the three; anything else is a failed try with no answer. A `sent` answer's message id is stored
+ * through `clean`, as every string the package stores is: a U+0000 in it would have PostgreSQL refuse the row's settlement, and the
+ * row, posted, would be tried again by every drain.
+ */
 function answerOf(value: unknown): OpsDiscordAnswer {
   const answer = value as { outcome?: unknown; deliveryId?: unknown; afterMs?: unknown; status?: unknown } | null | undefined;
   if (typeof answer !== 'object' || answer === null) return { outcome: 'failed', status: null };
-  if (answer.outcome === 'sent' && typeof answer.deliveryId === 'string' && answer.deliveryId.length > 0) {
-    return { outcome: 'sent', deliveryId: answer.deliveryId };
+  const deliveryId = typeof answer.deliveryId === 'string' ? clean(answer.deliveryId) : '';
+  if (answer.outcome === 'sent' && deliveryId.length > 0) {
+    return { outcome: 'sent', deliveryId };
   }
   if (answer.outcome === 'retry' && typeof answer.afterMs === 'number' && Number.isFinite(answer.afterMs) && answer.afterMs >= 0) {
     return { outcome: 'retry', afterMs: Math.round(answer.afterMs), status: statusOf(answer.status) };
@@ -255,9 +262,10 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
   }
 
   /**
-   * Ends the savepoint once the hook has returned: true when the transaction is live, and false when the release is refused, which a
-   * hook that swallowed its own failed statement leaves behind; that is rolled back to, so the claim's writes after it land, and the
-   * hook counts as failed. True on SQLite.
+   * Ends the savepoint once the hook or the mail has returned: true when the transaction is live, and false when the release is
+   * refused, which one that swallowed its own failed statement leaves behind; that is rolled back to, so the claim's writes after it
+   * land. The mail then counts as failed, as the ticket mail outbox's does, and goes again under its `idempotencyKey`; the hook's
+   * answer stands, since its post is outside the database and a webhook takes no key to post it again under. True on SQLite.
    */
   async function settleHook(writer: StorageAdapter): Promise<boolean> {
     settleOrLeave();
@@ -395,7 +403,9 @@ export function createAlerts(context: OpsContext, timing: AlertTiming = {}): Ale
     }
     settleOrLeave();
     if (threw) await undoHook(writer);
-    if (!(await settleHook(writer))) answer = { outcome: 'failed', status: null };
+    // A hook that swallowed its own failed statement keeps its answer once the savepoint is rolled back to: a post it made is in
+    // Discord whatever the database did, and counting it failed would post the row again at each backoff (as SQLite never does).
+    await settleHook(writer);
     settleOrLeave();
     const doneAt = timeFrom(claimAt);
     const attempts = Number(row.attempts) + 1;
