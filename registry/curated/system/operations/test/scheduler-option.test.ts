@@ -13,7 +13,7 @@ import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import ts from 'typescript';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createContext } from '../src/context.js';
-import type { Operations, OpsDiscordAnswer, OpsDiscordPost, OpsJobDefinition, OpsOptions, OpsScheduledRun, OpsScheduler } from '../src/contract.js';
+import type { Operations, OpsDiscordAnswer, OpsDiscordPost, OpsJobDefinition, OpsOptions, OpsOutboxRun, OpsScheduledRun, OpsScheduler } from '../src/contract.js';
 import { lifecycle, lifecycleFields, mergeFields, outboxRow } from '../src/events/index.js';
 import { DAY_MS, dayStartOf } from '../src/events/totals.js';
 import { createOperations, migrateOperations } from '../src/index.js';
@@ -383,6 +383,47 @@ describeBackends('the scheduler option', (backend: Backend) => {
     expect(await beats()).toEqual([]);
   });
 
+  it("stop() waits for a minute drain in flight within its deadline, no drain behind it begins once stop() has begun, the run answers skipped and one ops_job line counts the drains it passed over", async () => {
+    const fake = fakeScheduler();
+    const { ops, fixture } = build({ options: { scheduler: fake.scheduler, fields: FIELDS } });
+    ops.start({ shared: true });
+    let release: (run: OpsOutboxRun) => void = () => undefined;
+    let reached: () => void = () => undefined;
+    const atMail = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    vi.spyOn(ops.tickets!, 'sendDue').mockImplementationOnce(
+      () =>
+        new Promise<OpsOutboxRun>((resolve) => {
+          release = resolve;
+          reached();
+        }),
+    );
+    const bell = vi.spyOn(ops.tickets!, 'notifyDue');
+    const discord = vi.spyOn(ops.alerts, 'sendDue');
+    const facts = vi.spyOn(ops.events, 'drainLifecycle');
+    const run = definition(fake, 'ops_outbox').run(runContext(NOON));
+    await atMail;
+    let answered = false;
+    const stopping = ops.stop().then(() => {
+      answered = true;
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    // The mail drain still runs on the host's handle: stop() has not answered, so the host has not closed it.
+    expect(answered).toBe(false);
+    release({ sent: 0, skipped: 0, failed: 0, deferred: 0 });
+    await stopping;
+    expect(await run).toEqual({ outcome: 'skipped', did: 'mail 0, bell 0, discord 0, lifecycle 0' });
+    expect(bell).not.toHaveBeenCalled();
+    expect(discord).not.toHaveBeenCalled();
+    expect(facts).not.toHaveBeenCalled();
+    expect(fixture.recorder.linesOf('ops_job')).toEqual([{ level: 'warn', message: 'ops_job', fields: { job: 'outbox', outcome: 'stopped', count: 3 } }]);
+    // A run asked for once stop() has begun begins nothing.
+    expect(await definition(fake, 'ops_outbox').run(runContext(NOON))).toEqual({ outcome: 'skipped', did: 'stopped' });
+    expect(await definition(fake, 'ops_sweep').run(runContext(NOON))).toEqual({ outcome: 'skipped', did: 'stopped' });
+    expect(await definition(fake, 'ops_totals').run(runContext(NOON))).toEqual({ outcome: 'skipped', did: 'stopped' });
+  });
+
   it('a drain that rejects fails the run with its error once the drains behind it have run, and names the drain on one ops_job line with no word of the error', async () => {
     const fake = fakeScheduler();
     const { ops, fixture } = build({ options: { scheduler: fake.scheduler, fields: FIELDS } });
@@ -403,10 +444,11 @@ describeBackends('the scheduler option', (backend: Backend) => {
     const clock = fakeClock(NOON);
     const { ops } = build({ clock, options: { scheduler: fake.scheduler } });
     ops.start({ shared: true });
+    // The totals first: the package's own request figure reads the log lines the sweep's failing step needs gone.
+    expect((await definition(fake, 'ops_totals').run(runContext(clock.now()))) ?? {}).toMatchObject({ outcome: 'ok' });
     await db.exec(`DROP TABLE ${prefix}_log_lines`);
     const sweep = await definition(fake, 'ops_sweep').run(runContext(clock.now()));
     expect(sweep).toMatchObject({ outcome: 'failed' });
-    expect((await definition(fake, 'ops_totals').run(runContext(clock.now()))) ?? {}).toMatchObject({ outcome: 'ok' });
     expect(await beats()).toEqual([]);
 
     const endedAt = clock.now() + 1_234;
