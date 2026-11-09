@@ -275,19 +275,29 @@ export async function fillDailyTotals(context: OpsContext, days: number): Promis
   return (await fillDailyTotalsOutcome(context, days)).written;
 }
 
+/** How a fill runs: where its rows go and the excluded ids, when the caller read them already. */
+export interface FillOptions {
+  /** The totals lock's transaction: every day's rows go through it, so the fill lands with the lock or not at all. */
+  readonly writer?: Pick<StorageAdapter, 'run'>;
+  /** The excluded ids, read by the caller before the lock's transaction opened, so no transaction waits on the host's hook. */
+  readonly excluded?: readonly string[];
+}
+
 /**
  * `fillDailyTotals` answering the metrics whose hook failed beside the rows written, for a catch-up
- * that must not count a day it left unwritten as served. With `writer` (the totals lock's
- * transaction) every day's rows go through it, so the fill lands with the lock or not at all.
+ * that must not count a day it left unwritten as served. Once `stop()` has answered it begins no
+ * further statement and answers what it wrote, since the host closes its database then (D47).
  */
-export async function fillDailyTotalsOutcome(context: OpsContext, days: number, writer?: Pick<StorageAdapter, 'run'>): Promise<FillOutcome> {
+export async function fillDailyTotalsOutcome(context: OpsContext, days: number, options: FillOptions = {}): Promise<FillOutcome> {
   if (typeof days !== 'number' || !Number.isSafeInteger(days) || days < 1 || days > FILL_DAYS_MAX) {
     throw new TypeError(`fill: days must be an integer from 1 to ${FILL_DAYS_MAX}`);
   }
   const today = dayStartOf(context.now());
   const first = today - days * DAY_MS;
-  const excluded = await readExcluded(context);
+  const excluded = options.excluded ?? (await readExcluded(context));
+  if (context.closed) return { written: 0, failed: [] };
   const made = await tablesMadeAt(context);
+  if (context.closed) return { written: 0, failed: [] };
   const ownFrom = made === null ? today : dayStartOf(made);
   const present = new Set<string>();
   const held = await context.db.all<{ day: number | string; metric: string }>(
@@ -296,9 +306,11 @@ export async function fillDailyTotalsOutcome(context: OpsContext, days: number, 
   );
   for (const row of held) present.add(`${Number(row.day)}:${row.metric}`);
   const entries = [...metricEntries(context).values()];
+  const writer = options.writer;
   let written = 0;
   const failed = new Set<string>();
   for (let day = first; day < today; day += DAY_MS) {
+    if (context.closed) break;
     const wanted = (entry: MetricEntry): boolean =>
       entry.fillsBack && !present.has(`${day}:${entry.name}`) && (entry.source !== 'own' || day >= ownFrom);
     if (!entries.some(wanted)) continue;

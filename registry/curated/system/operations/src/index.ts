@@ -302,7 +302,7 @@ export function createOperations(options: OpsOptions): Operations {
         });
         subscribed = true;
       }
-      for (const definition of registeredJobs(context, { sweep, totals, drain: drainOutboxes, fill: (days, writer) => fillDailyTotalsOutcome(context, days, writer) })) {
+      for (const definition of registeredJobs(context, { sweep, totals, drain: drainOutboxes, fill: (days, fillOptions) => fillDailyTotalsOutcome(context, days, fillOptions) })) {
         if (registered.has(definition.name)) continue;
         scheduler.register(definition);
         registered.add(definition.name);
