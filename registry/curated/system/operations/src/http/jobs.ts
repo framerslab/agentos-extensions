@@ -20,6 +20,8 @@ const STATES: ReadonlySet<string> = new Set(['ok', 'running', 'failed', 'missed'
 const SHOWN = { runs: 20, alerts: 10, changes: 10 } as const;
 /** What the full lists answer: the runs the scheduler keeps a job, and the alerts and changes the page offers. */
 const KEPT = { runs: 100, alerts: 50, changes: 50 } as const;
+/** The most bytes a pause's body may hold: a 200-character note fits written every character as an escape, and a body past it is refused unread. */
+const BODY_MAX = 4_096;
 /** The most list pages the counts read: 200 jobs a page, so 20,000 jobs. */
 const COUNT_PAGES_MAX = 100;
 
@@ -47,6 +49,35 @@ let zod: typeof import('zod') | null = null;
 /** What a pause's body reads as: its note (absent when none or blank), a body outside the rule, or a host without `zod`. */
 type NoteRead = { readonly note: string | undefined } | 'bad_request' | 'no_zod';
 
+/** The body's text, read up to `BODY_MAX` bytes: null past it (the rest left unread) or when the body cannot be read. */
+async function textOf(request: Request): Promise<string | null> {
+  if (request.body === null) return '';
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > BODY_MAX) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return null;
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 /** `zod`, loaded at the first call and kept; null when the host has not installed it. */
 async function loadZod(): Promise<typeof import('zod') | null> {
   try {
@@ -61,12 +92,8 @@ async function loadZod(): Promise<typeof import('zod') | null> {
 async function noteOf(request: Request): Promise<NoteRead> {
   const loaded = await loadZod();
   if (loaded === null) return 'no_zod';
-  let text: string;
-  try {
-    text = await request.text();
-  } catch {
-    return 'bad_request';
-  }
+  const text = await textOf(request);
+  if (text === null) return 'bad_request';
   let body: unknown = {};
   if (text.trim() !== '') {
     try {

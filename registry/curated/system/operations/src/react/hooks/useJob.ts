@@ -5,7 +5,7 @@
  * page changes before the server answers, so a command that failed never reads as done, and a read
  * that began before the answer never puts back the job it replaced.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { OpsJobPage } from '../../contract.js';
 import { joinPath, readJson, type OpsClient } from '../client.js';
 import { usePolled, type OpsPolledState } from './usePolled.js';
@@ -34,12 +34,16 @@ export interface UseJobResult<Job = unknown, Run = unknown, Missed = unknown> ex
 export function useJob<Job = unknown, Run = unknown, Missed = unknown>(client: OpsClient, name: string | null): UseJobResult<Job, Run, Missed> {
   const read = usePolled<OpsJobPage<Job, Run, Missed>>(client, name === null ? null : `/${encodeURIComponent(name)}`);
   const [acting, setActing] = useState<OpsJobCommand | null>(null);
+  // The newest command: a command that answers after a newer one began leaves `acting` to it.
+  const newest = useRef(0);
   const { fetch: fetchImpl, base } = client;
   const { replace } = read;
 
   const command = useCallback(
     async (verb: OpsJobCommand, body: Readonly<Record<string, unknown>>): Promise<OpsJobCommandAnswer<Job>> => {
       if (name === null) return { error: 'not_found', status: 404 };
+      newest.current += 1;
+      const mine = newest.current;
       setActing(verb);
       try {
         const answer = await readJson<Job>({ fetch: fetchImpl, base }, joinPath(base, `/${encodeURIComponent(name)}/${verb}`), {
@@ -54,7 +58,7 @@ export function useJob<Job = unknown, Run = unknown, Missed = unknown>(client: O
         replace((page) => ({ ...page, job }));
         return { job };
       } finally {
-        setActing(null);
+        if (mine === newest.current) setActing(null);
       }
     },
     [name, fetchImpl, base, replace],

@@ -291,8 +291,11 @@ describe('the jobs handlers over a scheduler double', () => {
     for (const body of [JSON.stringify({ note: 'x'.repeat(201) }), JSON.stringify({ note: 7 }), JSON.stringify({ note: 'a', other: 1 }), '{not json', '[]', 'null']) {
       expect(await read(await handlers.jobs.pause(post('/e_ok/pause', body), { name: 'e_ok' }))).toEqual({ status: 400, body: { error: 'bad_request', status: 400 } });
     }
+    // A body past 4,096 bytes is refused before it is read whole, whatever it holds.
+    expect(await read(await handlers.jobs.pause(post('/e_ok/pause', JSON.stringify({ note: 'x'.repeat(10) }) + ' '.repeat(4_096)), { name: 'e_ok' }))).toEqual({ status: 400, body: { error: 'bad_request', status: 400 } });
     expect(calls).toEqual([]);
-    // 200 characters is the rule's bound, and passes.
+    // 200 characters is the rule's bound, and passes, written every character as an escape too.
+    expect((await read(await handlers.jobs.pause(post('/e_ok/pause', JSON.stringify({ note: 'x'.repeat(200) }).replace(/x/g, '\\u00e9')), { name: 'e_ok' }))).status).toBe(200);
     expect((await read(await handlers.jobs.pause(post('/e_ok/pause', JSON.stringify({ note: 'x'.repeat(200) })), { name: 'e_ok' }))).status).toBe(200);
   });
 
