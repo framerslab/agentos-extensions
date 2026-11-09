@@ -394,7 +394,7 @@ The package's own lines (`ops_flush`, `ops_job`, `ops_refused`, `ops_rate_cut`, 
 
 ## Tests
 
-The suite runs every case on SQLite through sql.js in memory and, when `AGENTOS_TEST_POSTGRES_URL` names a server, on PostgreSQL; without it the PostgreSQL half shows as skipped under its reason. The repository's CI runs both, PostgreSQL 16 among its services. Fixture tests feed an address, a sentence, a token, a sign-in link and an error's sentence through every entry this release builds and find none of them in a table outside the support tables or in the package's own lines.
+The suite runs every case on SQLite through sql.js in memory and, when `AGENTOS_TEST_POSTGRES_URL` names a server, on PostgreSQL; without it the PostgreSQL half shows as skipped under its reason. The repository's CI runs both, PostgreSQL 16 among its services. The scheduler cases import `@framers/agentos-ext-triggers` from its built `dist` (the type check among them reads its declarations), so a fresh checkout builds that package first: `pnpm --filter @framers/agentos-ext-triggers build`, then `pnpm --filter @framers/agentos-ext-operations test`; CI builds every package before its tests. Fixture tests feed an address, a sentence, a token, a sign-in link and an error's sentence through every entry this release builds and find none of them in a table outside the support tables or in the package's own lines.
 
 ## Releases
 
