@@ -286,7 +286,7 @@ export function createOperations(options: OpsOptions): Operations {
   function registerShared(scheduler: NonNullable<OpsOptions['scheduler']>): void {
     registered = true;
     try {
-      for (const definition of registeredJobs(context, { sweep, totals, drain: drainOutboxes, fill: (days) => fillDailyTotalsOutcome(context, days) })) {
+      for (const definition of registeredJobs(context, { sweep, totals, drain: drainOutboxes, fill: (days, writer) => fillDailyTotalsOutcome(context, days, writer) })) {
         scheduler.register(definition);
       }
     } catch (error) {

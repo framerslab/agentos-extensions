@@ -8,10 +8,12 @@
  * `stop()` has begun answers `skipped` and begins nothing, since the host closes its database once
  * `stop()` answers (D47).
  */
+import type { StorageAdapter } from '@framers/sql-storage-adapter';
 import type { OpsContext } from '../context.js';
 import type { OpsJobDefinition } from '../contract.js';
 import { DAY_MS, FILL_DAYS_MAX, dayStartOf, type FillOutcome } from '../events/totals.js';
 import { ownLine } from '../own-lines.js';
+import { withTryLock } from './locks.js';
 import { SWEEP_JOB, type SweepJob } from './sweep.js';
 import { TOTALS_JOB, type TotalsJob } from './totals.js';
 
@@ -41,8 +43,8 @@ export interface RegisteredParts {
    * begun no further drain begins, and the counts say so.
    */
   drain(nowMs: number): Promise<DrainCounts>;
-  /** `events.fill` answering the metrics whose hook failed beside the rows written. */
-  fill(days: number): Promise<FillOutcome>;
+  /** `events.fill` answering the metrics whose hook failed beside the rows written; with `writer`, every row through it. */
+  fill(days: number, writer?: Pick<StorageAdapter, 'run'>): Promise<FillOutcome>;
 }
 
 /**
@@ -88,16 +90,23 @@ export function registeredJobs(context: OpsContext, parts: RegisteredParts): rea
       async run(run) {
         if (context.stopped) return { outcome: 'skipped', did: 'stopped' };
         // A catch-up writes every day it owes first (a metric marked fillsBack: false stays empty, as fill's rule says), then
-        // the night's day. A fill that throws, or leaves a metric of an owed day unwritten (its hook's own ops_job line names
-        // it), lets the night's day run and fails the try, so the scheduler runs the owed days again rather than count them served.
+        // the night's day. The fill reads which rows exist and writes the missing ones under the totals lock (`locks[2]`), as
+        // the nightly run does, so another process's totals never land between that read and its write. A fill that throws,
+        // that finds the lock held, or that leaves a metric of an owed day unwritten (its hook's own ops_job line names it) lets
+        // the night's day run and fails the try, so the scheduler runs the owed days again rather than count them served.
         let filled = 0;
         let fillFailed = false;
         const days = owedDays(context, run.covers);
         if (days > 1) {
           try {
-            const fill = await parts.fill(days);
-            filled = fill.written;
-            fillFailed = fill.failed.length > 0;
+            const held = await withTryLock(context.db, context.options.locks[2], (writer) => parts.fill(days, writer ?? undefined));
+            if (!held.taken) {
+              fillFailed = true;
+              ownLine(context.logger, 'warn', 'ops_job', { job: 'totals', step: 'fill', outcome: 'skipped' });
+            } else {
+              filled = held.answer.written;
+              fillFailed = held.answer.failed.length > 0;
+            }
           } catch {
             fillFailed = true;
             ownLine(context.logger, 'warn', 'ops_job', { job: 'totals', step: 'fill', outcome: 'failed' });

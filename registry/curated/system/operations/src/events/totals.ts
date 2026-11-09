@@ -275,8 +275,12 @@ export async function fillDailyTotals(context: OpsContext, days: number): Promis
   return (await fillDailyTotalsOutcome(context, days)).written;
 }
 
-/** `fillDailyTotals` answering the metrics whose hook failed beside the rows written, for a catch-up that must not count a day it left unwritten as served. */
-export async function fillDailyTotalsOutcome(context: OpsContext, days: number): Promise<FillOutcome> {
+/**
+ * `fillDailyTotals` answering the metrics whose hook failed beside the rows written, for a catch-up
+ * that must not count a day it left unwritten as served. With `writer` (the totals lock's
+ * transaction) every day's rows go through it, so the fill lands with the lock or not at all.
+ */
+export async function fillDailyTotalsOutcome(context: OpsContext, days: number, writer?: Pick<StorageAdapter, 'run'>): Promise<FillOutcome> {
   if (typeof days !== 'number' || !Number.isSafeInteger(days) || days < 1 || days > FILL_DAYS_MAX) {
     throw new TypeError(`fill: days must be an integer from 1 to ${FILL_DAYS_MAX}`);
   }
@@ -298,7 +302,7 @@ export async function fillDailyTotalsOutcome(context: OpsContext, days: number):
     const wanted = (entry: MetricEntry): boolean =>
       entry.fillsBack && !present.has(`${day}:${entry.name}`) && (entry.source !== 'own' || day >= ownFrom);
     if (!entries.some(wanted)) continue;
-    const outcome = await writeDailyTotals(context, day, { excluded, only: wanted });
+    const outcome = await writeDailyTotals(context, day, writer === undefined ? { excluded, only: wanted } : { excluded, only: wanted, writer });
     written += outcome.written;
     for (const metric of outcome.failed) failed.add(metric);
   }
