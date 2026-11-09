@@ -5,13 +5,14 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The file-system calls the export makes, watched: a test saves a file the moment one of them runs,
+ * The file-system calls the export makes, watched (each folder made, each file written, each file read): a test saves
+ * a file the moment one of them runs,
  * fills the disk (every later write fails ENOSPC), or makes the repository's files busy (every later
  * rename into the repository or removal from it fails EBUSY, as Windows answers for a file an editor
  * holds open).
  */
 const watch = vi.hoisted(() => ({
-  onMutation: undefined as undefined | ((call: 'mkdir' | 'writeFile', path: string) => void),
+  onMutation: undefined as undefined | ((call: 'mkdir' | 'writeFile' | 'readFile', path: string) => void),
   full: false,
   busy: false,
   /** The disk fills once a first file is renamed into the repository. */
@@ -30,6 +31,12 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     if (watch.full) return Promise.reject(failure('ENOSPC', 'no space left on device, write'));
     return real.writeFile(...args);
   }) as unknown as typeof real.writeFile;
+  // A read is a step too: a save landing while the export reads a staged file, after its last check of the
+  // destination, would be written over by the rename that follows.
+  const readFile = ((...args: Parameters<typeof real.readFile>) => {
+    watch.onMutation?.('readFile', String(args[0]));
+    return real.readFile(...args);
+  }) as unknown as typeof real.readFile;
   const rename = ((...args: Parameters<typeof real.rename>) => {
     const intoRepository = !String(args[1]).includes('.wildweave-export-');
     if (watch.busy && intoRepository) return Promise.reject(failure('EBUSY', 'resource busy or locked, rename'));
@@ -41,7 +48,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     if (watch.busy && !String(args[0]).includes('.wildweave-export-')) return Promise.reject(failure('EBUSY', 'resource busy or locked, rm'));
     return real.rm(...args);
   }) as unknown as typeof real.rm;
-  const mocked = { ...real, mkdir, writeFile, rename, rm };
+  const mocked = { ...real, mkdir, writeFile, readFile, rename, rm };
   return { ...mocked, default: mocked };
 });
 
