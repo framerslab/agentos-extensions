@@ -49,14 +49,32 @@ export function queryOf(params: Readonly<Record<string, string | number | undefi
   return pairs.length === 0 ? '' : `?${pairs.join('&')}`;
 }
 
-/** A JSON read's answer: the data, or the refusal's word (`{ error }` as `./http` answers it) with its status. */
-export type JsonAnswer<T> = { readonly data: T } | { readonly error: string; readonly status: number };
+/**
+ * A JSON read's answer: the data, or the refusal's word with its status, and `retryAt` when the
+ * refusal carries one (`hand_runs_used`: when the next hand run is allowed).
+ */
+export type JsonAnswer<T> = { readonly data: T } | { readonly error: string; readonly status: number; readonly retryAt?: number };
 
 /**
- * Reads `url` as JSON through the client: a refusal answers its word with its status, a read that
- * throws or a 2xx whose body is not JSON answers `failed` (with the status, 0 for a throw), and a
- * 204 or 205 answers `data: null`. The caller's headers go through in any form `fetch` takes (a
- * record, a `Headers`, pairs), with `Accept: application/json` added when the caller set none.
+ * A refusal's word and `retryAt` from its body: `{ error: <word> }` as `./http` answers it, or a
+ * host's own `{ error: { kind: <word> } }` (a product's routes answering their own error shape
+ * through the handlers' `refusal` option); `failed` when neither carries a word. `retryAt` is read
+ * beside `error` or inside it, when it is a number.
+ */
+function refusalOf(body: unknown): { readonly error: string; readonly retryAt?: number } {
+  const top = typeof body === 'object' && body !== null ? (body as { error?: unknown; retryAt?: unknown }) : {};
+  const inner = typeof top.error === 'object' && top.error !== null ? (top.error as { kind?: unknown; retryAt?: unknown }) : {};
+  const error = typeof top.error === 'string' ? top.error : typeof inner.kind === 'string' ? inner.kind : 'failed';
+  const retryAt = typeof top.retryAt === 'number' ? top.retryAt : typeof inner.retryAt === 'number' ? inner.retryAt : undefined;
+  return retryAt === undefined ? { error } : { error, retryAt };
+}
+
+/**
+ * Reads `url` as JSON through the client: a refusal answers its word with its status (and its
+ * `retryAt`), a read that throws or a 2xx whose body is not JSON answers `failed` (with the status,
+ * 0 for a throw), and a 204 or 205 answers `data: null`. The caller's headers go through in any
+ * form `fetch` takes (a record, a `Headers`, pairs), with `Accept: application/json` added when the
+ * caller set none.
  */
 export async function readJson<T>(client: OpsClient, url: string, init?: RequestInit): Promise<JsonAnswer<T>> {
   const headers = new Headers(init?.headers);
@@ -76,10 +94,7 @@ export async function readJson<T>(client: OpsClient, url: string, init?: Request
   } catch {
     body = null;
   }
-  if (!response.ok) {
-    const word = typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string' ? (body as { error: string }).error : 'failed';
-    return { error: word, status: response.status };
-  }
+  if (!response.ok) return { ...refusalOf(body), status: response.status };
   // A 2xx whose body is not JSON is a failed read, never data.
   if (!parsed) return { error: 'failed', status: response.status };
   return { data: body as T };
