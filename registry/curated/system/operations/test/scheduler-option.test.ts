@@ -668,6 +668,31 @@ describeBackends('the scheduler option', (backend: Backend) => {
     for (const day of [TODAY - 3 * DAY_MS, TODAY - 2 * DAY_MS, TODAY - DAY_MS]) expect(await daily(day, 'signups')).toHaveLength(3);
   });
 
+  it("a night's run that finds the totals lock held fails the try rather than serve its due time: on PostgreSQL an old process's nightly run holding it may still roll back, so the scheduler tries the night again and it lands once the lock is free; SQLite has no lock and writes", async () => {
+    const fake = fakeScheduler();
+    const clock = fakeClock(NOON);
+    const { ops, fixture } = build({ clock, options: { scheduler: fake.scheduler } });
+    ops.start({ shared: true });
+    const own = [TODAY + TOTALS_MINUTE];
+    if (backend.name === 'postgres') {
+      const other = await backend.open();
+      try {
+        // The old process's nightly run holds the lock and rolls back (stopped by the deploy before its commit): the night stays unwritten.
+        await other.transaction(async (trx) => {
+          await trx.get('SELECT pg_advisory_xact_lock(?)', [fixture.options.locks[2]]);
+          expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), own))).toMatchObject({ outcome: 'failed' });
+        });
+      } finally {
+        await other.close();
+      }
+      expect(await daily(TODAY - DAY_MS, 'signups')).toEqual([]);
+      expect(fixture.recorder.linesOf('ops_job')).toContainEqual({ level: 'warn', message: 'ops_job', fields: { job: 'totals', step: 'night', outcome: 'skipped' } });
+    }
+    // The scheduler's retry, with the lock free: the night lands.
+    expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), own))).toMatchObject({ outcome: 'ok' });
+    expect(await daily(TODAY - DAY_MS, 'signups')).toHaveLength(3);
+  });
+
   it("stop() while a catch-up waits on the product's excluded hook: once stop() has answered no statement begins and no second hook is called, and the run answers failed with one ops_job line, so the scheduler keeps the owed due times", async () => {
     const fake = fakeScheduler();
     const clock = fakeClock(NOON);
