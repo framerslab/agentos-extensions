@@ -329,13 +329,14 @@ export type OpsDiscordAnswer =
  */
 export interface Alerts {
   /**
-   * Writes one pending row, or nothing when a row of `dedupKey` is kept; answers the row's id or
-   * null, and never throws on a duplicate. Throws a `TypeError` for a source outside the name rule,
-   * a channel that is not a word, a key outside 1 to 200 characters or holding a control character,
-   * or a line that is not a string or holds a line break, and a `RangeError` for lines outside 1 to
-   * 2,000 characters or a line, key or source that carries a run of 32 hexadecimal characters, a
-   * UUID or an address. A channel past 50 pending rows has its oldest dropped, counted on one
-   * `ops_discord` line.
+   * Writes one pending row, or nothing when a row of `dedupKey` is kept; answers `{ id }` with the
+   * row's id, or null, and never throws on a duplicate. Throws a `TypeError` for a source outside the
+   * name rule, a channel that is not a word, a key outside 1 to 200 characters or holding a control
+   * character, or a line that is not a string or holds a line break, and a `RangeError` for lines
+   * outside 1 to 2,000 characters or a line, key or source that carries a run of 32 hexadecimal
+   * characters, a UUID or an address: a backstop for those shapes, while keeping a person's name, a
+   * short account id or a person's words out of an alert is the caller's. A channel past 50 pending
+   * rows has its oldest dropped, counted on one `ops_discord` line.
    */
   post(post: OpsDiscordPost): Promise<{ readonly id: string } | null>;
   /** The rows of one job, newest first, for the job page's Alerts panel: by `source`, or by `dedupKey` prefix; 10 by default, 50 at most. */
