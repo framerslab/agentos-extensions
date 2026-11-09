@@ -422,17 +422,18 @@ describe('useJob', () => {
     await act(async () => {
       pausing = hook.current().pause('x');
     });
-    let second: unknown;
+    // The second command is not awaited before the first is answered, so a hook that sent it waits on nothing.
+    let second!: Promise<unknown>;
     await act(async () => {
-      second = await hook.current().resume();
+      second = hook.current().resume();
     });
-    expect(second).toEqual({ error: 'busy', status: 409 });
     expect(posts).toEqual([`${BASE}/ticket_routing/pause`]);
     expect(hook.current().acting).toBe('pause');
     await act(async () => {
       held.resolve(json(paused));
       await pausing;
     });
+    await expect(second).resolves.toEqual({ error: 'busy', status: 409 });
     expect(hook.current()).toMatchObject({ acting: null, job: paused });
   });
 
