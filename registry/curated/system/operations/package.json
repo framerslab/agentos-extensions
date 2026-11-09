@@ -132,6 +132,7 @@
     }
   },
   "devDependencies": {
+    "@framers/agentos-ext-triggers": "workspace:^",
     "@framers/sql-storage-adapter": "^0.9.3",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",
