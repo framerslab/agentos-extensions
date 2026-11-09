@@ -12,7 +12,9 @@
  * message named within an hour; an error group 90 days after it was last seen, with its occurrences
  * and days; occurrences after 30 days; log lines and health samples after 14 days; events after 90
  * days; a delivered row of the lifecycle outbox 30 days after its delivery, an undelivered one never;
- * daily totals and ended outages after two years. Each step takes at most 1,000 rows a
+ * a settled row of the Discord outbox (delivered, dropped, or failed with its team mail settled) 30
+ * days after it settled, a pending one or one whose mail is still owed never; daily totals and ended
+ * outages after two years. Each step takes at most 1,000 rows a
  * statement and goes on until a statement takes fewer. On PostgreSQL each statement runs in a
  * transaction of its own that first tries the lock, so a backlog never becomes one long
  * transaction, and a statement that fails, or a commit the database refuses, loses its own rows
@@ -78,6 +80,7 @@ export const SWEEP_STEPS = [
   'lines',
   'events',
   'outbox',
+  'discord_outbox',
   'daily',
   'samples',
   'outages',
@@ -263,6 +266,7 @@ function steps(context: OpsContext): readonly Step[] {
     retention('lines', byId('log_lines', 'at < ?'), daysBefore(14)),
     retention('events', byId('events', 'at < ?'), daysBefore(90)),
     retention('outbox', byId('lifecycle_outbox', 'delivered_at IS NOT NULL AND delivered_at < ?'), daysBefore(30)),
+    retention('discord_outbox', byId('discord_outbox', 'settled_at IS NOT NULL AND settled_at < ?'), daysBefore(30)),
     retention(
       'daily',
       `DELETE FROM ${t('daily')} WHERE (day, metric, plan) IN (SELECT day, metric, plan FROM ${t('daily')} WHERE day < ? LIMIT ${SWEEP_BATCH})`,

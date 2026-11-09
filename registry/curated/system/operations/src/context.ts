@@ -198,6 +198,7 @@ export function createContext(options: OpsOptions): OpsContext {
   }
   if (options.audit !== undefined && !isFunction(options.audit)) throw new TypeError('createOperations: audit must be a function when given');
   if (options.now !== undefined && !isFunction(options.now)) throw new TypeError('createOperations: now must be a function when given');
+  if (options.discord !== undefined && !isFunction(options.discord)) throw new TypeError('createOperations: discord must be a function when given');
   const rule = requireFieldRules(options.fields);
   if (options.tickets !== undefined) {
     const tickets = options.tickets;

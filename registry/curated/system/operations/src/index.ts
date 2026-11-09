@@ -1,8 +1,10 @@
 /**
  * @fileoverview `@framers/agentos-ext-operations`: `createOperations`, `migrateOperations` and the
  * contract's types. A surface of the next minor release answers `not_built` at the call, never at
- * the import, until that release; `health.beat` and `health.status` are built.
+ * the import, until that release; `health.beat`, `health.status` and the Discord outbox
+ * (`operations.alerts`) are built.
  */
+import { createAlerts } from './alerts/outbox.js';
 import type { Errors, Operations, OpsOptions } from './contract.js';
 import { createContext } from './context.js';
 import { createEvents } from './events/index.js';
@@ -34,12 +36,14 @@ export type { LifecycleEvent, LifecycleKind, OutboxRow } from './events/index.js
 export { migrateOperations } from './store/migrations.js';
 export { OpsRefused } from './tickets/refusals.js';
 export type {
+  Alerts,
   Errors,
   Events,
   Health,
   Lines,
   Operations,
   OpsAuditEntry,
+  OpsAlertRow,
   OpsAuditKind,
   OpsBeatOutcome,
   OpsBoxSample,
@@ -48,6 +52,8 @@ export type {
   OpsCheckState,
   OpsCohort,
   OpsDerivedState,
+  OpsDiscordAnswer,
+  OpsDiscordPost,
   OpsErrorGroup,
   OpsErrorOccurrence,
   OpsErrorState,
@@ -147,6 +153,11 @@ const LATE = Symbol('late');
  * The lifecycle outbox is drained by `events.drainLifecycle`, which a product calls after each
  * commit that wrote a row and from a minute timer; `stop()` waits for a running drain within its
  * 3 seconds.
+ * The Discord outbox (`alerts`) holds the alerts a product's jobs post to its staff channels through
+ * the `discord` hook: `alerts.post` writes a row, and `alerts.sendDue`, which a product calls from
+ * a minute timer of its own until the scheduler's minute job calls it, delivers, retries, and 24
+ * hours after a row's first try gives it up into one team mail; `stop()` waits for a running drain
+ * within its 3 seconds, and no row begins once `stop()` has begun.
  */
 export function createOperations(options: OpsOptions): Operations {
   const context = createContext(options);
@@ -201,9 +212,12 @@ export function createOperations(options: OpsOptions): Operations {
 
   const tickets: TicketsModule | null = options.tickets === undefined ? null : createTickets(context, { alerts });
   const exporter = createExporter(context, (kind) => events.record(kind));
+  // The Discord outbox, under its own name: `alerts` above is the new request's team alert sender, which the tickets module takes.
+  const discordOutbox = createAlerts(context);
 
   return {
     tickets,
+    alerts: discordOutbox,
     errors: notBuiltSurface<Errors>('errors', ['capture', 'report', 'groups', 'group', 'setState']),
     lines: createLines(context),
     events,

@@ -124,6 +124,12 @@ function seeds(db: StorageAdapter, prefix: string) {
     event: (id: string, at: number) => db.run(`INSERT INTO ${t('events')} (id, at, kind) VALUES (?, ?, 'search')`, [id, at]),
     outbox: (id: string, deliveredAt: number | null) =>
       db.run(`INSERT INTO ${t('lifecycle_outbox')} (id, kind, plan, n, fields, created, delivered_at) VALUES (?, 'renewal', 'plus', 1, '{}', ?, ?)`, [id, NOW - 40 * DAY_MS, deliveredAt]),
+    discord: (id: string, state: 'pending' | 'delivered' | 'failed' | 'dropped', mailState: 'none' | 'owed' | 'sent' | 'failed', settledAt: number | null) =>
+      db.run(
+        `INSERT INTO ${t('discord_outbox')} (id, source, channel, dedup_key, content, state, attempts, next_at, mail_state, settled_at, created)
+         VALUES (?, 'ticket_routing', 'requests', ?, 'a', ?, 1, ?, ?, ?, ?)`,
+        [id, `key_${id}`, state, NOW - 40 * DAY_MS, mailState, settledAt, NOW - 40 * DAY_MS],
+      ),
     daily: (day: number) =>
       db.run(`INSERT INTO ${t('daily')} (day, metric, plan, value, updated_at) VALUES (?, 'signups', 'all', 1, ?)`, [day, day]),
     sample: (id: string, at: number) =>
@@ -179,7 +185,7 @@ describeBackends('the hourly sweep', (backend: Backend) => {
     expect(job.armed).toBe(false);
   });
 
-  it('removes what each retention has outlived and keeps what is younger: a request a year after it closed with its messages and pictures, pictures 90 days after their request closed, an error group 90 days after it was last seen with its days, occurrences after 30 days, lines and health samples after 14 days, events after 90 days, a delivered outbox row 30 days after delivery, daily rows and outages after two years', async () => {
+  it('removes what each retention has outlived and keeps what is younger: a request a year after it closed with its messages and pictures, pictures 90 days after their request closed, an error group 90 days after it was last seen with its days, occurrences after 30 days, lines and health samples after 14 days, events after 90 days, a delivered outbox row 30 days after delivery, a settled Discord outbox row (delivered, dropped, tried with no hook, or given up with its team mail sent or failed) 30 days after it settled, daily rows and outages after two years', async () => {
     await within(async (prefix) => {
       const seed = seeds(db, prefix);
       await seed.ticket('tkt_old', 'closed', NOW - 366 * DAY_MS);
@@ -211,6 +217,16 @@ describeBackends('the hourly sweep', (backend: Backend) => {
       await seed.outbox('evt_delivered_31', NOW - 31 * DAY_MS);
       await seed.outbox('evt_delivered_29', NOW - 29 * DAY_MS);
       await seed.outbox('evt_undelivered', null);
+      await seed.discord('dsc_delivered_31', 'delivered', 'none', NOW - 31 * DAY_MS);
+      await seed.discord('dsc_delivered_29', 'delivered', 'none', NOW - 29 * DAY_MS);
+      await seed.discord('dsc_pending', 'pending', 'none', null);
+      await seed.discord('dsc_failed_owed', 'failed', 'owed', null);
+      // Every other way a row settles goes by the same 30 days: dropped past a channel's bound, tried with no hook, given up with its mail sent or failed.
+      await seed.discord('dsc_dropped_31', 'dropped', 'none', NOW - 31 * DAY_MS);
+      await seed.discord('dsc_dropped_29', 'dropped', 'none', NOW - 29 * DAY_MS);
+      await seed.discord('dsc_no_hook_31', 'failed', 'none', NOW - 31 * DAY_MS);
+      await seed.discord('dsc_mail_sent_31', 'failed', 'sent', NOW - 31 * DAY_MS);
+      await seed.discord('dsc_mail_failed_31', 'failed', 'failed', NOW - 31 * DAY_MS);
       await seed.daily(TODAY - 731 * DAY_MS);
       await seed.daily(TODAY - 729 * DAY_MS);
       await seed.sample('smp_old', NOW - 15 * DAY_MS);
@@ -223,7 +239,7 @@ describeBackends('the hourly sweep', (backend: Backend) => {
       const run = await createSweepJob(createContext(fixture.options)).run();
       expect(run).toEqual({
         outcome: 'ok',
-        removed: { silence: 0, close: 0, requests: 1, pictures: 1, unattached: 0, error_groups: 1, occurrences: 1, lines: 1, events: 1, outbox: 1, daily: 1, samples: 1, outages: 1 },
+        removed: { silence: 0, close: 0, requests: 1, pictures: 1, unattached: 0, error_groups: 1, occurrences: 1, lines: 1, events: 1, outbox: 1, discord_outbox: 5, daily: 1, samples: 1, outages: 1 },
         failed: [],
       });
 
@@ -236,6 +252,8 @@ describeBackends('the hourly sweep', (backend: Backend) => {
       expect(await seed.ids('log_lines')).toEqual(['ln_edge', 'ln_new']);
       expect(await seed.ids('events')).toEqual(['evt_kept']);
       expect(await seed.ids('lifecycle_outbox')).toEqual(['evt_delivered_29', 'evt_undelivered']);
+      // A row still pending, or given up with its team mail still owed, has not settled and stays.
+      expect(await seed.ids('discord_outbox')).toEqual(['dsc_delivered_29', 'dsc_dropped_29', 'dsc_failed_owed', 'dsc_pending']);
       expect((await seed.ids('daily', 'day')).map(Number)).toEqual([TODAY - 729 * DAY_MS]);
       expect(await seed.ids('health_samples')).toEqual(['smp_new']);
       expect(await seed.ids('outages')).toEqual(['out_new', 'out_open']);

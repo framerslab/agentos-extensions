@@ -34,17 +34,22 @@ const COLUMNS: Readonly<Record<string, readonly string[]>> = {
   outages: ['id', 'started_at', 'ended_at', 'misses'],
   alerts: ['key', 'last_sent_at', 'pending', 'pending_count'],
   lifecycle_outbox: ['id', 'fact', 'kind', 'plan', 'n', 'fields', 'created', 'delivered_at'],
+  discord_outbox: [
+    'id', 'source', 'channel', 'dedup_key', 'content', 'state', 'attempts', 'first_attempt_at', 'next_at', 'delivered_at', 'delivery_id',
+    'last_answer', 'mail_state', 'mail_attempts', 'settled_at', 'created',
+  ],
   schema_migrations: ['name', 'checksum', 'applied_at'],
 };
 
 /** The package's migrations in number order. */
-const MIGRATIONS = ['0001_operations.sql', '0002_partial_indexes.sql', '0003_lifecycle_outbox.sql'];
+const MIGRATIONS = ['0001_operations.sql', '0002_partial_indexes.sql', '0003_lifecycle_outbox.sql', '0004_discord_outbox.sql'];
 
 /** The primary keys, by table. */
 const PRIMARY: Readonly<Record<string, readonly string[]>> = {
   tickets: ['id'], messages: ['id'], attachments: ['id'], error_groups: ['id'], error_events: ['id'],
   error_days: ['group_id', 'day'], log_lines: ['id'], events: ['id'], daily: ['day', 'metric', 'plan'],
-  health: ['name'], health_samples: ['id'], beats: ['job'], outages: ['id'], alerts: ['key'], lifecycle_outbox: ['id'], schema_migrations: ['name'],
+  health: ['name'], health_samples: ['id'], beats: ['job'], outages: ['id'], alerts: ['key'], lifecycle_outbox: ['id'], discord_outbox: ['id'],
+  schema_migrations: ['name'],
 };
 
 /** The indexes and unique keys, by table: the name's tail after the table, its columns, whether it is unique. */
@@ -74,6 +79,10 @@ const INDEXES: ReadonlyArray<{ table: string; tail: string; columns: readonly st
   { table: 'outages', tail: 'started_at', columns: ['started_at'], unique: false },
   { table: 'lifecycle_outbox', tail: 'fact_key', columns: ['fact'], unique: true },
   { table: 'lifecycle_outbox', tail: 'delivered_at', columns: ['delivered_at'], unique: false },
+  { table: 'discord_outbox', tail: 'dedup_key', columns: ['dedup_key'], unique: true },
+  { table: 'discord_outbox', tail: 'state_next_at', columns: ['state', 'next_at'], unique: false },
+  { table: 'discord_outbox', tail: 'settled_at', columns: ['settled_at'], unique: false },
+  { table: 'discord_outbox', tail: 'source_created', columns: ['source', 'created'], unique: false },
 ];
 
 /** The cascading keys, by table: the column, the parent table. */
@@ -233,6 +242,9 @@ describe('the shipped SQL', () => {
       // The third adds the outbox alone, its unique key an index, so both dialects name it the same.
       expect(migrations[2]?.sql.match(/CREATE TABLE IF NOT EXISTS acme_ops_/g)).toEqual(['CREATE TABLE IF NOT EXISTS acme_ops_']);
       expect(migrations[2]?.sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS acme_ops_lifecycle_outbox_fact_key ON acme_ops_lifecycle_outbox (fact);');
+      // The fourth adds the Discord outbox alone, its unique key an index too.
+      expect(migrations[3]?.sql.match(/CREATE TABLE IF NOT EXISTS acme_ops_/g)).toEqual(['CREATE TABLE IF NOT EXISTS acme_ops_']);
+      expect(migrations[3]?.sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS acme_ops_discord_outbox_dedup_key ON acme_ops_discord_outbox (dedup_key);');
     }
     expect(operationsMigrations('postgres', 'a')[0]?.sql).not.toBe(operationsMigrations('postgres', 'b')[0]?.sql);
     expect(operationsMigrations('postgres', 'a')[1]?.sql).not.toBe(operationsMigrations('postgres', 'b')[1]?.sql);
@@ -299,13 +311,13 @@ describeBackends('migrateOperations', (backend) => {
     await db.close();
   });
 
-  it('builds the sixteen tables under a prefix and applies nothing the second time', async () => {
+  it('builds the seventeen tables under a prefix and applies nothing the second time', async () => {
     const first = await migrateOperations(db, { prefix });
     expect(first.applied).toEqual(MIGRATIONS);
     expect(first.skipped).toEqual([]);
     const tables = await catalog(db, backend).tables(prefix);
     expect(tables).toEqual([...operationsTables(prefix)].sort());
-    expect(tables).toHaveLength(16);
+    expect(tables).toHaveLength(17);
 
     const second = await migrateOperations(db, { prefix });
     expect(second.applied).toEqual([]);
@@ -435,6 +447,30 @@ describeBackends('migrateOperations', (backend) => {
       ),
     ).rejects.toThrow();
     await db.run(`DELETE FROM ${table('tickets')} WHERE account_id = ?`, ['acct-2']);
+  });
+
+  it("refuses a Discord outbox row whose state or mail state is outside its enumeration, and a second row of one dedup key", async () => {
+    const now = 1_761_000_000_000;
+    const row = (id: string, dedupKey: string, state: string, mailState: string) =>
+      db.run(
+        `INSERT INTO ${table('discord_outbox')} (id, source, channel, dedup_key, content, state, next_at, mail_state, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, 'ticket_routing', 'requests', dedupKey, 'a', state, now, mailState, now],
+      );
+    await expect(row('d1', 'k1', 'sent', 'none')).rejects.toThrow();
+    await expect(row('d2', 'k2', 'pending', 'maybe')).rejects.toThrow();
+    await row('d3', 'k3', 'pending', 'none');
+    await expect(row('d4', 'k3', 'pending', 'none')).rejects.toThrow();
+    const stored = await db.get<{ attempts: number | string; mail_attempts: number | string; first_attempt_at: unknown; settled_at: unknown }>(
+      `SELECT attempts, mail_attempts, first_attempt_at, settled_at FROM ${table('discord_outbox')} WHERE id = ?`,
+      ['d3'],
+    );
+    expect({ attempts: Number(stored?.attempts), mailAttempts: Number(stored?.mail_attempts), first: stored?.first_attempt_at ?? null, settled: stored?.settled_at ?? null }).toEqual({
+      attempts: 0,
+      mailAttempts: 0,
+      first: null,
+      settled: null,
+    });
+    await db.run(`DELETE FROM ${table('discord_outbox')}`);
   });
 });
 
