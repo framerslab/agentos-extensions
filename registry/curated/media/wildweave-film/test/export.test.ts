@@ -293,7 +293,7 @@ describe('the fetched files when the repository moves under the export, or the r
     expect(fileRequests()).toEqual([]);
   });
 
-  it('checks the listed size of every entry, a second entry sharing a file's hash included', async () => {
+  it("checks the listed size of every entry, a second entry sharing a file's hash included", async () => {
     const root = repo('same');
     const clip = staged('assets/stock/pexels/2041/harbour.mp4', 'harbour clip bytes');
     const twin = { ...staged('assets/stock/pexels/2042/harbour.mp4', 'harbour clip bytes'), listedBytes: 999 };
