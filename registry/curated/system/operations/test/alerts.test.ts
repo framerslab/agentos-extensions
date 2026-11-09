@@ -5,6 +5,7 @@ import {
   ALERT_HOOK_TIMEOUT_MS,
   ALERT_MAIL_KEY,
   ALERT_PENDING_MAX,
+  DRAIN_ROWS_MAX,
   alertBackoffMs,
   createAlerts,
 } from '../src/alerts/outbox.js';
@@ -505,6 +506,8 @@ describeBackends('the Discord outbox', (backend: Backend) => {
         ['an address in a line', { ...POST, dedupKey: 'k3', lines: ['From dana.reyes@example.com'] }],
         ['an address in the key', { ...POST, dedupKey: 'waiting:dana@example.com' }],
         ['upper-case hexadecimal in a line', { ...POST, dedupKey: 'k4', lines: ['0123456789ABCDEF0123456789ABCDEF'] }],
+        // Inside the scheduler's name rule, so the shape check alone keeps it out.
+        ["an id's run in the source", { ...POST, dedupKey: 'k5', source: `job_${'0123456789abcdef'.repeat(2)}` }],
       ];
       for (const [what, post] of refused) {
         await expect(ops.alerts.post(post), what).rejects.toBeInstanceOf(RangeError);
@@ -1107,6 +1110,86 @@ describeBackends('the Discord outbox', (backend: Backend) => {
       expect(await keys('\u{1F514}:c')).toEqual(['\u{1F514}:c']);
       expect(await keys('\u{1F514}:cd')).toEqual([]);
       expect(await keys('')).toEqual(['\u{1F514}:c', 'job_failed:b', 'Job_failed:a']);
+    });
+  });
+
+  it('18. a drain asked for while one runs in the same operations joins it: both calls answer the one drain, and the hook is called once', async () => {
+    await within(async ({ prefix, clock, build }) => {
+      const hook = recordingHook();
+      const { ops } = build({ discord: hook.hook });
+      await ops.alerts.post(POST);
+      const held = deferred<OpsDiscordAnswer>();
+      hook.answers.push(() => held.promise);
+
+      const first = ops.alerts.sendDue(clock.now());
+      let joined: Promise<typeof NOTHING> = Promise.resolve(NOTHING);
+      try {
+        await vi.waitFor(() => expect(hook.calls).toHaveLength(1));
+        joined = ops.alerts.sendDue(clock.now());
+      } finally {
+        // Settled whatever passed above, so a failure never leaves the claim's transaction open under the tables' drop.
+        held.resolve({ outcome: 'sent', deliveryId: 'm18' });
+      }
+      expect(await joined).toEqual({ ...NOTHING, sent: 1 });
+      expect(await first).toEqual({ ...NOTHING, sent: 1 });
+      expect(hook.calls).toHaveLength(1);
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'delivered', deliveryId: 'm18', attempts: 1 });
+    });
+  });
+
+  it("19. a hook's answer outside the three, or one with a wait or a message id the drain cannot use, is a failed try by the backoff: the row goes on to its give-up and its mail", async () => {
+    await within(async ({ prefix, clock, build }) => {
+      const hook = recordingHook();
+      const { ops, fixture } = build({ discord: hook.hook });
+      await ops.alerts.post(POST);
+      const unusable: ReadonlyArray<readonly [string, unknown]> = [
+        ['a retry whose wait is not a number', { outcome: 'retry', afterMs: Number.NaN, status: 429 }],
+        ['a retry whose wait is below zero', { outcome: 'retry', afterMs: -5_000, status: 429 }],
+        ['a sent answer with no message id', { outcome: 'sent' }],
+        ['a sent answer with an empty message id', { outcome: 'sent', deliveryId: '' }],
+        ['no answer at all', null],
+        ['an outcome outside the three', { outcome: 'queued' }],
+        ['a failed answer whose status is not an integer', { outcome: 'failed', status: '503' }],
+      ];
+      for (const [index, [what, answer]] of unusable.entries()) {
+        hook.answers.push(answer as OpsDiscordAnswer);
+        expect({ what, run: await ops.alerts.sendDue(clock.now()) }).toEqual({ what, run: { ...NOTHING, retried: 1 } });
+        expect({ what, row: await stored(db, prefix, POST.dedupKey) }).toMatchObject({
+          what,
+          row: { state: 'pending', attempts: index + 1, firstAttemptAt: NOW, lastAnswer: 'no_answer', deliveryId: null, nextAt: clock.now() + alertBackoffMs(index + 1) },
+        });
+        clock.advance(alertBackoffMs(index + 1));
+      }
+      expect(fixture.recorder.linesOf('delivery_retry').map((line) => line.fields)).toEqual(
+        unusable.map((_, index) => ({ channel: 'requests', answer: 'no_answer', wait_s: alertBackoffMs(index + 1) / 1_000 })),
+      );
+
+      // Never stuck on an answer it cannot use: 24 hours after its first try the row gives up into its mail.
+      clock.set(NOW + ALERT_GIVE_UP_MS);
+      expect(await ops.alerts.sendDue(clock.now())).toEqual({ ...NOTHING, failed: 1 });
+      expect(hook.calls).toHaveLength(unusable.length);
+      expect(fixture.recorder.mails).toHaveLength(1);
+      expect(await stored(db, prefix, POST.dedupKey)).toMatchObject({ state: 'failed', lastAnswer: 'gave_up', mailState: 'sent' });
+    });
+  });
+
+  it('20. a drain tries 200 rows at most: a backlog past them goes on in the next drain, oldest first', async () => {
+    await within(async ({ prefix, clock, build }) => {
+      const hook = recordingHook();
+      const { ops } = build({ discord: hook.hook });
+      expect(DRAIN_ROWS_MAX).toBe(200);
+      // Over five channels, so no channel's bound of 50 drops a row.
+      for (let index = 0; index <= DRAIN_ROWS_MAX; index += 1) {
+        clock.advance(1);
+        await ops.alerts.post({ ...POST, channel: `c${index % 5}`, dedupKey: `backlog:${index}` });
+      }
+      expect(await countRows(db, prefix, "state = 'pending'")).toBe(DRAIN_ROWS_MAX + 1);
+
+      expect(await ops.alerts.sendDue(clock.now())).toEqual({ ...NOTHING, sent: DRAIN_ROWS_MAX });
+      expect(hook.calls).toHaveLength(DRAIN_ROWS_MAX);
+      expect(await stored(db, prefix, `backlog:${DRAIN_ROWS_MAX}`)).toMatchObject({ state: 'pending', attempts: 0 });
+      expect(await ops.alerts.sendDue(clock.now())).toEqual({ ...NOTHING, sent: 1 });
+      expect(await countRows(db, prefix, "state = 'delivered'")).toBe(DRAIN_ROWS_MAX + 1);
     });
   });
 });
