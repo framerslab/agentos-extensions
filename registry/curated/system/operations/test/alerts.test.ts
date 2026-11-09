@@ -944,6 +944,42 @@ describeBackends('the Discord outbox', (backend: Backend) => {
     });
   }, 30_000);
 
+  it("13f. stop() answering while a drain reads the channels past their bound starts no drop after it", async () => {
+    await within(async ({ prefix, clock, build }) => {
+      const late: string[] = [];
+      let answered = false;
+      const over = holdOnce((sql, method) => method === 'all' && sql.includes('HAVING COUNT(*)'), { armed: false });
+      const handle = watched(db, {
+        seen(sql) {
+          if (answered) late.push(sql);
+        },
+        hold: over.hold,
+      });
+      const { ops } = build({ discord: recordingHook().hook }, handle);
+      // One row past the bound, written another way than post (an older process), so the drain's own bound has a row to drop.
+      for (let index = 0; index <= ALERT_PENDING_MAX; index += 1) {
+        await db.run(
+          `INSERT INTO ${prefix}_discord_outbox (id, source, channel, dedup_key, content, state, attempts, next_at, created) VALUES (?, 'ticket_routing', 'requests', ?, 'a', 'pending', 0, ?, ?)`,
+          [`row-${index}`, `ticket_waiting:R-${index}:24`, NOW + index, NOW + index],
+        );
+      }
+      over.arm();
+
+      const draining = ops.alerts.sendDue(clock.now());
+      try {
+        await over.reached;
+        await ops.stop(); // past its 3 seconds: the read of the channels past their bound is held
+        answered = true;
+      } finally {
+        over.release();
+      }
+      expect(await draining).toEqual(NOTHING);
+      expect(late).toEqual([]);
+      expect(await countRows(db, prefix, "state = 'dropped'")).toBe(0);
+      expect(await countRows(db, prefix, "state = 'pending'")).toBe(ALERT_PENDING_MAX + 1);
+    });
+  }, 30_000);
+
   it('13c. on SQLite, rows whose hooks are still awaited past their claims never fill the drain\'s read: a row due behind twenty of them is delivered', async () => {
     if (backend.name === 'postgres') return; // PostgreSQL's read skips a locked row before its LIMIT
     await within(async ({ prefix, clock }) => {
