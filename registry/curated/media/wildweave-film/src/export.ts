@@ -497,6 +497,8 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
 
     /** Moves one staged file into place over the file the plan read, its backup made first, so a rollback only renames. */
     const land = async (l: Landing): Promise<void> => {
+      // The staged bytes' hash first, so no read stands between the destination's last check and the rename over it.
+      const landedSha = sha256Hex(await readFile(l.staged));
       // The file's folder and its backup come first, so a rollback only renames (it writes no byte, which a full
       // disk could refuse) and nothing but the hash stands between the file's last read and the rename over it.
       const folder = await mkdir(dirname(l.target), { recursive: true });
@@ -531,7 +533,6 @@ export async function exportFilm(input: ExportWriteInput, deps: ExportWriteDeps)
         held = current;
         heldSha = now;
       }
-      const landedSha = sha256Hex(await readFile(l.staged));
       await rename(l.staged, l.target);
       restored.push({ label: l.label, rel: l.rel, target: l.target, backup: held === null ? null : backup, sha256: landedSha });
     };
