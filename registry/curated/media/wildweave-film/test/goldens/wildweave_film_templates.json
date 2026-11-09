@@ -1,0 +1,228 @@
+{
+  "input": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "filmId": {
+        "description": "Also read this film's own templates table",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "additionalProperties": false
+  },
+  "output": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "result": {
+            "type": "object",
+            "properties": {
+              "definitions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "The look's id, such as title.morph, the template a layer names"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "title",
+                        "credits",
+                        "lower-third",
+                        "transition"
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "editable": {
+                      "description": "The groups of the look a person edits: type, colours, motion, timing, content"
+                    },
+                    "defaults": {},
+                    "params": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": {},
+                      "description": "The parameters' schema, as JSON Schema"
+                    },
+                    "thumbnailAtMs": {
+                      "type": "number"
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "description": "The template registry's definitions"
+              },
+              "transitions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The transition kinds the render box draws"
+              },
+              "saved": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "templateId": {
+                      "type": "string"
+                    },
+                    "base": {
+                      "type": "string"
+                    },
+                    "params": {},
+                    "name": {
+                      "type": "string"
+                    },
+                    "createdAtMs": {
+                      "type": "number"
+                    },
+                    "updatedAtMs": {
+                      "type": "number"
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "description": "The account's saved templates, where its plan authors them; none otherwise"
+              },
+              "film": {
+                "type": "object",
+                "properties": {
+                  "filmId": {
+                    "type": "string"
+                  },
+                  "templates": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  }
+                },
+                "additionalProperties": {},
+                "description": "With filmId: the film's own templates table"
+              }
+            },
+            "additionalProperties": {}
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "result"
+        ],
+        "additionalProperties": {}
+      },
+      {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "The refusal code, such as key_missing, engine_missing, stale_write, edit_refused, not_open"
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "description": "The route's HTTP status",
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "findings": {
+                "type": "array",
+                "items": {}
+              },
+              "sceneId": {
+                "type": "string"
+              },
+              "details": {
+                "description": "The rest of the route's answer, such as stale_write's current edit times",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              "refusal": {
+                "description": "The gate's envelope beside the code: the account's plan or room decides it, so the call is never sent again as it is",
+                "type": "object",
+                "properties": {
+                  "capability": {
+                    "type": "string"
+                  },
+                  "tier": {
+                    "type": "string"
+                  },
+                  "requiredPlan": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "upgradeUrl": {
+                    "type": "string"
+                  },
+                  "limit": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": {}
+                  },
+                  "checkoutPaused": {
+                    "type": "boolean"
+                  },
+                  "policyVersion": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "additionalProperties": {}
+      }
+    ]
+  }
+}

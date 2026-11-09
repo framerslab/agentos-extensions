@@ -179,6 +179,114 @@
                   }
                 },
                 "additionalProperties": {}
+              },
+              "fetch": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "The repository path the file is written at"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "url": {
+                      "type": "string",
+                      "description": "The files route's address of the file under the account's own folder"
+                    },
+                    "rights": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": {},
+                      "description": "The rights line the file carries: licence, its id and URL, attribution, rights, changes, notice, source"
+                    },
+                    "stockJson": {
+                      "type": "string",
+                      "description": "The librarian's record, written beside the file as stock.json"
+                    },
+                    "line": {
+                      "type": "object",
+                      "properties": {
+                        "sceneId": {
+                          "type": "string"
+                        },
+                        "index": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "additionalProperties": {},
+                      "description": "A generated take's line"
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "description": "Without writeTo: the staged files the timeline names that the repository does not hold yet, as the route lists them"
+              },
+              "fetched": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "stock": {
+                      "type": "string",
+                      "description": "Where its stock.json was written"
+                    },
+                    "forced": {
+                      "type": "boolean",
+                      "description": "True when force wrote over the file or its stock.json, which the repository held with other bytes"
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "description": "With writeTo: each staged file fetched, checked by its sha256 and written at its path"
+              },
+              "fetchUnchanged": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "With writeTo: each listed path the repository already held with the same sha256, never fetched"
+              },
+              "stockWritten": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Where the stock.json was written"
+                    },
+                    "file": {
+                      "type": "string",
+                      "description": "The held file it records"
+                    },
+                    "forced": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "description": "With writeTo: each stock.json written beside a file the repository already held with its sha256 and lacked the record of"
               }
             },
             "additionalProperties": {}
@@ -237,6 +345,41 @@
                 "type": "object",
                 "propertyNames": {
                   "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              "refusal": {
+                "description": "The gate's envelope beside the code: the account's plan or room decides it, so the call is never sent again as it is",
+                "type": "object",
+                "properties": {
+                  "capability": {
+                    "type": "string"
+                  },
+                  "tier": {
+                    "type": "string"
+                  },
+                  "requiredPlan": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "upgradeUrl": {
+                    "type": "string"
+                  },
+                  "limit": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": {}
+                  },
+                  "checkoutPaused": {
+                    "type": "boolean"
+                  },
+                  "policyVersion": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  }
                 },
                 "additionalProperties": {}
               }

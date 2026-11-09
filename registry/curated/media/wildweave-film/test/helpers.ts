@@ -218,6 +218,7 @@ export const SAMPLE_ARGS: Record<ToolName, Record<string, unknown>> = {
   wildweave_film_proposals: { filmId: FILM_ID },
   wildweave_film_proposal_submit: { filmId: FILM_ID, sceneId: 's02', kind: 'mark', title: 'A gull', body: '', rights: { basis: 'licensed' }, by: 'film-sound' },
   wildweave_film_proposal_decide: { filmId: FILM_ID, proposalId: '7d0f3c2a-5b1e-4c8d-9a6f-2e4b8c0d1a3f', verdict: 'yes', words: 'yes, keep the gull', source: 'relayed' },
+  wildweave_film_templates: {},
 };
 
 /** The tools a key is the first need of (remote, or both called remotely by the sample). */
@@ -238,6 +239,7 @@ export const REMOTE_SAMPLES: ToolName[] = [
   'wildweave_film_proposals',
   'wildweave_film_proposal_submit',
   'wildweave_film_proposal_decide',
+  'wildweave_film_templates',
 ];
 
 /** The tools the engine is the first need of. */
@@ -281,6 +283,8 @@ export interface ScriptedRequest {
 export interface ScriptedAnswer {
   status: number;
   body?: unknown;
+  /** Bytes sent as they are, in place of a JSON body: a file the files route serves. */
+  raw?: Buffer;
   headers?: Record<string, string>;
 }
 
@@ -315,6 +319,10 @@ export async function startScriptedStudio(): Promise<ScriptedStudio> {
       };
       state.requests.push(request);
       const out = state.answer(request);
+      if (out.raw !== undefined) {
+        res.writeHead(out.status, { 'content-type': 'application/octet-stream', 'content-length': String(out.raw.byteLength), ...(out.headers ?? {}) });
+        return void res.end(out.raw);
+      }
       res.writeHead(out.status, { 'content-type': 'application/json', ...(out.headers ?? {}) });
       res.end(out.body === undefined ? '' : JSON.stringify(out.body));
     });

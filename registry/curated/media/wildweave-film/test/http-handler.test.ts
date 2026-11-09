@@ -1,5 +1,5 @@
 /**
- * The pack's `http-handler` descriptor: with `options.http` the pack adds one handler beside its 22 tools, of the
+ * The pack's `http-handler` descriptor: with `options.http` the pack adds one handler beside its 23 tools, of the
  * shape AgentOS's `HttpHandlerPayload` names, which a host's own `node:http` server calls for every request it does not
  * route itself. It answers its path alone, to a caller on this machine that sends `Authorization: Bearer <http token>`,
  * and serves the tools there to a streamable HTTP client with the pack's key. A same-host reverse proxy makes a remote
@@ -134,7 +134,7 @@ describe("the pack's http-handler descriptor", () => {
     expect(pack.descriptors.map((d) => d.kind)).toEqual(TOOL_NAMES.map(() => 'tool'));
   });
 
-  it('is listed once beside the 22 tools with http.path and http.token, carrying its path', async () => {
+  it('is listed once beside the 23 tools with http.path and http.token, carrying its path', async () => {
     const pack = await createExtensionPack({ options: { http: { path: PATH, token: TOKEN } }, logDestination: quiet });
     expect(pack.descriptors.filter((d) => d.kind === 'tool').map((d) => d.id)).toEqual(TOOL_NAMES);
     const handler = httpHandlerOf(pack);
@@ -167,7 +167,7 @@ describe("the pack's http-handler descriptor", () => {
       await studio.close();
     });
 
-    it('serves the 22 tools at its path to a streamable HTTP client, with the key reaching the studio', async () => {
+    it('serves the 23 tools at its path to a streamable HTTP client, with the key reaching the studio', async () => {
       const client = new Client({ name: 'wildweave-film-test', version: '1.0.0' }, { versionNegotiation: { mode: 'auto' } });
       await client.connect(new StreamableHTTPClientTransport(new URL(`${host.origin}${PATH}`), { requestInit: { headers: { authorization: BEARER } } }));
       try {
@@ -356,7 +356,7 @@ describe("the endpoint's bearer token", () => {
       expect(studio.requests).toHaveLength(0);
     });
 
-    it('serves the 22 tools to a caller with the token, the key reaching the studio, and logs neither the token nor the key', async () => {
+    it('serves the 23 tools to a caller with the token, the key reaching the studio, and logs neither the token nor the key', async () => {
       expect(await listToolNames(`${proxy.origin}${PATH}`, { authorization: BEARER })).toEqual([...TOOL_NAMES].sort());
       const client = new Client({ name: 'wildweave-film-test', version: '1.0.0' }, { versionNegotiation: { mode: 'auto' } });
       await client.connect(new StreamableHTTPClientTransport(new URL(`${proxy.origin}${PATH}`), { requestInit: { headers: { authorization: `bearer ${TOKEN}` } } }));

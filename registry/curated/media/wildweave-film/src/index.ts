@@ -171,6 +171,7 @@ export function createToolContext(config: PackConfig, log: Logger, deps: ToolCon
     ...(config.key ? { key: config.key } : {}),
     baseUrl: config.baseUrl,
     engineConfigured: config.engineDir !== undefined,
+    ...(config.engineDir ? { engineDir: config.engineDir } : {}),
     log,
   };
 }

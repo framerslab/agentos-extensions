@@ -35,7 +35,7 @@ describe('the AgentOS pack', () => {
     expect(toolIsITool && packIsExtensionPack).toBe(true);
   });
 
-  it('loads with no key and no engine, and lists the 22 tools, each descriptor id its tool name', async () => {
+  it('loads with no key and no engine, and lists the 23 tools, each descriptor id its tool name', async () => {
     const pack = await createExtensionPack({ options: {}, logDestination: quiet });
     expect(pack.name).toBe('@framers/agentos-ext-wildweave-film');
     expect(pack.descriptors.map((d) => d.id)).toEqual(TOOL_NAMES);

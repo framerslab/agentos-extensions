@@ -298,6 +298,41 @@
                   "type": "string"
                 },
                 "additionalProperties": {}
+              },
+              "refusal": {
+                "description": "The gate's envelope beside the code: the account's plan or room decides it, so the call is never sent again as it is",
+                "type": "object",
+                "properties": {
+                  "capability": {
+                    "type": "string"
+                  },
+                  "tier": {
+                    "type": "string"
+                  },
+                  "requiredPlan": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "upgradeUrl": {
+                    "type": "string"
+                  },
+                  "limit": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": {}
+                  },
+                  "checkoutPaused": {
+                    "type": "boolean"
+                  },
+                  "policyVersion": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "additionalProperties": {}
               }
             },
             "required": [
