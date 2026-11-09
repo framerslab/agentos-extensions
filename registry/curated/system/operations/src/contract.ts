@@ -206,6 +206,50 @@ export interface OpsOptions {
    * parameters is unchanged.
    */
   discord?(post: OpsDiscordPost, db: StorageAdapter, signal: AbortSignal): Promise<OpsDiscordAnswer>;
+  /**
+   * The scheduler of record (`@framers/agentos-ext-triggers`'s `Scheduler`, which satisfies
+   * `OpsScheduler`). Given one, `start({ shared: true })` registers the three shared jobs on it
+   * (`ops_sweep`, `ops_totals` and the minute drain `ops_outbox`) in place of their own timers, so
+   * the product calls it before `scheduler.start()`, and each job's beat is written from the
+   * scheduler's `onRun` once its run has settled. Without one the timers run as before.
+   */
+  readonly scheduler?: OpsScheduler;
+}
+
+/** A run as the scheduler of record hands it to `onRun`: the parts this package reads. */
+export interface OpsScheduledRun {
+  readonly outcome: 'ok' | 'failed' | 'skipped' | 'running';
+  readonly endedAt: number | null;
+}
+
+/** What the scheduler of record gives a run of a shared job: the parts this package reads. */
+export interface OpsRunContext {
+  readonly now: number;
+  /** The due times the run covers: its own on a scheduled run; every missed one on a `required` catch-up. */
+  readonly covers: readonly number[];
+  readonly signal: AbortSignal;
+}
+
+/** A shared job as `@framers/agentos-ext-triggers` registers it: the fields this package sets. */
+export interface OpsJobDefinition {
+  readonly name: string;
+  readonly title: string;
+  readonly process: string;
+  readonly schedule: { readonly kind: 'every'; readonly everyMs: number } | { readonly kind: 'cron'; readonly expr: string };
+  readonly rule: 'catch_up_once' | 'skip' | 'required';
+  readonly stallAfterMs?: number;
+  readonly safeToRepeat: boolean;
+  run(context: OpsRunContext): Promise<{ readonly outcome?: 'ok' | 'skipped' | 'failed'; readonly did?: string } | void>;
+}
+
+/**
+ * The part of the scheduler of record this package calls, declared here so the package builds
+ * without the scheduler's own declarations: `@framers/agentos-ext-triggers`'s `Scheduler` satisfies
+ * it. `register` runs before the scheduler's `start()` and throws after it.
+ */
+export interface OpsScheduler {
+  register(definition: OpsJobDefinition): void;
+  onRun(handler: (job: { readonly name: string }, run: OpsScheduledRun) => void): () => void;
 }
 
 /** D48: who the person is and who is staff, read by `./http` alone. */
@@ -240,6 +284,11 @@ export interface Operations {
   readonly health: Health;
   /** The Discord outbox: the alerts the product's jobs post to its staff channels through the `discord` hook. */
   readonly alerts: Alerts;
+  /**
+   * Starts the timed flushes, and with `shared: true` the shared jobs: on their own timers, or, given
+   * `scheduler`, registered on it at the first such call, which throws what `register` throws (one
+   * when the scheduler has started already) after one `ops_job` line.
+   */
   start(options: { readonly shared: boolean }): void;
   stop(): Promise<void>;
   deleteAccount(trx: StorageAdapter, accountId: string): Promise<void>;
@@ -343,8 +392,8 @@ export interface Alerts {
   list(filter: { readonly source?: string; readonly prefix?: string }, options?: { readonly limit?: number }): Promise<readonly OpsAlertRow[]>;
   /**
    * The drain: each due row claimed for the whole of its try, delivered, tried again later, given
-   * up into a mail, or its owed mail sent; a product's minute job calls it, and may call it after a
-   * commit too. One run at a time in a process (a call while one runs joins it); `stop()` waits for
+   * up into a mail, or its owed mail sent; a product's minute job calls it (given `scheduler`, the
+   * shared job `ops_outbox`), and may call it after a commit too. One run at a time in a process (a call while one runs joins it); `stop()` waits for
    * a running one within its 3 seconds, and once `stop()` has begun no row begins. Rejects when the
    * database refuses a statement outside a hook.
    */
@@ -560,7 +609,8 @@ export interface Events {
    * Moves the undelivered rows of the lifecycle outbox into the events table, each through the
    * check `record` uses, under its own id and the drain's hour, in one transaction a batch: a batch
    * cut half way rolls back whole and the next run delivers each row once. A product calls it after
-   * each commit that wrote a row and from a minute timer in a process every deployment runs. One
+   * each commit that wrote a row and from a minute timer in a process every deployment runs (given
+   * `scheduler`, the shared job `ops_outbox` is that timer where the shared jobs run). One
    * run at a time in a process, a call while one runs joining it; `stop()` waits for a running
    * drain within its 3 seconds, and once it has answered a call reads nothing and answers zeros.
    * `pending` is the rows still undelivered when the run ends, `oldestMs` the oldest one's age,
@@ -897,9 +947,9 @@ export interface OpsStream {
  * refused (`refused`, 400; `not_found` from `picture`; nothing from a list). A request that is not
  * the person's answers `not_found`, never `forbidden`. `upload` takes a person or a staff member:
  * a staff upload carries no uploader (D18). `hangup` is for a product's account deletion step
- * (D20), and `sendDue` and `notifyDue` drain the mail and bell outboxes (D14, D15): the minute tick
- * of the next minor release calls them; until then a product that wants the mails calls them from
- * a timer of its own.
+ * (D20), and `sendDue` and `notifyDue` drain the mail and bell outboxes (D14, D15): given
+ * `scheduler`, its minute job `ops_outbox` calls them in the process that runs the shared jobs;
+ * without one a product that wants the mails calls them from a timer of its own.
  */
 export interface Tickets {
   open(actor: OpsPerson, input: OpsOpenInput): Promise<OpsTicket | OpsRefusal>;

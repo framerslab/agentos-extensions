@@ -100,6 +100,7 @@
     "character-entities": "^2.0.2"
   },
   "peerDependencies": {
+    "@framers/agentos-ext-triggers": ">=0.1.0",
     "@framers/sql-storage-adapter": ">=0.7.15",
     "react": "^19",
     "react-markdown": "^10",
@@ -109,6 +110,9 @@
     "zod": "^4"
   },
   "peerDependenciesMeta": {
+    "@framers/agentos-ext-triggers": {
+      "optional": true
+    },
     "@framers/sql-storage-adapter": {
       "optional": true
     },
@@ -132,6 +136,7 @@
     }
   },
   "devDependencies": {
+    "@framers/agentos-ext-triggers": "workspace:^",
     "@framers/sql-storage-adapter": "^0.9.3",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",

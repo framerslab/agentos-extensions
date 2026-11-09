@@ -23,7 +23,7 @@ export const WEEK_MS = 7 * DAY_MS;
 /** The migration whose `applied_at` says when the package's tables were made. */
 export const FIRST_MIGRATION = '0001_operations.sql';
 /** How many days `fill` may go back: ten years. */
-const FILL_DAYS_MAX = 3_660;
+export const FILL_DAYS_MAX = 3_660;
 
 /** The UTC day start holding `ms`. */
 export const dayStartOf = (ms: number): number => Math.floor(ms / DAY_MS) * DAY_MS;
@@ -259,6 +259,12 @@ export async function tablesMadeAt(context: OpsContext): Promise<number | null> 
   return row === null || row === undefined ? null : toMs(row.applied_at);
 }
 
+/** What a fill came to: the rows written and the metrics whose hook failed on one of its days, each named once. */
+export interface FillOutcome {
+  readonly written: number;
+  readonly failed: readonly string[];
+}
+
 /**
  * The totals of the last `days` days before today, oldest first, for the days and metrics with no
  * row yet: a host metric for every day unless its entry is marked `fillsBack: false`, an own
@@ -266,13 +272,38 @@ export async function tablesMadeAt(context: OpsContext): Promise<number | null> 
  * metric writes one `ops_job` line and the rest land; a failed write throws.
  */
 export async function fillDailyTotals(context: OpsContext, days: number): Promise<number> {
+  return (await fillDailyTotalsOutcome(context, days)).written;
+}
+
+/** How a fill runs: where its rows go and the excluded ids, when the caller read them already. */
+export interface FillOptions {
+  /** The totals lock's transaction: every day's rows go through it, so the fill lands with the lock or not at all. */
+  readonly writer?: Pick<StorageAdapter, 'run'>;
+  /** The excluded ids, read by the caller before the lock's transaction opened, so no transaction waits on the host's hook. */
+  readonly excluded?: readonly string[];
+  /**
+   * The UTC day start the `days` are counted back from (that day itself not written), when the caller counted them:
+   * today's when the caller read its clock, so a fill that begins after UTC midnight, behind the host's hook or the lock,
+   * still writes the days the caller counted, never the day after them in place of the first. Today's by default.
+   */
+  readonly today?: number;
+}
+
+/**
+ * `fillDailyTotals` answering the metrics whose hook failed beside the rows written, for a catch-up
+ * that must not count a day it left unwritten as served. Once `stop()` has answered it begins no
+ * further statement and answers what it wrote, since the host closes its database then (D47).
+ */
+export async function fillDailyTotalsOutcome(context: OpsContext, days: number, options: FillOptions = {}): Promise<FillOutcome> {
   if (typeof days !== 'number' || !Number.isSafeInteger(days) || days < 1 || days > FILL_DAYS_MAX) {
     throw new TypeError(`fill: days must be an integer from 1 to ${FILL_DAYS_MAX}`);
   }
-  const today = dayStartOf(context.now());
+  const today = dayStartOf(options.today ?? context.now());
   const first = today - days * DAY_MS;
-  const excluded = await readExcluded(context);
+  const excluded = options.excluded ?? (await readExcluded(context));
+  if (context.closed) return { written: 0, failed: [] };
   const made = await tablesMadeAt(context);
+  if (context.closed) return { written: 0, failed: [] };
   const ownFrom = made === null ? today : dayStartOf(made);
   const present = new Set<string>();
   const held = await context.db.all<{ day: number | string; metric: string }>(
@@ -281,12 +312,17 @@ export async function fillDailyTotals(context: OpsContext, days: number): Promis
   );
   for (const row of held) present.add(`${Number(row.day)}:${row.metric}`);
   const entries = [...metricEntries(context).values()];
+  const writer = options.writer;
   let written = 0;
+  const failed = new Set<string>();
   for (let day = first; day < today; day += DAY_MS) {
+    if (context.closed) break;
     const wanted = (entry: MetricEntry): boolean =>
       entry.fillsBack && !present.has(`${day}:${entry.name}`) && (entry.source !== 'own' || day >= ownFrom);
     if (!entries.some(wanted)) continue;
-    written += (await writeDailyTotals(context, day, { excluded, only: wanted })).written;
+    const outcome = await writeDailyTotals(context, day, writer === undefined ? { excluded, only: wanted } : { excluded, only: wanted, writer });
+    written += outcome.written;
+    for (const metric of outcome.failed) failed.add(metric);
   }
-  return written;
+  return { written, failed: [...failed] };
 }

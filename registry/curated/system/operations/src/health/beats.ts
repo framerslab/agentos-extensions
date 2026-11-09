@@ -1,7 +1,7 @@
 /**
  * @fileoverview The beats part of `Health`: `beat` writes a job's row in `<prefix>_beats` through
- * `writeBeat`, the shared jobs' own writer (never throws, never waits), and `status()` reads the
- * rows. The checks, queues, box samples and outages keep throwing `not_built` at the call until the
+ * `writeBeat`, the shared jobs' own writer (never throws, never waits), `beatAt` does the same for a
+ * run the scheduler of record hands over with its end, and `status()` reads the rows. The checks, queues, box samples and outages keep throwing `not_built` at the call until the
  * next minor release, and `status()` answers none of them. The `./health` entry's `createHealth`
  * stays its stub until then; `createOperations` builds this one.
  */
@@ -35,8 +35,20 @@ interface JobSlot {
   drained: Promise<void>;
 }
 
+/** The beats part of `Health`, and the writer the scheduler's `onRun` uses, which records a run at the time the run gives. */
+export interface Beats {
+  readonly health: Health;
+  /**
+   * Records a run of `job` that ended at `at` with `outcome`, through the same one write out a job
+   * as `beat`, so `stop()` waits for it within its deadline; never throws or waits. Once `stop()`
+   * has begun it writes nothing and leaves one `ops_job` line, as `beat` does.
+   */
+  beatAt(job: string, at: number, outcome: OpsBeatOutcome): void;
+}
+
 /**
- * Builds the beats part of `Health` over `context`. A job name outside the package's word rule (a
+ * Builds the beats part of `Health` over `context`, and `beatAt`, through which the scheduler's
+ * `onRun` records a shared job's run at its end. A job name outside the package's word rule (a
  * letter, then at most 31 lowercase letters, digits, underscores or hyphens) or an outcome that is
  * none of the three writes no row and one `ops_job` line with the word `refused`.
  *
@@ -53,7 +65,7 @@ interface JobSlot {
  * nothing and leaves the same line, so no beat begins a write after `stop()` answers and the host
  * closes its database (D47).
  */
-export function createBeatsHealth(context: OpsContext): Health {
+export function createBeats(context: OpsContext): Beats {
   const slots = new Map<string, JobSlot>();
   context.flushers.add(() => Promise.all([...slots.values()].map((slot) => slot.drained)).then(() => undefined));
 
@@ -74,20 +86,43 @@ export function createBeatsHealth(context: OpsContext): Health {
     }
   }
 
-  return {
+  /** Holds the checked beat `at` of `job` behind its write out, or starts the job's write. */
+  function hold(job: string, at: number, outcome: OpsBeatOutcome): void {
+    const slot = slots.get(job);
+    if (slot !== undefined) {
+      // The job's write is out: this beat waits behind it in place of the one waiting, keeping that one's last ok time.
+      slot.waiting = { at, outcome, okAt: outcome === 'ok' ? at : (slot.waiting?.okAt ?? null) };
+      return;
+    }
+    if (slots.size >= context.limits.beatQueue) {
+      ownLine(context.logger, 'warn', 'ops_job', { job: 'beat', outcome: 'dropped', count: 1 });
+      return;
+    }
+    const fresh: JobSlot = { waiting: { at, outcome, okAt: outcome === 'ok' ? at : null }, drained: Promise.resolve() };
+    slots.set(job, fresh);
+    fresh.drained = drain(job, fresh);
+  }
+
+  /** Whether a beat of `job` with `outcome` may be held: not once `stop()` has begun, and only a word with one of the three outcomes; a refusal leaves its line. */
+  function admitted(job: string, outcome: OpsBeatOutcome): boolean {
+    if (context.stopped) {
+      ownLine(context.logger, 'warn', 'ops_job', { job: 'beat', outcome: 'stopped', count: 1 });
+      return false;
+    }
+    if (!isWord(job) || !OUTCOMES.includes(outcome)) {
+      ownLine(context.logger, 'warn', 'ops_job', { job: 'beat', outcome: 'refused', count: 1 });
+      return false;
+    }
+    return true;
+  }
+
+  const health: Health = {
     check: () => notBuilt('health.check'),
     queue: () => notBuilt('health.queue'),
     box: () => notBuilt('health.box'),
     outage: () => notBuilt('health.outage'),
     beat(job, outcome) {
-      if (context.stopped) {
-        ownLine(context.logger, 'warn', 'ops_job', { job: 'beat', outcome: 'stopped', count: 1 });
-        return;
-      }
-      if (!isWord(job) || !OUTCOMES.includes(outcome)) {
-        ownLine(context.logger, 'warn', 'ops_job', { job: 'beat', outcome: 'refused', count: 1 });
-        return;
-      }
+      if (!admitted(job, outcome)) return;
       let at: number;
       try {
         at = context.now();
@@ -96,19 +131,7 @@ export function createBeatsHealth(context: OpsContext): Health {
         ownLine(context.logger, 'warn', 'ops_job', { job: 'beat', outcome: 'failed', count: 1 });
         return;
       }
-      const slot = slots.get(job);
-      if (slot !== undefined) {
-        // The job's write is out: this beat waits behind it in place of the one waiting, keeping that one's last ok time.
-        slot.waiting = { at, outcome, okAt: outcome === 'ok' ? at : (slot.waiting?.okAt ?? null) };
-        return;
-      }
-      if (slots.size >= context.limits.beatQueue) {
-        ownLine(context.logger, 'warn', 'ops_job', { job: 'beat', outcome: 'dropped', count: 1 });
-        return;
-      }
-      const fresh: JobSlot = { waiting: { at, outcome, okAt: outcome === 'ok' ? at : null }, drained: Promise.resolve() };
-      slots.set(job, fresh);
-      fresh.drained = drain(job, fresh);
+      hold(job, at, outcome);
     },
     async status(): Promise<OpsHealthStatus> {
       const rows = await context.db.all<BeatRow>(`SELECT job, last_at, outcome, last_ok_at FROM ${context.table('beats')} ORDER BY job`);
@@ -122,6 +145,18 @@ export function createBeatsHealth(context: OpsContext): Health {
         })),
         outages: [],
       };
+    },
+  };
+
+  return {
+    health,
+    beatAt(job, at, outcome) {
+      if (!admitted(job, outcome)) return;
+      if (!Number.isSafeInteger(at)) {
+        ownLine(context.logger, 'warn', 'ops_job', { job: 'beat', outcome: 'refused', count: 1 });
+        return;
+      }
+      hold(job, at, outcome);
     },
   };
 }
