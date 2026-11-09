@@ -812,4 +812,91 @@ describeBackends('the scheduler option', (backend: Backend) => {
       for (const name of [...TRIGGERS_TABLES].reverse()) await db.exec(`DROP TABLE IF EXISTS ${triggersPrefix}_${name}`);
     }
   });
+
+  it("on the real scheduler: a process back after two missed nights runs the totals once over the two due times the ledger owes and fills both days; a metric left unwritten fails the try, the due times stay owed and the retry writes them; one totals beat a run, at its end", async () => {
+    const triggersPrefix = freshPrefix();
+    await migrateTriggers(db, { prefix: triggersPrefix });
+    const logger = { info() {}, warn() {}, error() {} };
+    // The first process ran at noon on 20 October and stopped: its row holds the next due time, 00:20 on the 21st.
+    const clock = fakeClock(NOON - 2 * DAY_MS);
+    const before = createSchedulerForTests({ db, prefix: triggersPrefix, process: 'web', logger, now: clock.now });
+    let after: ReturnType<typeof createSchedulerForTests> | null = null;
+    try {
+      const { ops: gone } = build({ clock, options: { scheduler: before } });
+      gone.start({ shared: true });
+      await before.start();
+      expect((await before.get(TOTALS_JOB))?.nextDueAt).toBe(TODAY - DAY_MS + TOTALS_MINUTE);
+      await before.stop();
+      await gone.stop();
+
+      // The next process starts at noon on the 22nd; the usage history behind yesterday answers nothing until it is restored.
+      clock.set(NOON);
+      let historyGone = true;
+      const scheduler = createSchedulerForTests({ db, prefix: triggersPrefix, process: 'web', logger, now: clock.now });
+      after = scheduler;
+      const counted = countingBeats(db, prefix);
+      const { ops } = build({
+        db: counted.db,
+        clock,
+        options: {
+          scheduler,
+          metrics: {
+            plans: FIXTURE_PLANS,
+            metrics: {
+              signups: FIXTURE_METRICS.signups,
+              minutes: async (handle, dayStartMs, dayEndMs, excluded) => {
+                if (historyGone && dayStartMs < TODAY - DAY_MS) throw new Error('the usage history is not back yet');
+                return FIXTURE_METRICS.minutes(handle, dayStartMs, dayEndMs, excluded);
+              },
+            },
+            excluded: async () => [],
+          },
+        },
+      });
+      ops.start({ shared: true });
+      await scheduler.start();
+      // The restore records the two due times missed (00:20 on the 21st owes the 20th, 00:20 on the 22nd owes the 21st), both owed.
+      const owed = [TODAY - DAY_MS + TOTALS_MINUTE, TODAY + TOTALS_MINUTE];
+      const ledger = async () => (await scheduler.missed(TOTALS_JOB)).map((row) => ({ dueAt: row.dueAt, action: row.action, served: row.runId !== null })).sort((a, b) => a.dueAt - b.dueAt);
+      expect(await ledger()).toEqual(owed.map((dueAt) => ({ dueAt, action: 'caught_up', served: false })));
+
+      await scheduler.tick();
+      await scheduler.settled();
+      const [first] = await scheduler.runs(TOTALS_JOB);
+      expect(first).toMatchObject({ outcome: 'failed', tries: 1 });
+      // The fill wrote what it could: the 20th's signups, and the night's day whole; the 20th's minutes stay unwritten.
+      expect(await daily(TODAY - 2 * DAY_MS, 'signups')).toHaveLength(3);
+      expect(await daily(TODAY - 2 * DAY_MS, 'minutes')).toEqual([]);
+      expect(await daily(TODAY - DAY_MS, 'minutes')).toHaveLength(3);
+      // A failed try serves no due time: both stay owed, and the scheduler holds the job for a retry.
+      expect(await ledger()).toEqual(owed.map((dueAt) => ({ dueAt, action: 'caught_up', served: false })));
+      const retrying = (await scheduler.get(TOTALS_JOB))!.retrying;
+      expect(retrying).toMatchObject({ tries: 1 });
+      await until(async () => (await beatOf(TOTALS_JOB)) !== null, 'the failed ops_totals beat');
+      expect(await beatOf(TOTALS_JOB)).toEqual({ job: TOTALS_JOB, lastAt: first!.endedAt, outcome: 'failed', lastOkAt: null });
+
+      historyGone = false;
+      clock.set(retrying!.nextAt);
+      await scheduler.tick();
+      await scheduler.settled();
+      const [second] = await scheduler.runs(TOTALS_JOB);
+      expect(second).toMatchObject({ outcome: 'ok', tries: 2 });
+      expect(await daily(TODAY - 2 * DAY_MS, 'minutes')).toEqual([
+        ['all', 160],
+        ['free', 40],
+        ['plus', 120],
+      ]);
+      expect(await daily(TODAY - 3 * DAY_MS, 'signups')).toEqual([]);
+      expect(await ledger()).toEqual(owed.map((dueAt) => ({ dueAt, action: 'caught_up', served: true })));
+      expect((await scheduler.get(TOTALS_JOB))?.nextDueAt).toBe(TODAY + DAY_MS + TOTALS_MINUTE);
+      await until(async () => counted.writes(TOTALS_JOB) === 2 && (await beatOf(TOTALS_JOB))?.outcome === 'ok', 'the second ops_totals beat');
+      expect(await beatOf(TOTALS_JOB)).toEqual({ job: TOTALS_JOB, lastAt: second!.endedAt, outcome: 'ok', lastOkAt: second!.endedAt });
+      expect(counted.writes(TOTALS_JOB)).toBe(2);
+      await scheduler.stop();
+    } finally {
+      await before.stop().catch(() => undefined);
+      await after?.stop().catch(() => undefined);
+      for (const name of [...TRIGGERS_TABLES].reverse()) await db.exec(`DROP TABLE IF EXISTS ${triggersPrefix}_${name}`);
+    }
+  });
 });
