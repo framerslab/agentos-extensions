@@ -22,7 +22,7 @@ import { TOTALS_JOB, createTotalsJob } from '../src/jobs/totals.js';
 import { dialectOf } from '../src/store/migrations.js';
 import { describeBackends, dropOperationsTables, freshPrefix, type Backend } from './helpers/adapters.js';
 import { fakeClock, type FakeClock } from './helpers/clock.js';
-import { FIXTURE_FIELDS, FIXTURE_PLANS, fixtureOptions, type Fixture } from './helpers/host.js';
+import { FIXTURE_FIELDS, FIXTURE_METRICS, FIXTURE_PLANS, fixtureOptions, type Fixture } from './helpers/host.js';
 import { PERSON, STAFF, ok } from './helpers/tickets.js';
 
 const MINUTE = 60_000;
@@ -489,6 +489,49 @@ describeBackends('the scheduler option', (backend: Backend) => {
     expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), [TODAY + TOTALS_MINUTE]))).toMatchObject({ outcome: 'ok' });
     expect(fill).not.toHaveBeenCalled();
     expect(await beats()).toEqual([]);
+  });
+
+  it("a catch-up of yesterday's one missed due time, run before today's 00:20, fills the day that due time owed as well as the night's day", async () => {
+    const fake = fakeScheduler();
+    // 00:10 UTC on 23 October: the process was down at 00:20 on the 22nd, which owed the 21st, and the 23rd's run is still ahead.
+    const clock = fakeClock(TODAY + DAY_MS + 10 * MINUTE);
+    const { ops } = build({ clock, options: { scheduler: fake.scheduler } });
+    ops.start({ shared: true });
+    const fill = vi.spyOn(ops.events, 'fill');
+    expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), [TODAY + TOTALS_MINUTE]))).toMatchObject({ outcome: 'ok' });
+    expect(fill.mock.calls).toEqual([[2]]);
+    expect(await daily(TODAY - DAY_MS, 'signups')).toHaveLength(3);
+    expect(await daily(TODAY, 'signups')).toHaveLength(3);
+    expect(await daily(TODAY - 2 * DAY_MS, 'signups')).toEqual([]);
+  });
+
+  it('a catch-up whose fill leaves a metric unwritten for a missed day fails the run, so the scheduler tries the owed days again, though the night itself landed', async () => {
+    const fake = fakeScheduler();
+    const clock = fakeClock(NOON);
+    const { ops } = build({
+      clock,
+      options: {
+        scheduler: fake.scheduler,
+        metrics: {
+          plans: FIXTURE_PLANS,
+          metrics: {
+            signups: FIXTURE_METRICS.signups,
+            // The source answers yesterday and refuses the days before it.
+            minutes: async (db, dayStartMs, dayEndMs, excluded) => {
+              if (dayStartMs < TODAY - DAY_MS) throw new Error('the usage history is gone');
+              return FIXTURE_METRICS.minutes(db, dayStartMs, dayEndMs, excluded);
+            },
+          },
+          excluded: async () => [],
+        },
+      },
+    });
+    ops.start({ shared: true });
+    const covers = [TODAY - 2 * DAY_MS + TOTALS_MINUTE, TODAY - DAY_MS + TOTALS_MINUTE, TODAY + TOTALS_MINUTE];
+    expect(await definition(fake, 'ops_totals').run(runContext(clock.now(), covers))).toMatchObject({ outcome: 'failed' });
+    expect(await daily(TODAY - DAY_MS, 'minutes')).toHaveLength(3);
+    expect(await daily(TODAY - 3 * DAY_MS, 'minutes')).toEqual([]);
+    expect(await daily(TODAY - 3 * DAY_MS, 'signups')).toHaveLength(3);
   });
 
   it('a catch-up batch whose due times all lie before today fills from the first day it covers to yesterday, so a batch the scheduler cut leaves no day behind', async () => {
