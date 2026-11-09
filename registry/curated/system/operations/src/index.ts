@@ -170,7 +170,9 @@ const LATE = Symbol('late');
  * written from the scheduler's `onRun` at each settled run's end, one beat a run. `stop()` waits for
  * a running minute drain within its 3 seconds, and once it has begun no drain behind the running one
  * begins and no registered job's body begins anything. The product calls
- * `start({ shared: true })` before `scheduler.start()`, since `register` throws once it has started.
+ * `start({ shared: true })` before `scheduler.start()`, since `register` throws once it has started;
+ * a refused registration throws from `start` with the process's own timers armed, and the next
+ * `start({ shared: true })` registers the jobs left.
  * Without a scheduler, a product that wants the mails, the alerts and the lifecycle rows delivered
  * calls the four drains from a minute timer of its own.
  */
@@ -279,25 +281,36 @@ export function createOperations(options: OpsOptions): Operations {
     }
   }
 
-  /** Whether the shared jobs are registered on the scheduler: once, at the first `start({ shared: true })`. */
-  let registered = false;
+  /** The shared jobs this process has registered on the scheduler; a registration it refuses leaves the rest to the next `start({ shared: true })`. */
+  const registered = new Set<string>();
+  /** Whether the run handler is subscribed: once, at the first `start({ shared: true })`. */
+  let subscribed = false;
 
-  /** Registers the shared jobs on the scheduler and writes each one's beat from its settled runs; throws what `register` throws. */
+  /**
+   * Registers on the scheduler the shared jobs this process has not registered yet, and writes the beat of each one it
+   * registered from its settled runs. Throws what `register` (or `onRun`) throws, after one `ops_job` line; the jobs
+   * registered before the refusal stay registered and beat, and the next call registers the ones left.
+   */
   function registerShared(scheduler: NonNullable<OpsOptions['scheduler']>): void {
-    registered = true;
     try {
+      if (!subscribed) {
+        // One beat a run: the bodies write none, and a run of a job this process registered, handed over once it has
+        // settled, writes it at the run's end. A refused name is another job's (a host's own of that name), so it writes none.
+        scheduler.onRun((job, run) => {
+          if (run.outcome === 'running' || run.endedAt === null || !registered.has(job.name)) return;
+          beats.beatAt(job.name, run.endedAt, run.outcome);
+        });
+        subscribed = true;
+      }
       for (const definition of registeredJobs(context, { sweep, totals, drain: drainOutboxes, fill: (days, writer) => fillDailyTotalsOutcome(context, days, writer) })) {
+        if (registered.has(definition.name)) continue;
         scheduler.register(definition);
+        registered.add(definition.name);
       }
     } catch (error) {
       ownLine(context.logger, 'warn', 'ops_job', { job: 'scheduler', step: 'register', outcome: 'failed' });
       throw error;
     }
-    // One beat a run: the bodies write none, and a run the scheduler hands over once it has settled writes it at the run's end.
-    scheduler.onRun((job, run) => {
-      if (run.outcome === 'running' || run.endedAt === null || !SHARED_JOBS.includes(job.name)) return;
-      beats.beatAt(job.name, run.endedAt, run.outcome);
-    });
   }
 
   return {
@@ -311,10 +324,12 @@ export function createOperations(options: OpsOptions): Operations {
       if (context.stopped) return;
       if (shared === true) context.shared = true;
       context.started = true;
-      // Given a scheduler, the shared jobs are registered on it once, before the product starts it; its own timers stay unarmed.
-      if (options.scheduler !== undefined && context.shared && !registered) registerShared(options.scheduler);
-      // Each timer's start is idempotent, so a second call arms only what the first left unarmed.
+      // Each timer's start is idempotent, so a second call arms only what the first left unarmed. The timers arm first, so a
+      // registration the scheduler refuses below leaves the process's own flushes running.
       for (const timer of context.timers) timer.start();
+      // Given a scheduler, the shared jobs are registered on it once each, before the product starts it; the sweep's and the
+      // totals' own timers stay unarmed. A refusal throws here, and the next start({ shared: true }) registers the jobs left.
+      if (options.scheduler !== undefined && context.shared && registered.size < SHARED_JOBS.length) registerShared(options.scheduler);
     },
     async stop() {
       if (context.stopped) return;
