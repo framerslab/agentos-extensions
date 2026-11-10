@@ -3,8 +3,13 @@
  * @fileoverview Main guardrail orchestrator for content policy rewriting.
  *
  * Implements IGuardrailService with a two-layer hybrid pipeline:
- * - Layer 1: KeywordPreFilter on streaming TEXT_DELTA chunks (zero-cost)
- * - Layer 2: LLM Policy Judge + LLM Rewriter on FINAL_RESPONSE
+ * - Layer 1: KeywordPreFilter on streaming text deltas (zero-cost)
+ * - Layer 2: LLM Policy Judge + LLM Rewriter on the final response
+ *
+ * Chunks are read as the AgentOS runtime emits them (`AgentOSResponseChunkType`):
+ * a delta is `{ type: 'text_delta', textDelta }`, the final response
+ * `{ type: 'final_response', finalResponseText }`. The type is compared without
+ * regard to case, and a delta's `text` field is read when `textDelta` is absent.
  *
  * Phase 1 sanitizer — sequential execution, can return SANITIZE with modifiedText.
  *
@@ -21,6 +26,22 @@ import { LlmRewriter } from './LlmRewriter.js';
 /** GuardrailAction values (avoid import issues by inlining). */
 const BLOCK = 'block';
 const SANITIZE = 'sanitize';
+
+/** AgentOSResponseChunkType values (avoid import issues by inlining). */
+const TEXT_DELTA = 'text_delta';
+const FINAL_RESPONSE = 'final_response';
+
+/** The chunk's type in the runtime's lower-case form. */
+function chunkTypeOf(chunk: any): string {
+  return typeof chunk?.type === 'string' ? chunk.type.toLowerCase() : '';
+}
+
+/** A delta's text: `textDelta` as the runtime emits it, else `text`. */
+function deltaTextOf(chunk: any): string {
+  if (typeof chunk?.textDelta === 'string') return chunk.textDelta;
+  if (typeof chunk?.text === 'string') return chunk.text;
+  return '';
+}
 
 export interface ContentPolicyRewriterOptions extends ContentPolicyRewriterConfig {
   llmInvoker: LlmInvoker;
@@ -71,9 +92,13 @@ export class ContentPolicyRewriterGuardrail {
     const hasEnabledCategories = Object.keys(this.enabledCategories).length > 0;
     if (!hasEnabledCategories) return null;
 
+    const type = chunkTypeOf(chunk);
+
     // Layer 1: Keyword pre-filter on streaming chunks
-    if (chunk.type === 'TEXT_DELTA' && chunk.text) {
-      const match = this.keywordFilter.scan(chunk.text, this.enabledCategories);
+    if (type === TEXT_DELTA) {
+      const text = deltaTextOf(chunk);
+      if (!text) return null;
+      const match = this.keywordFilter.scan(text, this.enabledCategories);
       if (match) {
         const action = this.enabledCategories[match.category]?.action ?? BLOCK;
         return {
@@ -86,7 +111,7 @@ export class ContentPolicyRewriterGuardrail {
     }
 
     // Layer 2: LLM judge + rewriter on final response
-    if (chunk.type === 'FINAL_RESPONSE' && chunk.finalResponseText) {
+    if (type === FINAL_RESPONSE && typeof chunk.finalResponseText === 'string' && chunk.finalResponseText) {
       const text = chunk.finalResponseText;
 
       // Quick keyword check — BLOCK immediately if keyword match + action=block

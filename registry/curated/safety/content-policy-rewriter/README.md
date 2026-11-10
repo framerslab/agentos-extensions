@@ -37,6 +37,15 @@ const pack = createContentPolicyRewriter({
 const pack = createContentPolicyRewriter('uncensored');
 ```
 
+## What it judges
+
+The guard reads the chunks of an AgentOS output stream as the runtime emits them (`AgentOSResponseChunkType`):
+
+- **Text deltas** (`type: 'text_delta'`, text in `textDelta`): the keyword pre-filter scans each delta. A match in a `block` category ends the stream with an error chunk whose `code` is `KEYWORD_<CATEGORY>`; a match in a `sanitize` category replaces the delta with `[Content removed by policy]`. Set `streamingPreFilter: false` to skip deltas.
+- **The final response** (`type: 'final_response'`, text in `finalResponseText`): a keyword match in a `block` category blocks at once, with no LLM call. Otherwise the LLM judge classifies the text against the enabled categories; when every violation is in a `block` category the reply is blocked, else the LLM rewriter writes the replacement and the guard returns it as a `sanitize`.
+
+Every other chunk passes unjudged. A host that calls `evaluateOutput()` itself passes the same chunk shapes.
+
 ## agent.config.json
 
 ```json
