@@ -47,4 +47,30 @@ export class KeywordPreFilter {
     }
     return null;
   }
+
+  /**
+   * Scan text for the first match that ends after `minEnd`, so a caller that
+   * prepends text it has already judged finds only matches reaching into the
+   * new text. Categories are tried in the order given by `enabledCategories`.
+   * @returns The first such match, or null.
+   */
+  scanAfter(
+    text: string,
+    enabledCategories: Partial<Record<PolicyCategory, CategoryConfig>>,
+    minEnd: number,
+  ): KeywordMatch | null {
+    for (const cat of Object.keys(enabledCategories) as PolicyCategory[]) {
+      const cfg = enabledCategories[cat];
+      if (!cfg?.enabled) continue;
+      for (const re of this.patterns.get(cat) ?? []) {
+        const global = new RegExp(re.source, 'gi');
+        let m: RegExpExecArray | null;
+        while ((m = global.exec(text)) !== null) {
+          if (m.index + m[0].length > minEnd) return { category: cat, keyword: m[0] };
+          if (m[0].length === 0) global.lastIndex++;
+        }
+      }
+    }
+    return null;
+  }
 }
