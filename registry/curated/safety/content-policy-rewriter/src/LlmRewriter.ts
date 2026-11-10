@@ -12,11 +12,25 @@ const SYSTEM_PROMPT = `Rewrite the following text to remove policy violations wh
 export class LlmRewriter {
   constructor(private llmInvoker: LlmInvoker) {}
 
+  /**
+   * Rewrite the text. Returns the original text when the LLM call fails or returns nothing; use
+   * {@link tryRewrite} to tell a failure from a rewrite.
+   */
   async rewrite(text: string, violations: PolicyViolation[], customRules?: string): Promise<string> {
     if (violations.length === 0) return text;
+    return (await this.tryRewrite(text, violations, customRules)) ?? text;
+  }
 
+  /**
+   * Rewrite the text.
+   * @returns The rewritten text, or null when the LLM call failed or returned no text.
+   */
+  async tryRewrite(text: string, violations: PolicyViolation[], customRules?: string): Promise<string | null> {
     const violationList = violations
-      .map(v => `- ${v.category}: ${v.spans.map(s => `"${s}"`).join(', ')}`)
+      .map(v => {
+        const spans = Array.isArray(v.spans) ? v.spans.filter(s => typeof s === 'string') : [];
+        return spans.length > 0 ? `- ${v.category}: ${spans.map(s => `"${s}"`).join(', ')}` : `- ${v.category}`;
+      })
       .join('\n');
 
     let userPrompt = `Violations to remove:\n${violationList}\n`;
@@ -25,9 +39,10 @@ export class LlmRewriter {
 
     try {
       const raw = await this.llmInvoker(SYSTEM_PROMPT, userPrompt);
-      return raw.replace(/^```\w*\s*\n?/gm, '').replace(/\n?```\s*$/gm, '').trim() || text;
+      const cleaned = String(raw ?? '').replace(/^```\w*\s*\n?/gm, '').replace(/\n?```\s*$/gm, '').trim();
+      return cleaned || null;
     } catch {
-      return text;
+      return null;
     }
   }
 }

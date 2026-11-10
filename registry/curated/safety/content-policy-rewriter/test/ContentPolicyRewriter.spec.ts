@@ -68,6 +68,20 @@ describe('ContentPolicyRewriterGuardrail', () => {
   });
 
   it('returns null when no categories enabled', async () => {
+    // illegal_harmful is on by default, so every category is turned off by name here.
+    const mockLlm = vi.fn();
+    const g = new ContentPolicyRewriterGuardrail({
+      llmInvoker: mockLlm,
+      categories: { illegal_harmful: { enabled: false } },
+    });
+    const result = await g.evaluateOutput({
+      chunk: { type: 'FINAL_RESPONSE', finalResponseText: 'Anything goes.' },
+    });
+    expect(result).toBeNull();
+    expect(mockLlm).not.toHaveBeenCalled();
+  });
+
+  it('blocks with JUDGE_FAILED when the default category is on and the judge returns nothing', async () => {
     const g = new ContentPolicyRewriterGuardrail({
       llmInvoker: vi.fn(),
       categories: {},
@@ -75,6 +89,6 @@ describe('ContentPolicyRewriterGuardrail', () => {
     const result = await g.evaluateOutput({
       chunk: { type: 'FINAL_RESPONSE', finalResponseText: 'Anything goes.' },
     });
-    expect(result).toBeNull();
+    expect(result).toEqual({ action: 'block', reasonCode: 'JUDGE_FAILED' });
   });
 });
