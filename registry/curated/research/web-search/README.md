@@ -56,9 +56,21 @@ Cross-check a claim across sources.
 
 ## Ranking
 
-With `multiSearch: true`, a query goes to every configured provider and DuckDuckGo in parallel. Results are merged by normalized URL and ordered by a confidence score built from how many providers returned the URL and where each placed it. The pack runs no reranking model and sends results to no reranking service.
+With `multiSearch: true` (a tool input, or the pack option `defaultMultiSearch: true` for every tool), a query goes to every configured provider and DuckDuckGo in parallel. Results are merged by normalized URL and ordered by a confidence score built from how many providers returned the URL and where each placed it. The pack runs no reranking model and sends results to no reranking service.
 
-To rerank search results with a model, use AgentOS's `WebSearchService` (`@framers/agentos/cognition/web-search`) with a `RerankerService` and a `rerankChain`. AgentOS ships three reranking providers: `local` (a cross-encoder run in process through Transformers.js), `cohere` (Cohere's rerank API) and `llm-judge` (a model you call through your own `llmCallFn` scores and orders the results). See AgentOS's [Reranking](https://github.com/framerslab/agentos/blob/d2725ab9566cd7a58ce4666c42d4bdb492d281fa/docs/text/RERANKING.md) page.
+### Reranking with AgentOS
+
+To rerank search results with a model, use AgentOS's `WebSearchService` (`@framers/agentos/cognition/web-search`) with a `reranker` (a `RerankerService`) and a `rerankChain`. Reranking is provider-agnostic: each chain stage names a provider id, a `topK` and optionally a model, and the stages run in order. A stage whose provider is not registered or not available is skipped, and a stage that throws leaves the previous order in place. If reranking fails, `WebSearchService` returns the fused results unreranked. Each result goes to the reranker as its page content, or its snippet when it has none.
+
+AgentOS ships three providers, all exported from `@framers/agentos/cognition/rag/reranking`:
+
+| Id | Class | How it scores | What leaves the process | Defaults | On failure |
+| --- | --- | --- | --- | --- | --- |
+| `local` | [`LocalCrossEncoderReranker`](https://github.com/framerslab/agentos/blob/d2725ab9566cd7a58ce4666c42d4bdb492d281fa/src/cognition/rag/reranking/providers/LocalCrossEncoderReranker.ts) | A cross-encoder scores each query and document pair in process through Transformers.js (`@huggingface/transformers`, else `@xenova/transformers`, installed by the host). | No query or document. The model is downloaded on first use and cached. | Model `cross-encoder/ms-marco-MiniLM-L-6-v2`, device `cpu`, `maxSequenceLength` 512, `batchSize` 32. | Not available when neither Transformers.js package is installed. A document whose scoring throws scores 0. |
+| `cohere` | [`CohereReranker`](https://github.com/framerslab/agentos/blob/d2725ab9566cd7a58ce4666c42d4bdb492d281fa/src/cognition/rag/reranking/providers/CohereReranker.ts) | Cohere's Rerank API scores the documents. | The query and every document's full content, sent to `<baseUrl>/v1/rerank` with the `apiKey`. | Model `rerank-v3.5`, `baseUrl` `https://api.cohere.ai`, timeout 30000 ms. | Not available without an `apiKey`. A non-2xx answer or a timeout throws. |
+| `llm-judge` | [`LlmJudgeReranker`](https://github.com/framerslab/agentos/blob/d2725ab9566cd7a58ce4666c42d4bdb492d281fa/src/cognition/rag/reranking/providers/LlmJudgeReranker.ts) | A language model, called through the host's `llmCallFn(system, user, model?)`, scores documents 0 to 10 in batches, then ranks the best-scored ones in one call. | The query and the first 200 characters of each document, sent wherever the host's `llmCallFn` sends them. | No model of its own: `scoringModel` and `rankingModel` are passed to `llmCallFn` as given. `maxPointwiseDocuments` 100, `batchSize` 10, `pointwiseTopK` 20, timeout 30000 ms a call. | A batch whose call fails, times out or does not parse scores 0. A failed ranking call leaves the order to the scores. |
+
+See AgentOS's [Reranking](https://github.com/framerslab/agentos/blob/d2725ab9566cd7a58ce4666c42d4bdb492d281fa/docs/text/RERANKING.md) page and [`WebSearchService.ts`](https://github.com/framerslab/agentos/blob/d2725ab9566cd7a58ce4666c42d4bdb492d281fa/src/cognition/web-search/WebSearchService.ts).
 
 ## Notes
 

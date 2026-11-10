@@ -63,7 +63,7 @@
       "search.multiSearch": {
         "type": "boolean",
         "default": false,
-        "description": "Default multi-provider parallel search for all search tools. When enabled, queries fan out to ALL available providers, results are deduplicated and reranked by cross-provider agreement."
+        "description": "Default multi-provider parallel search for all search tools. When enabled, queries fan out to ALL available providers, results are deduplicated by URL and ordered by cross-provider agreement and position."
       }
     }
   }

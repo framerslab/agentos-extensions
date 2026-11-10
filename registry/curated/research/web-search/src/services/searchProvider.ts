@@ -657,7 +657,7 @@ export class SearchProviderService {
 
   /**
    * Searches ALL available providers in parallel, then merges, deduplicates,
-   * and reranks results by cross-provider agreement.
+   * and orders results by cross-provider agreement and position.
    */
   async multiSearch(
     query: string,
