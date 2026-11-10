@@ -129,14 +129,14 @@ As the LLM streams tokens, each `TEXT_DELTA` chunk passes through the guardrail'
 
 ### What changes for the other guardrail packs
 
-The pattern is identical. Only the heavy resource changes:
+Each pack defers its heavy resource to first use, but not all of them through `SharedServiceRegistry`: the classifier and topicality packs import their model directly, so the registry steps above do not apply to them.
 
 | Pack | Heavy resource | Lazy via |
 |------|---------------|----------|
 | `agentos-ext-pii-redaction` | BERT NER model (~110MB) | `services.getOrCreate('pii:ner-model', ...)` |
-| `agentos-ext-ml-classifiers` | ONNX BERT classifiers (toxicity, injection, NSFW) | `services.getOrCreate('ml:classifier-orchestrator', ...)` |
+| `agentos-ext-ml-classifiers` | One ONNX model, `Xenova/toxic-bert` (English toxicity) | `import('@huggingface/transformers')` on the guardrail's first classification |
 | `agentos-ext-grounding-guard` | NLI entailment pipeline | `services.getOrCreate('grounding:nli-pipeline', ...)` |
-| `agentos-ext-topicality` | Embedding model + drift tracker | `services.getOrCreate('topicality:embedder', ...)` |
+| `agentos-ext-topicality` | Embedding model `Xenova/all-MiniLM-L6-v2` | `import('@huggingface/transformers')` on the first input it checks |
 | `agentos-ext-code-safety` | None (regex-only) | No lazy load needed |
 
 For the dispatcher mechanics and configuration flags, see [Guardrails](https://docs.agentos.sh/features/guardrails). For the kind-specific registry internals, see [Extension Loading](https://docs.agentos.sh/architecture/extension-loading).

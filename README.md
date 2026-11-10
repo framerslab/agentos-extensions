@@ -110,7 +110,7 @@ GitHub Actions workflows:
 | `agentos-ext-code-safety` | Static code analysis guardrail (injection, XSS, secrets) |
 | `agentos-ext-pii-redaction` | PII detection & redaction pipeline |
 | `agentos-ext-grounding-guard` | Claim extraction & source verification |
-| `agentos-ext-ml-classifiers` | ML-based content classification (toxicity, jailbreak, injection) |
+| `agentos-ext-ml-classifiers` | Content classification: one local English toxicity model (toxic-bert), with an LLM judge or keyword patterns as fallbacks |
 | `agentos-ext-topicality` | Topic drift detection & off-topic filtering |
 | `agentos-ext-http-api` | HTTP API server for AgentOS |
 | `agentos-ext-skills` | Skill loading & execution tooling |
@@ -289,7 +289,7 @@ A host installing `@framers/agentos-ext-pii-redaction`:
 6. **Streaming output.** As the model generates a response, each `TEXT_DELTA` chunk passes through the guardrail's `evaluateOutput()`. The dispatcher returns `SANITIZE` results with redacted text deterministically (Phase 1 chains sequentially), then runs all Phase 2 classifiers in parallel for any remaining checks.
 7. **Tear-down.** `pack.onDeactivate(ctx)` runs in reverse order on shutdown. The shared service registry releases the model.
 
-Same pattern for the four other guardrail packs: `@framers/agentos-ext-ml-classifiers` lazy-loads ONNX BERT models, `@framers/agentos-ext-grounding-guard` lazy-loads the NLI pipeline, `@framers/agentos-ext-topicality` lazy-loads embeddings, `@framers/agentos-ext-code-safety` is regex-only and pays no load cost.
+The four other guardrail packs load on first use too, each in its own way: `@framers/agentos-ext-ml-classifiers` imports one ONNX model (`Xenova/toxic-bert`) on the guardrail's first classification, `@framers/agentos-ext-grounding-guard` lazy-loads the NLI pipeline, `@framers/agentos-ext-topicality` imports its embedding model on the first input it checks, and `@framers/agentos-ext-code-safety` is regex-only and pays no load cost. The classifier and topicality packs register no factory in `SharedServiceRegistry`, so the registry steps above do not apply to their models.
 
 This is the same auto-discovery surface that runtime-forged tools join: an agent that invents a function in session N can promote it via `SkillExporter` into a `SKILL.md` that the registry picks up on the next process start. Forging grows the surface mid-run; auto-discovery ships it as a first-class capability.
 
