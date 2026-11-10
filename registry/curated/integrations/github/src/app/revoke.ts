@@ -76,21 +76,24 @@ export async function deleteAsApp(
  * its client id and client secret as Basic credentials, and the person's token goes in the body.
  *
  * Answers true when GitHub answers 204: the grant is deleted, the access token and the refresh token with it.
- * Answers false when GitHub answers 404 or 422, having deleted nothing: the token names no grant GitHub can delete,
- * as when the person already revoked the app. GitHub's page lists 204 and 422 for this address and says the token
- * must be valid, and says of its neighbours "Check a token" and "Reset a token" that an invalid token gets 404; which
- * of the two a token whose grant is gone gets here is UNVERIFIED, so both read the same. An expired access token is
- * not valid either, so false does not prove a grant gone when the token given had expired: refresh it first
+ * Answers false when GitHub answers 404, having deleted nothing: the token names no grant GitHub can delete, as when
+ * the person already revoked the app. GitHub's page lists 204 and 422 for this address and says the token must be
+ * valid; it says of its neighbours "Check a token" and "Reset a token" that "Invalid tokens will return 404 NOT
+ * FOUND", and GitHub's own client reads a 404 from this call as a token already invalid and throws any other failure on
+ * (https://github.com/octokit/auth-oauth-user.js/blob/6030b1fa583eda14b0a068a4ce16b8d3f6291e5c/src/auth.ts#L147).
+ * That a token whose grant is gone gets 404 here is UNVERIFIED on the page itself. An expired access token is not
+ * valid either, so false does not prove a grant gone when the token given had expired: refresh it first
  * (`refreshUserToken`) and revoke with the new token.
  *
- * Any other answer, another success included, throws the auth module's `OAuthGrantRefused` (reason `revoke`, its
- * status), a redirect among them, which is never followed. A call that gets no answer by its deadline throws
+ * Any other answer throws the auth module's `OAuthGrantRefused` (reason `revoke`, its status): another success, a
+ * redirect, which is never followed, and a 422, which the page gives as "Validation failed, or the endpoint has been
+ * spammed" and which therefore does not say the grant is gone. A call that gets no answer by its deadline throws
  * `GitHubNoAnswer`. No error holds the token or the client secret.
  *
  * @param input The app's client and a token of the person that GitHub still takes.
  * @param options Where the call goes.
  * @throws TypeError before any request when the client id, the client secret or the token is empty, since GitHub's
- * refusal of an empty one would read as a grant already gone.
+ * refusal of an empty one could read as a grant already gone.
  */
 export async function revokeGrant(input: RevokeGrantInput, options: GitHubApiOptions = {}): Promise<boolean> {
   if (![input.clientId, input.clientSecret, input.accessToken].every((value) => typeof value === 'string' && value !== '')) {
@@ -98,6 +101,6 @@ export async function revokeGrant(input: RevokeGrantInput, options: GitHubApiOpt
   }
   const status = await deleteAsApp('grant', input, input.accessToken, options);
   if (status === 204) return true;
-  if (status === 404 || status === 422) return false;
+  if (status === 404) return false;
   throw new OAuthGrantRefused('revoke', status);
 }
