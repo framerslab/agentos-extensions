@@ -19,6 +19,10 @@
       "import": "./dist/archive/index.js",
       "types": "./dist/archive/index.d.ts"
     },
+    "./calendar": {
+      "import": "./dist/calendar/index.js",
+      "types": "./dist/calendar/index.d.ts"
+    },
     "./manifest.json": "./manifest.json",
     "./package.json": "./package.json"
   },

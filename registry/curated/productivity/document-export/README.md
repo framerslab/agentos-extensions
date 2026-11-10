@@ -1,6 +1,6 @@
 # Document Export
 
-Generate PDF, DOCX, PPTX, CSV and XLSX documents from an agent's structured content. A second entry, `./transcript`, writes a transcript as Markdown, plain text, JSON, CSV, SRT, VTT, DOCX, an HTML fragment or a zip; a third, `./archive`, reads a ZIP one entry at a time under bounds. Both run in a browser as well as in Node.
+Generate PDF, DOCX, PPTX, CSV and XLSX documents from an agent's structured content. A second entry, `./transcript`, writes a transcript as Markdown, plain text, JSON, CSV, SRT, VTT, DOCX, an HTML fragment or a zip; a third, `./archive`, reads a ZIP one entry at a time under bounds; a fourth, `./calendar`, writes one event as an iCalendar file and as Google Calendar's template address. The three run in a browser as well as in Node.
 
 ## Installation
 
@@ -149,6 +149,7 @@ What each format is guarded against, with the helper the entry exports:
 - XML and HTML text (`xmlText`): characters outside XML 1.0's `Char` production are dropped, and `&`, `<`, `>`, `"` and `'` are escaped.
 - A WebVTT cue (`vttText`): `&` and `<` are escaped, every `-->` is broken, and no blank line is left inside the cue. An SRT cue (`cueText`) keeps no blank line inside.
 - A CSV field (`csvField`): every field is quoted with its quotes doubled, and a field that starts with `=`, `+`, `-`, `@`, a tab, a carriage return, a line feed or the full-width `＝`, `＋`, `－` or `＠` gets a leading single quote, so a spreadsheet does not read it as a formula.
+- Markdown body text (`markdownText`): marks are escaped and GitHub's mentions and references broken, as [Markdown body text](#markdown-body-text-browser-safe) describes.
 - An archive path: relative, with no empty part, no `..` and no backslash. `writeArchive` refuses any other path, and `readArchive` refuses an archive with a file under one. A folder entry (a name ending in `/`, which zip tools write for a folder) is left out of what `readArchive` answers.
 - An archive's size (`readArchive`): each file's size is added to a running total before the file is inflated, and a total past `maxInflatedBytes` throws a `RangeError`, so a small archive that declares or holds gigabytes is never inflated in full. The default is 52,428,800 bytes (50 MiB); pass a larger bound for an archive known to hold more, as in `readArchive(bytes, { maxInflatedBytes: 512 * 1024 * 1024 })`. An archive whose files claim more compressed bytes than it holds, as files that share one stretch of data do, throws a `RangeError` too. The bound is on the bytes held, not on the time a read takes.
 
@@ -264,3 +265,65 @@ Every refusal is an `ArchiveError` whose message is fixed and never carries an e
 | `stopped` | The signal fired, or the archive was closed, a read of the `Blob` still pending included; for `writeArchive` with options, its signal fired before an entry or after the last |
 
 A bound that is negative or not a number throws `RangeError`.
+
+## Calendar events (browser-safe)
+
+`@framers/agentos-ext-document-export/calendar` writes one event as an iCalendar file and as the address of Google Calendar's new-event page. It imports no Node built-in and no package, so a page builds both offline. Neither writes to anyone's calendar: the person opens the file, or saves the event on Google's page.
+
+```typescript
+import { googleCalendarAddress, icsEvent } from '@framers/agentos-ext-document-export/calendar';
+
+const ics = icsEvent({
+  uid: 'item-42@example.com',
+  title: 'Send the slides',
+  description: 'From the budget review: "I\'ll send the slides"',
+  start: '2026-11-12',
+  allDay: true,
+  stamp: new Date(),
+});
+const href = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' }));
+// a link with this href and download="send-the-slides.ics" saves the file
+
+window.open(googleCalendarAddress({ title: 'Send the slides', start: '2026-11-12', allDay: true }), '_blank', 'noopener');
+// https://calendar.google.com/calendar/render?action=TEMPLATE&text=Send%20the%20slides&dates=20261112/20261113
+```
+
+| Field | `icsEvent` | `googleCalendarAddress` | What it takes |
+|---|---|---|---|
+| `uid` | `UID` | | The event's identifier. Keep it the same for every file made for one event, so a calendar that opens a second file updates the event instead of adding another |
+| `title` | `SUMMARY` | `text` | The title |
+| `description`, `details` | `DESCRIPTION` | `details` | Notes, written when not empty, line breaks kept |
+| `start` | `DTSTART` | `dates` | For a timed event, an instant: a `Date`, or an ISO 8601 date-time with its offset (`2026-11-12T10:00:00-05:00`). For an all-day event, its first day as `YYYY-MM-DD` |
+| `end` | `DTEND` | `dates` | In the form `start` takes. A timed event ends at it, and ends when it starts without it. An all-day event covers it as its last day, and covers its first day alone without it |
+| `allDay` | | | Whole days rather than a time of day. Default `false` |
+| `stamp` | `DTSTAMP` | | When the file was made, an instant |
+| `productId` | `PRODID` | | The product that made the file. Default `-//Framers//AgentOS Document Export//EN` |
+
+The file follows [RFC 5545](https://www.rfc-editor.org/rfc/rfc5545):
+
+- Lines end in CRLF and fold at 75 octets, each continuation starting with a space (section 3.1). A fold falls between characters, never inside one's UTF-8 bytes, so every line is valid UTF-8 and unfolding gives back the text whole.
+- Text escapes `\`, `;` and `,` with a backslash and writes each line break as `\n` (section 3.3.11). The control characters TEXT does not allow are dropped; a tab is kept.
+- A timed event's times are UTC date-times (`DTSTART:20261112T150000Z`, section 3.3.5). A timed event given no end has no `DTEND`, which RFC 5545 reads as ending when it starts (section 3.6.1).
+- An all-day event's times are dates (`DTSTART;VALUE=DATE:20261112`, section 3.3.4), and its `DTEND` is the day after its last day, since `DTEND` is not inclusive (section 3.6.1).
+
+The template address writes `action=TEMPLATE`, `text`, `dates` and `details`, with `text` and `details` percent-encoded. `dates` is two UTC date-times (`20261112T150000Z/20261112T153000Z`), the start twice for a timed event given no end, or for an all-day event two dates, the second the day after its last day (`20261112/20261113`). Google publishes no reference for these parameters. They are written as the [Add Event to Calendar docs](https://github.com/InteractionDesignFoundation/add-event-to-calendar-docs/blob/main/services/google.md) record them, read on 10 November 2026; those docs also say Google renders basic HTML in `details`.
+
+Each helper throws a `RangeError` naming the field when a time is not in the form the event takes, a time falls outside the years 0 to 9999 or `end` is before `start`, and `icsEvent` throws one when `uid` or `productId` is empty. A lone surrogate in a text is written as U+FFFD.
+
+## Markdown body text (browser-safe)
+
+`markdownText(text)`, exported from the package and from `./transcript`, makes plain text safe to place in a Markdown body, such as an issue's, where it reads as written:
+
+```typescript
+import { markdownText } from '@framers/agentos-ext-document-export/transcript';
+
+markdownText('# x [y](z) @a #12');
+// '\\# x \\[y\\](z) @​a #​12'
+// GitHub shows "# x [y](z) @a #12" with no heading, link, mention or reference
+```
+
+- [CommonMark](https://spec.commonmark.org/0.31.2/#backslash-escapes) marks are escaped with a backslash: `` \ ` * _ [ ] < & ~ | `` anywhere, and a line's first `#`, `>`, `+`, `=` or `-` and an ordered list marker (`1.`, `12)`). Nothing starts a heading, a list, a quote, a thematic break, a table, a link, an image, HTML, an entity, a code span or emphasis.
+- GitHub links [mentions and references](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/autolinked-references-and-urls) after it reads the Markdown, and neither a backslash nor an HTML entity stops it, as its [Markdown API](https://docs.github.com/en/rest/markdown/markdown) rendered on 10 November 2026. A zero-width space (U+200B), which shows nothing, goes after the `@` of a mention or an address, the `#` of `#12` and `owner/repo#12`, the `GH-` of `GH-12`, the `issues/`, `pull/` or `discussions/` before a number, the colon of `https://` and the `www` of `www.`. None of them then links, and no one is notified.
+- Line breaks are written as LF, and each line's indentation is dropped, since four spaces start a code block, where escapes show.
+
+Two things still render on GitHub. A bare commit hash links to its commit when the repository holds one. Text between two dollar signs can render as math, and a backslash does not stop it there: GitHub's [math page](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/writing-mathematical-expressions) asks for a `<span>` around such a dollar sign. A reader who copies the text copies the zero-width spaces with it.

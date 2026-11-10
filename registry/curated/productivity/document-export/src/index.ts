@@ -119,6 +119,11 @@ export { DocumentSuggestTool } from './tools/documentSuggest.js';
 export { ExportFileManager } from './delivery/ExportFileManager.js';
 export { PreviewGenerator } from './preview/PreviewGenerator.js';
 
+// Browser-safe helpers, also served by the `./calendar` and `./transcript` entries.
+export { icsEvent, googleCalendarAddress } from './calendar/index.js';
+export type { IcsEventInput, GoogleCalendarEventInput, CalendarEventTimes } from './calendar/index.js';
+export { markdownText } from './text/markdown.js';
+
 // Re-export all public types so consumers can `import { ... } from '@framers/agentos-ext-document-export'`.
 export type {
   ExportFormat,
