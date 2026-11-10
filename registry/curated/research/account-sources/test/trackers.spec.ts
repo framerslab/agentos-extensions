@@ -29,14 +29,18 @@ interface MemoryOptions {
   refuseGrant?: boolean;
   /** Set to make the next call answer a rate limit. */
   rateLimitNext?: { on: boolean };
+  /** How revoke answers: `ends` ends the grant and says so (the default), `claims` says so and ends nothing, `none` ends nothing and says so. */
+  revoke?: 'ends' | 'claims' | 'none';
 }
 
-/** A tracker over memory: two destinations, two assigned issues, issues created and closed in a map. */
+/** A tracker over memory: two destinations, two assigned issues, issues created and closed in a map, and its grant. */
 function memoryTracker(options: MemoryOptions = {}): {
   tracker: IssueTracker;
   issueState: (ref: { id: string; key: string }) => Promise<'open' | 'done' | undefined>;
   issueDestination: (ref: { id: string; key: string }) => Promise<string | undefined>;
+  grantEnded: () => Promise<boolean>;
 } {
+  let ended = false;
   const destinations: TrackerDestination[] = [
     { id: 'team-1', key: 'ENG', name: 'Engineering', visibility: null, issueTypes: [] },
     { id: 'team-2', key: 'OPS', name: 'Operations', visibility: 'private', issueTypes: [{ id: 'task', name: 'Task' }] },
@@ -108,16 +112,24 @@ function memoryTracker(options: MemoryOptions = {}): {
       if (issue === undefined) throw new TrackerFault('not_found', 404);
       if (!options.noopClose) issues.set(ref.id, { ...issue, state: 'done' });
     },
-    async revoke() { return { revoked: true }; },
+    async revoke() {
+      if (options.revoke === 'claims') return { revoked: true };
+      if (options.revoke === 'none') return { revoked: false };
+      ended = true;
+      return { revoked: true };
+    },
   };
   return {
     tracker,
     issueState: async (ref) => issues.get(ref.id)?.state,
     issueDestination: async (ref) => issues.get(ref.id)?.destination.id,
+    grantEnded: async () => ended,
   };
 }
 
-const fixture = { kind: 'linear', destinationIds: ['team-1', 'team-2'], assignedIssueKeys: ['ENG-1', 'OPS-1'] } as const;
+const fixture = {
+  kind: 'linear', destinationIds: ['team-1', 'team-2'], assignedIssueKeys: ['ENG-1', 'OPS-1'], revocable: true,
+} as const;
 
 /** The run of the check whose name starts with the given words. */
 function runOf(checks: ReturnType<typeof trackerConformance>, start: string): (() => Promise<void>) | undefined {
@@ -170,7 +182,7 @@ describe('the conformance checks', () => {
       'closing the created issue leaves it done in the fixture, and closing it again resolves',
       'an unknown destination is refused with not_found or refused',
       'a rate-limited call throws TrackerRateLimited with a retry time or null',
-      'revoke answers whether the tracker confirmed the end',
+      'revoke ends the access where the tracker has a way to, and answers whether it did',
     ]);
     for (const { run } of checks) await run();
     expect(rateLimitNext.on).toBe(false);
@@ -240,6 +252,23 @@ describe('the conformance checks', () => {
 
     const skipped = runOf(trackerConformance({ ...memoryTracker(), fixture }), 'a rate-limited call');
     await expect(skipped?.()).resolves.toBeUndefined();
+  });
+
+  it('fail the revoke check over a tracker that answers revoked and ends nothing', async () => {
+    const run = runOf(trackerConformance({ ...memoryTracker({ revoke: 'claims' }), fixture: { ...fixture, revocable: false } }), 'revoke');
+    await expect(run?.()).rejects.toThrow('revoke ends the access where the tracker has a way to, and answers whether it did: answered revoked true, the fixture holds the grant');
+  });
+
+  it('fail the revoke check over a tracker with a way to end the access that leaves the grant in place', async () => {
+    for (const revoke of ['claims', 'none'] as const) {
+      const run = runOf(trackerConformance({ ...memoryTracker({ revoke }), fixture }), 'revoke');
+      await expect(run?.()).rejects.toThrow('revoke ends the access where the tracker has a way to, and answers whether it did: the fixture holds the grant');
+    }
+  });
+
+  it('pass the revoke check over a tracker with no way to end the access that answers false', async () => {
+    const run = runOf(trackerConformance({ ...memoryTracker({ revoke: 'none' }), fixture: { ...fixture, revocable: false } }), 'revoke');
+    await expect(run?.()).resolves.toBeUndefined();
   });
 
   it('name the check when the tracker\'s own call rejects, keeping the fault as the cause and out of the message', async () => {
