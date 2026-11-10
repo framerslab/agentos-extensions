@@ -129,7 +129,7 @@ As the LLM streams tokens, each `TEXT_DELTA` chunk passes through the guardrail'
 
 ### What changes for the other guardrail packs
 
-The pattern is identical. Only the heavy resource changes:
+Each pack defers its heavy resource to first use, but not all of them through `SharedServiceRegistry`: the classifier and topicality packs import their model directly, so the registry steps above do not apply to them.
 
 | Pack | Heavy resource | Lazy via |
 |------|---------------|----------|
