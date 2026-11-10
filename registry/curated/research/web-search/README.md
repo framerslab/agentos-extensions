@@ -2,7 +2,7 @@
 
 Professional web search, research aggregation, and fact-checking for AgentOS agents.
 
-Supports Serper.dev, Tavily, Brave, SerpAPI, Firecrawl and SearXNG. A search tries the configured providers in that order and answers with the first that succeeds, then falls back to DuckDuckGo, which needs no API key.
+Supports Serper.dev, Tavily, Brave, SerpAPI, Firecrawl and SearXNG. A search asks the configured providers in that order and answers with the first one that returns without an error, even when it returns no results (a Tavily or Firecrawl request that times out returns no results). It moves to the next provider only when one throws an error or is past its rate limit, and falls back to DuckDuckGo, which needs no API key, when every configured provider did.
 
 ## Installation
 
@@ -66,9 +66,14 @@ With `multiSearch: true` (a tool input, or the pack option `defaultMultiSearch: 
 
 ### Reranking with AgentOS
 
-To rerank search results with a model, use AgentOS's `WebSearchService` (`@framers/agentos/cognition/web-search`) with a `reranker` (a `RerankerService`) and a `rerankChain`. Reranking is provider-agnostic: each chain stage names a provider id, a `topK` and optionally a model, and the stages run in order. A stage whose provider is not registered or not available is skipped, and a stage that throws leaves the previous order in place. If reranking fails, `WebSearchService` returns the fused results unreranked. Each result goes to the reranker as its page content, or its snippet when it has none.
+AgentOS reranks with a `RerankerService` (`@framers/agentos/cognition/rag/reranking`). Reranking is provider-agnostic: you register the providers you want, and `rerankChain(query, chunks, chain)` runs the chain's stages in order, each naming a provider id, a `topK` and optionally a model. A stage whose provider is not registered or not available is skipped, and a stage that throws leaves the previous order in place.
 
-AgentOS ships three providers, all exported from `@framers/agentos/cognition/rag/reranking`:
+There are two ways to use it with web search:
+
+- **This pack's results.** The pack's tools do not call a reranker. To rerank what `web_search` returned, pass the results to `rerankChain` yourself, each as a chunk with an `id`, an `originalDocumentId` (the URL, for example) and its snippet as `content`.
+- **AgentOS's own search.** `WebSearchService` (`@framers/agentos/cognition/web-search`) is a separate search with its own providers (`FirecrawlProvider`, `TavilyProvider`, `SerperProvider` and `BraveProvider`, added with `registerProvider`), not this pack's. Given a `reranker` (a `RerankerService`) and a `rerankChain`, it reranks its fused results, sending each result's page content, or its snippet when it has none. If reranking fails, it returns the fused results unreranked.
+
+AgentOS ships three reranking providers, all exported from `@framers/agentos/cognition/rag/reranking`. The table describes AgentOS at commit [`c46ff75`](https://github.com/framerslab/agentos/tree/c46ff754e8df1ccb54f31aa24fc8fd8df5952776); other versions can differ (at v0.10.40, the oldest AgentOS this pack declares, `LlmJudgeReranker` accepts a `timeoutMs` but does not apply it).
 
 | Id | Class | How it scores | What leaves the process | Defaults | On failure |
 | --- | --- | --- | --- | --- | --- |
