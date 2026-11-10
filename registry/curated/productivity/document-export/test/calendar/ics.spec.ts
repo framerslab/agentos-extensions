@@ -1,7 +1,7 @@
 /**
  * `icsEvent` against RFC 5545 (https://www.rfc-editor.org/rfc/rfc5545): content lines that end in CRLF and fold at
  * 75 octets (section 3.1), DATE and DATE-TIME values (3.3.4, 3.3.5), TEXT and its escapes (3.3.11), the event
- * component with its non-inclusive DTEND (3.6.1), and DTSTAMP in UTC (3.8.7.2). The reader below is the test's own:
+ * component with its non-inclusive DTEND (3.6.1), DTEND later than DTSTART (3.8.2.2), and DTSTAMP in UTC (3.8.7.2). The reader below is the test's own:
  * it unfolds the text, splits each content line into its name, parameters and value, and reverses the TEXT escapes,
  * refusing a comma or a semicolon left bare.
  */
@@ -183,6 +183,32 @@ describe('icsEvent', () => {
     expect(lines.some((line) => line.name === 'DESCRIPTION')).toBe(false);
   });
 
+  it('writes no DTEND when the end falls in the start\'s second, since DTEND must be later than DTSTART', () => {
+    // section 3.8.2.2: DTEND's "value MUST be later in time than the value of the "DTSTART" property"; section 3.6.1:
+    // a DATE-TIME DTSTART with no DTEND "ends on the same calendar date and time of day specified by the "DTSTART""
+    for (const [start, end] of [
+      ['2026-11-12T15:00:00Z', '2026-11-12T15:00:00Z'],
+      ['2026-11-12T15:00:00.100Z', '2026-11-12T15:00:00.900Z'],
+      ['2026-11-12T15:00:00.900Z', '2026-11-12T15:00:00.100Z'],
+    ] as const) {
+      const lines = read(icsEvent({ uid: 'z-1', title: 'x', start: new Date(start), end: new Date(end), stamp }));
+      expect(property(lines, 'DTSTART').value, `${start} ${end}`).toBe('20261112T150000Z');
+      expect(lines.some((line) => line.name === 'DTEND'), `${start} ${end}`).toBe(false);
+    }
+    const next = read(icsEvent({
+      uid: 'z-2', title: 'x', start: new Date('2026-11-12T15:00:00.900Z'), end: new Date('2026-11-12T15:00:01Z'), stamp,
+    }));
+    expect(property(next, 'DTEND').value).toBe('20261112T150001Z');
+  });
+
+  it('reads a date-time string with a fraction of more than three digits, cut to the second it falls in', () => {
+    // Python's datetime.isoformat() writes six digits; ISO 8601 sets no limit on the fraction
+    const micro = read(icsEvent({ uid: 'f-1', title: 'x', start: '2026-11-12T15:00:00.123456+00:00', stamp }));
+    expect(property(micro, 'DTSTART').value).toBe('20261112T150000Z');
+    const nano = read(icsEvent({ uid: 'f-2', title: 'x', start: '2026-11-12T10:59:59.999999999-05:00', stamp }));
+    expect(property(nano, 'DTSTART').value).toBe('20261112T155959Z');
+  });
+
   it('names the product that made the file when asked to', () => {
     const lines = read(icsEvent({
       uid: 'p-1', title: 'x', start: new Date('2026-11-12T15:00:00Z'), stamp, productId: '-//Example//Notes, 1.0//EN',
@@ -194,6 +220,9 @@ describe('icsEvent', () => {
     const at = new Date('2026-11-12T15:00:00Z');
     const cases: Array<Parameters<typeof icsEvent>[0]> = [
       { uid: '', title: 'x', start: at, stamp },
+      { uid: '\u0000\u0007', title: 'x', start: at, stamp },
+      { uid: 'u', title: 'x', start: at, stamp, productId: '\u0001 ' },
+      { uid: 'u', title: 'x', start: '2026-11-12T15:00:00.Z', stamp },
       { uid: 'u', title: 'x', start: new Date(Number.NaN), stamp },
       { uid: 'u', title: 'x', start: at, stamp: new Date(Number.NaN) },
       { uid: 'u', title: 'x', start: at, end: new Date('2026-11-12T14:59:59Z'), stamp },

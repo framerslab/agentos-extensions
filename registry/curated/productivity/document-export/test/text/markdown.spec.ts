@@ -8,7 +8,9 @@
  * list, a quote, a link, an image, HTML and an entity from forming, but not a mention, `#12`, `GH-12`, `owner/repo#12`,
  * `user@sha` or a bare address, and an HTML entity in place of `@` or `#` does not either; a zero-width space (U+200B)
  * after the `@`, the `#`, the `GH-`, the `issues/`, `pull/` or `discussions/` before a number, the scheme's colon and
- * `www` does. The expected strings below are the forms that API rendered as plain text.
+ * `www` does. The expected strings below are the forms that API rendered as plain text. The same API showed GitHub
+ * turning an emoji shortcode (`:tada:`, `:+1:`, `:100:`) into an emoji image whatever comes before it, a backslash before
+ * either colon included, and a zero-width space after the opening colon keeping it as written.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -35,6 +37,8 @@ function expectInert(markdown: string): void {
     expect(line, line).not.toMatch(/\b(?:issues|pull|pulls|discussions)\/\d/i);
     expect(line, line).not.toMatch(/:\/\//);
     expect(line, line).not.toMatch(/\bwww\./i);
+    // an emoji shortcode; backslashes go first, since GitHub reads `:white\_check\_mark:` as `:white_check_mark:`
+    expect(line.replace(/\\/g, ''), line).not.toMatch(/:[\w+-]+:/);
   }
 }
 
@@ -86,6 +90,16 @@ describe('markdownText', () => {
     expect(reveal(markdown)).toBe(input);
   });
 
+  it('breaks every emoji shortcode, so the text reads as written', () => {
+    const input = 'Ship it :tada: :+1: :-1:, :white_check_mark::100: and (:8ball:)';
+    const markdown = markdownText(input);
+    expect(markdown).toBe(
+      `Ship it :${ZWSP}tada: :${ZWSP}+1: :${ZWSP}-1:, :${ZWSP}white\\_check\\_mark::${ZWSP}100: and (:${ZWSP}8ball:)`,
+    );
+    expectInert(markdown);
+    expect(reveal(markdown)).toBe(input);
+  });
+
   it('writes line breaks as LF and drops the indentation that would start a code block', () => {
     expect(markdownText('a\r\nb\rc\n\n  d\n\t\te')).toBe('a\nb\nc\n\nd\ne');
   });
@@ -108,6 +122,7 @@ describe('markdownText', () => {
       '# Decisions', '- Ship on @friday #3', '1. Ask GH-4 about [the doc](http://x.y)', '> quoted', '***', '___',
       '<script>alert(1)</script>', '| a | b |', '| - | - |', '[ref]: http://example.com', '![x](y)', '`code`',
       'see www.example.com/issues/9 and owner/repo#10', '[^1]: note', '> [!NOTE]', '~~~', '```js',
+      'done :rocket: at 10:30:45',
     ];
     const markdown = markdownText(lines.join('\n'));
     expectInert(markdown);
