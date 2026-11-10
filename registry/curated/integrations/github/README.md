@@ -2,7 +2,7 @@
 
 This pack gives an agent tools for repository search, issues, pull requests, files, branches, commits, releases, workflow dispatch, gists, and repository indexing. It uses the GitHub API through `@octokit/rest`.
 
-Its second entry, `@framers/agentos-ext-github/documents`, is for a server that reads people's repositories through a GitHub App: the app's JWT and installation tokens, the user's web flow, the installations and repositories a person can reach, webhook deliveries checked and read as typed events, a daily reconcile, and `GitHubDocumentsConnector`, which reads a repository's documentation as account sources. See [GitHub App installation mode](#github-app-installation-mode).
+Its second entry, `@framers/agentos-ext-github/documents`, is for a server that reads people's repositories through a GitHub App: the app's JWT and installation tokens, the user's web flow, the installations and repositories a person can reach, webhook deliveries checked and read as typed events, a daily reconcile, and `GitHubDocumentsConnector`, which reads a repository's documentation as account sources. See [GitHub App installation mode](#github-app-installation-mode). The same entry makes calls as a person, on the user access token that flow answers: the open issues assigned to them, an issue opened and closed, the token's refresh and the grant's revoke. See [Calls on a person's own token](#calls-on-a-persons-own-token).
 
 ## Installation
 
@@ -442,8 +442,12 @@ Every call runs under a deadline, 30 seconds by default (`GITHUB_TIMEOUT_MS`), i
 | --- | --- |
 | `appJwt(identity, nowSeconds?)` | The app's JWT: RS256, `iat` 60 seconds back, `exp` nine minutes ahead, `iss` the client id |
 | `GitHubAppCredential` | Mints installation tokens narrowed to the repositories asked for (`repository_ids`), each request under the caller's `signal` and `timeoutMs`, and holds each token until five minutes before its hour ends; an empty list throws a `TypeError`, since GitHub answers it with a token for every repository of the installation. `metadataToken(installationId, { signal, timeoutMs })` mints, and holds the same way, a token for every repository of the installation that reads their metadata alone (`permissions: { metadata: 'read' }`): enough to list them, never to read a file. `forget(installationId)` drops the tokens held for an installation, so the next call mints again |
-| `GitHubAppUserFlow` | The user's web flow on the auth module's `RedirectOAuthFlow`: GitHub's authorize address with `state` and PKCE and no `scope`, and the code exchange under a deadline (`new GitHubAppUserFlow(client, fetchImpl, endpoints, { timeoutMs, apiBase })`), which never follows a redirect from the token address: the redirect is refused with `OAuthGrantRefused` and its status, so the code and the client secret reach that address alone; it has no store, so the user token is used once; `revoke(token)` deletes it at GitHub with the app's client id and secret (`DELETE /applications/{client_id}/token`, Basic authentication), throwing `OAuthGrantRefused` (reason `revoke`, its status) for any answer but 204, another 2xx included, and refusing a redirect unfollowed; the answer is told by its status alone, its body released unread however large or slow |
+| `GitHubAppUserFlow` | The user's web flow on the auth module's `RedirectOAuthFlow`: GitHub's authorize address with `state` and PKCE and no `scope`, and the code exchange under a deadline (`new GitHubAppUserFlow(client, fetchImpl, endpoints, { timeoutMs, apiBase })`), which never follows a redirect from the token address: the redirect is refused with `OAuthGrantRefused` and its status, so the code and the client secret reach that address alone; it has no store, so `complete` answers GitHub's token set to the caller (`GitHubUserTokenSet`: `accessToken` and `expiresAt`, and for an app whose user tokens expire `refreshToken` and `refreshTokenExpiresAt`, both ends in epoch milliseconds), which uses the token once or keeps the set itself ([calls on a person's own token](#calls-on-a-persons-own-token)); `revoke(token)` deletes an access token at GitHub with the app's client id and secret (`DELETE /applications/{client_id}/token`, Basic authentication), throwing `OAuthGrantRefused` (reason `revoke`, its status) for any answer but 204, another 2xx included, and refusing a redirect unfollowed; the answer is told by its status alone, its body released unread however large or slow |
 | `userOfToken`, `installationsOfUser`, `repositoriesOfUser` | The person a user token belongs to, the app's installations they can access, and the repositories of an installation they can read, across every page |
+| `listAssignedIssues`, `issueTargets`, `createIssueAsUser`, `closeIssueAsUser` | The calls made on a person's own token: the open issues assigned to them in the repositories named, the repositories they may open an issue in, an issue opened and an issue closed ([calls on a person's own token](#calls-on-a-persons-own-token)) |
+| `refreshUserToken({ clientId, clientSecret, refreshToken }, { fetchImpl, tokenEndpoint, timeoutMs })` | A refresh token exchanged for a new access token and a new refresh token, each with when it ends |
+| `revokeGrant({ clientId, clientSecret, accessToken }, { fetchImpl, apiBase, timeoutMs })` | The app's authorization for a person deleted at GitHub, with every token under it: true for 204, false for a token that names no grant |
+| `GitHubSecondaryLimitError`, `GitHubGrantGoneError` | What a call on a person's token throws for GitHub's secondary rate limit (a `GitHubApiError` with `retryAfterSeconds`) and for a token or a refresh token GitHub no longer takes (`reason`: `token` or `refresh`) |
 | `repositoriesOfInstallation(credential, installationId)` | Every repository an installation reaches (`GET /installation/repositories`), across every page, read with the credential's metadata token: the whole of what the app may read through the installation, whoever asks, so a repository its owner took off the app is missing from it. When an installation goes from all repositories to a selection, GitHub's `installation_repositories` delivery lists none of the repositories that left; this listing finds them. A held token GitHub refuses (401) is dropped and one new token asked for, once; a refused token request throws `GitHubApiError` (404 for an installation GitHub no longer has), so a lost installation never reads as one that reaches no repository. The listing is read a page at a time, and a repository added to or taken off the installation between two pages changes GitHub's `total_count` and can move another one past a page's end: a read whose pages disagree on that count is read again, up to three reads, and then `GitHubListingChanged` is thrown |
 | `repositoriesLost(credential, installationId, held)` | Which of the repositories `held` an installation no longer reaches: those missing from two listings, the second read only when the first misses one, since an addition and a removal between the same two pages leave the count as it was and can still move a repository past a page's end; in the order of `held`, each id once, with no request for an empty `held`; a refused listing, or `GitHubListingChanged`, is thrown. A limit: a repository is answered lost when, in each of the two listings, an addition and a removal between the same two pages moved it past a page's end |
 | `listInstallations`, `getInstallation`, `uninstallInstallation` | The app's installations, each with `suspendedAt` (GitHub's `suspended_at`, null while it is not suspended); one installation by its id (`GET /app/installations/{installation_id}`), with `suspendedAt`, or null on 404, any other refusal thrown; and its uninstall, which takes a 2xx (202 at the pinned API version, where GitHub removes it in the background; 204 at earlier versions) and 404 as done |
@@ -513,6 +517,103 @@ if (link?.kind === 'github_folder') {
 ```
 
 `planTree(blobs, options)` answers every file of a tree (`readTree`'s blobs) in path order, each a new object with its `path`, `sha`, `size` and `outcome`: `'note'`, or `{ skipped }` with the first reason the file is left out. `folder` under a skipped folder; `kind` for a file that is neither documentation, code nor an image (data, configuration, a binary, a file with no extension); `image` for `IMAGE_EXTENSIONS`, or the `imageExtensions` given; `code` for code while `includeCode` is off; `generated` for code a tool wrote while `includeCode` is on; `size` past `maxFileBytes`, or past `maxCodeBytes` for a file of a code extension while `includeCode` is on, whatever `extensions` names (`maxFileBytes` when absent, a non-negative integer, else a `TypeError`); `count` past `maxFiles`, the documentation keeping its places first and the code taking the room left. The notes are exactly what `pathFilter` keeps under the same filter, a code file past `maxCodeBytes` aside, so a caller can show what is left out and why from one listing, and turn code on or off without reading the tree again. An extension the filter's `extensions` names is documentation, an image's included. With `path`, only the files at that folder or under it, or the one file it names, are planned and counted, as `list` keeps them under the same `path`: a folder link's plan counts the folder's files alone.
+
+## Calls on a person's own token
+
+The `./documents` entry also acts as a person, on the user access token the web flow answers when that person authorizes the app. Such a token "only has permissions that both the user and the app have" and "can only access resources that both the user and app can access" ([generating a user access token](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app)), so what these calls reach is set by the permissions the app is registered with and the repositories its installations cover, never by a scope on the token. The table below gives the permission GitHub's page names for each request: an app registered with Issues at read and write and Metadata at read can make every one of them, and the calls ask GitHub for nothing else.
+
+Each function takes the token it is given, sends it as `Authorization: Bearer <token>` and holds none. Storing the token, its refresh token and when each ends is the caller's work, and no error these calls throw holds a token, the client secret, an address or anything of GitHub's answer.
+
+```ts
+import { readFileSync } from 'node:fs';
+import {
+  GitHubAppUserFlow,
+  GitHubGrantGoneError,
+  GitHubSecondaryLimitError,
+  closeIssueAsUser,
+  createIssueAsUser,
+  issueTargets,
+  listAssignedIssues,
+  refreshUserToken,
+  revokeGrant,
+} from '@framers/agentos-ext-github/documents';
+
+const client = {
+  clientId: process.env.GITHUB_APP_CLIENT_ID!,
+  clientSecret: readFileSync('/run/secrets/github_app_client_secret', 'utf8').trim(),
+};
+const flow = new GitHubAppUserFlow(client);
+
+// The web flow's callback: the tokens, and when each ends in epoch milliseconds. Keep them sealed; the flow keeps nothing.
+let tokens = await flow.complete({ code, state: returnedState, expectedState: state, codeVerifier, redirectUri });
+
+// Before a call, renew an access token near its end. A refresh spends the refresh token: store the new set first.
+if (tokens.refreshToken !== undefined && Date.now() > tokens.expiresAt - 300_000) {
+  tokens = await refreshUserToken({ ...client, refreshToken: tokens.refreshToken });
+}
+
+try {
+  // Where the person may open an issue: [{ repository: 'acme-team/planner', private: true }, ...]
+  const targets = await issueTargets(tokens.accessToken);
+  // Their open issues in the repositories chosen: [{ repository, number, title, url, updatedAt }, ...]
+  const issues = await listAssignedIssues(tokens.accessToken, { repositories: ['acme-team/planner'] });
+  // One issue, the title and the body as written: { number, url }
+  const created = await createIssueAsUser(tokens.accessToken, { repository: 'acme-team/planner', title: 'Book the room', body: 'For Thursday.' });
+  await closeIssueAsUser(tokens.accessToken, { repository: 'acme-team/planner', number: created.number });
+} catch (error) {
+  if (error instanceof GitHubGrantGoneError) {
+    // GitHub no longer takes the token: refresh once if an unused refresh token is left, else the person connects again.
+  } else if (error instanceof GitHubSecondaryLimitError) {
+    // Make no call before error.retryAt (epoch milliseconds); error.retryAfterSeconds is the retry-after header's seconds.
+  } else {
+    throw error;
+  }
+}
+
+// Disconnecting: the grant deleted at GitHub, and every token under it with it.
+const revoked = await revokeGrant({ ...client, accessToken: tokens.accessToken });
+```
+
+What each call asks GitHub for, the app permission GitHub's page names for it, and what it reads or writes:
+
+| Call | Request | App permission | Reads or writes |
+| --- | --- | --- | --- |
+| `listAssignedIssues(token, { repositories, perPage? })` | `GET /user`, then for each repository given `GET /repos/{owner}/{repo}/issues` with `state=open`, `assignee=<the person's login>`, `sort=updated`, `direction=desc` and `per_page` | None for `/user`; Issues at read for the listing | Reads the person's login, and of each repository given the open issues assigned to them: number, title, page address and time of last change. An issue's body is not answered |
+| `issueTargets(token)` | `GET /user/installations`, then `GET /user/installations/{installation_id}/repositories` for each installation that holds Issues at write and is not suspended, every page of both | None for the installations; Metadata at read for their repositories | Reads the name of each repository the person and the app both reach and whether it is private |
+| `createIssueAsUser(token, { repository, title, body })` | One `POST /repos/{owner}/{repo}/issues` with `{ title, body }` | Issues at write | Writes one issue, as the person |
+| `closeIssueAsUser(token, { repository, number })` | One `PATCH /repos/{owner}/{repo}/issues/{issue_number}` with `{ state: 'closed' }` | Issues at write (GitHub also takes Pull requests at write) | Writes the issue's state |
+| `refreshUserToken({ clientId, clientSecret, refreshToken })` | One `POST https://github.com/login/oauth/access_token`, a form with `grant_type=refresh_token` | None: the app's client id and client secret | Reads nothing of the person's; answers a new token set |
+| `revokeGrant({ clientId, clientSecret, accessToken })` | One `DELETE /applications/{client_id}/grant`, Basic authentication, the token in the body | None: the app's client id and client secret | Deletes the app's authorization for the person |
+
+The four calls on a token take `{ fetchImpl, apiBase, timeoutMs }` last, as `revokeGrant` does; `refreshUserToken` takes `{ fetchImpl, tokenEndpoint, timeoutMs }`. A repository is written `owner/name`, and one that is not (a missing part, a third part, a `..`, a space, `?` or `#`) is a `TypeError` before any request, as is a `perPage` outside 1 to 100 or an issue number that is not a positive integer.
+
+**The issues assigned to a person.** `listAssignedIssues` asks the repositories given and no other, one at a time in the order given, as GitHub asks of a client ([avoid concurrent requests](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#avoid-concurrent-requests)); it never calls `GET /issues`, which lists across every repository the person can see. Each repository answers one page of at most `perPage` items (100 when absent, GitHub's most), most recently changed first. GitHub lists pull requests among the issues and marks them with a `pull_request` key ([list repository issues](https://docs.github.com/en/rest/issues/issues#list-repository-issues)); they are left out, so a page that held pull requests answers fewer issues. A refusal ends the listing with its error and no repository is asked after it. GitHub answers 404 for a repository the token does not reach, so a list gone stale is checked against `issueTargets`. An empty list makes no request.
+
+**Opening and closing.** `createIssueAsUser` sends the title and the body as they are given and sends its request once, whatever comes of it: opening an issue triggers notifications ([create an issue](https://docs.github.com/en/rest/issues/issues#create-an-issue)), and a second request would open a second issue. A call that ends with `GitHubNoAnswer` may have opened the issue all the same. GitHub answers 410 where a repository's issues are off, which `issueTargets` leaves out beside the archived and the disabled ones. `closeIssueAsUser` sends `state: closed` and no reason. GitHub's REST API counts every pull request as an issue, so the number is taken as given.
+
+**Errors.** A call on a person's token throws:
+
+| Error | When | What to do |
+| --- | --- | --- |
+| `GitHubGrantGoneError`, `reason: 'token'` | GitHub answered the call 401. It answers a revoked token "401 Bad Credentials", and a token past its eight hours, or one whose refresh token has been used, no longer works either. The 401 does not say which | Refresh once if an unused refresh token is held, and call again with the new token. Stop using the refused one: GitHub answers repeated calls with invalid credentials by refusing every call of that person for a while with 403 ([failed login limit](https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api#failed-login-limit)) |
+| `GitHubGrantGoneError`, `reason: 'refresh'` | GitHub refused the refresh token with `bad_refresh_token`, its error for one that is "invalid or expired" | The person goes through the web flow again |
+| `GitHubSecondaryLimitError` | A 403 or a 429 that carries `retry-after`, or whose message names a secondary rate limit. It is a `GitHubApiError`: `status`, `rateLimited: true`, and `retryAt` by GitHub's [rules for a refused call](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit) in their order (`retry-after`, then the window's reset when `x-ratelimit-remaining` is 0, else a minute). `retryAfterSeconds` is the header's seconds, or null when the message alone told the limit | Make no call before `retryAt`. GitHub asks for a wait that grows when the limit is met again and for an end to the retries after a number of them |
+| `GitHubApiError` | Any other answer outside 2xx: the primary rate limit (`rateLimited: true` with `retryAt`), a 403 for a permission the app does not hold, a 404, a 410, a 422 | By its `status` |
+| `GitHubNoAnswer` | No answer by the deadline, a cancelled call or a failed connection | By its `reason` |
+
+These calls read the message of a 403 or a 429 that carries no `retry-after`, up to 16 KiB under the call's deadline, since the message is what tells a secondary limit from the primary one; the rest of the pack's calls tell a 429 and a 403 with rate limit headers by status and headers alone. `refreshUserToken` throws `GitHubGrantGoneError` with reason `refresh`; it and `revokeGrant` throw the auth module's `OAuthGrantRefused` (reason `refresh` or `revoke`, the status) for any other answer they do not take, a redirect among them, which neither follows, and `GitHubNoAnswer` past their deadline.
+
+**Renewing a token.** For an app whose user tokens expire, GitHub's access token lasts eight hours and its refresh token six months, and "once you use a refresh token, that refresh token and the old user access token will no longer work" ([refreshing user access tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/refreshing-user-access-tokens)). So store the set `refreshUserToken` answers in place of the one held before using either token again, and make one refresh at a time for a person: of two refreshes sent with the same refresh token, GitHub refuses the second, which reads as a grant gone. The refresh's fields go in a form body, never in the address, and `client_secret` is left out for a client without one. `GitHubUserTokenSet` is the auth module's token set with `refreshTokenExpiresAt` beside it; for an app whose user tokens do not expire GitHub sends no `expires_in` and no refresh token, so `refreshToken` and `refreshTokenExpiresAt` are absent and `expiresAt` is an hour on, as the auth module takes any answer without `expires_in`. GitHub allows an app 2,000 token requests an hour ([secondary rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits)).
+
+**Revoking a grant.** `revokeGrant` is GitHub's [delete an app authorization](https://docs.github.com/en/rest/apps/oauth-applications#delete-an-app-authorization): it "will also delete all OAuth tokens associated with the application for the user", after which the app is no longer listed among the person's authorized applications. It answers true for 204 and false for 404 or 422, having deleted nothing: the token names no grant GitHub can delete, as when the person already revoked the app. The token given must be one GitHub still takes. An expired access token names no grant either, so false does not prove a grant gone when the token had expired: refresh first, then revoke with the new token. `GitHubAppUserFlow`'s `revoke(token)` deletes one access token and leaves the grant and its refresh token in place.
+
+GitHub's pages were read on 10 November 2026. What they do not state, and how the pack reads it, is marked UNVERIFIED here and beside the tests:
+
+- The words of the secondary limit's message. The page says the message "indicates that you exceeded a secondary rate limit" and quotes none; the calls match `secondary rate limit` in the answer's `message`, in any case.
+- What `DELETE /applications/{client_id}/grant` answers for a token whose grant is already gone. The page lists 204 and 422 for it and says the token must be valid, and says of "Check a token" and "Reset a token" on the same page that an invalid token gets 404; `revokeGrant` reads both as nothing deleted.
+- The HTTP status that carries `bad_refresh_token`. The page names the error and no status; it is read from the answer's `error` field under any status.
+- That GitHub's token address reads a refresh's fields from a form body. Its page lists them as query parameters; they are sent as a form, as [RFC 6749 section 6](https://www.rfc-editor.org/rfc/rfc6749#section-6) gives a refresh request and as the flow's code exchange sends its own.
+- That GitHub refuses a person's token in a suspended installation. A suspension "blocks the app from accessing the account's resources" ([suspend an app installation](https://docs.github.com/en/rest/apps/apps#suspend-an-app-installation)) and a user token reaches only what the app reaches; no page says it of a person's token in one sentence. `issueTargets` leaves a suspended installation's repositories out.
 
 ## Releases
 

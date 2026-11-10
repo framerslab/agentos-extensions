@@ -3,9 +3,10 @@
  * carries, the pages of a listing followed through its `Link` header, and the small readers that turn an answer into
  * typed fields. An answer outside 2xx throws {@link GitHubApiError}, whose message names the status and nothing of
  * the answer's body and which says whether GitHub refused for a rate limit and when to try again; a call that gets no
- * answer by its deadline throws {@link GitHubNoAnswer}, whatever the fetch does with the signal it is handed. An
- * answer's body is read under a byte cap, and its stream is cancelled where its call ends, so nothing more of it is
- * read; a body the call lets go is released without waiting on its cancel.
+ * answer by its deadline throws {@link GitHubNoAnswer}, whatever the fetch does with the signal it is handed. A call
+ * may name what its refusals are thrown as (`refusedAs`), and is then handed what the refusal said, a secondary rate
+ * limit told from the primary one. An answer's body is read under a byte cap, and its stream is cancelled where its
+ * call ends, so nothing more of it is read; a body the call lets go is released without waiting on its cancel.
  * @module agentos-ext-github/app/http
  */
 
@@ -53,6 +54,12 @@ export interface GitHubRequest {
   signal?: AbortSignal;
   /** How long the call may take, its answer's body included; {@link GITHUB_TIMEOUT_MS} when absent. */
   timeoutMs?: number;
+  /**
+   * What a refusal is thrown as, from what it said; a {@link GitHubApiError} of its status and timing when absent. A
+   * call that sets it has the message of a 403 or a 429 read whenever the answer carries no `retry-after` that can be
+   * read, whatever its other headers say, since the message is what tells a secondary rate limit from the primary one.
+   */
+  refusedAs?: (refusal: GitHubRefusal) => Error;
 }
 
 /** Whether a refusal was a rate limit, and when the call may be made again. */
@@ -61,6 +68,23 @@ export interface GitHubRefusalTiming {
   rateLimited: boolean;
   /** Epoch milliseconds before which the call should not be made again, or null when GitHub asked for no wait. */
   retryAt: number | null;
+}
+
+/** What a refused call's answer said: its status, its timing, and whether it was a secondary rate limit. */
+export interface GitHubRefusal extends GitHubRefusalTiming {
+  /** The HTTP status GitHub answered. */
+  status: number;
+  /**
+   * The seconds the answer's `retry-after` header asks for, as it gives them or as the seconds left until the date it
+   * gives, or null when the answer carries no `retry-after` that can be read.
+   */
+  retryAfterSeconds: number | null;
+  /**
+   * True for a secondary rate limit: a 403 or a 429 that carries `retry-after`, or whose message, where it was read,
+   * names a secondary rate limit
+   * (https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit).
+   */
+  secondaryLimit: boolean;
 }
 
 /**
@@ -274,17 +298,18 @@ export interface GitHubAnswer {
 }
 
 /**
- * True when a refused call's body names a rate limit, read up to {@link REFUSAL_READ_BYTES}; the body is never kept. A
- * body that stops before its end (the deadline, the caller's cancel or the connection) throws the call's
+ * The rate limit a refused call's body names, read up to {@link REFUSAL_READ_BYTES}: `secondary` when its message
+ * names a secondary rate limit, `rate` when it names another rate limit, null when it names none; the body is never
+ * kept. A body that stops before its end (the deadline, the caller's cancel or the connection) throws the call's
  * {@link GitHubNoAnswer}, since the refusal it would have named is unknown.
  */
-async function bodyNamesRateLimit(response: Response, deadline: CallDeadline): Promise<boolean> {
+async function limitNamed(response: Response, deadline: CallDeadline): Promise<'secondary' | 'rate' | null> {
   let bytes: Uint8Array;
   try {
     bytes = await readBody(response, REFUSAL_READ_BYTES, deadline);
   } catch (error) {
     // An oversized refusal is told by its status and headers alone.
-    if (error instanceof ReadCapExceeded) return false;
+    if (error instanceof ReadCapExceeded) return null;
     throw deadline.noAnswer();
   }
   let fields: unknown;
@@ -292,11 +317,12 @@ async function bodyNamesRateLimit(response: Response, deadline: CallDeadline): P
     fields = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     // A refusal that is not JSON is told by its status and headers alone.
-    return false;
+    return null;
   }
-  if (typeof fields !== 'object' || fields === null || Array.isArray(fields)) return false;
+  if (typeof fields !== 'object' || fields === null || Array.isArray(fields)) return null;
   const { message, documentation_url: documentation } = fields as Record<string, unknown>;
-  return (typeof message === 'string' && /rate limit/i.test(message)) || (typeof documentation === 'string' && /rate-limit/i.test(documentation));
+  if (typeof message === 'string' && /secondary rate limit/i.test(message)) return 'secondary';
+  return (typeof message === 'string' && /rate limit/i.test(message)) || (typeof documentation === 'string' && /rate-limit/i.test(documentation)) ? 'rate' : null;
 }
 
 /**
@@ -315,31 +341,42 @@ function retryAfterAt(header: string | null, now: number): number | null {
 }
 
 /**
- * The refusal an answer outside 2xx reads as: its status, whether it was a rate limit, and when to try again. A 403
- * whose headers do not tell is read on to its body, under the call's deadline; any other refusal is told by its status
- * and headers at once, its body released without waiting on its cancel.
+ * What an answer outside 2xx said: its status, whether it was a rate limit, when to try again, and whether the limit
+ * was a secondary one. A 403 whose headers do not tell a rate limit is read on to its body, under the call's deadline;
+ * so is a 403 or a 429 without a `retry-after` that can be read when the call asks which limit it met
+ * (`tellsSecondary`), whatever its other headers say. Any other refusal is told by its status and headers at once, its
+ * body released without waiting on its cancel.
  */
-async function refusalOf(response: Response, deadline: CallDeadline): Promise<GitHubApiError> {
+async function refusalOf(response: Response, deadline: CallDeadline, tellsSecondary: boolean): Promise<GitHubRefusal> {
   const now = Date.now();
   const retryAfter = retryAfterAt(response.headers.get('retry-after'), now);
   const exhausted = response.headers.get('x-ratelimit-remaining')?.trim() === '0';
   const reset = (response.headers.get('x-ratelimit-reset') ?? '').trim();
-  let rateLimited = response.status === 429 || (response.status === 403 && (retryAfter !== null || exhausted));
-  if (!rateLimited && response.status === 403) rateLimited = await bodyNamesRateLimit(response, deadline);
+  const limitStatus = response.status === 403 || response.status === 429;
+  const toldByHeaders = response.status === 429 || (response.status === 403 && (retryAfter !== null || exhausted));
+  let named: 'secondary' | 'rate' | null = null;
+  if ((response.status === 403 && !toldByHeaders) || (tellsSecondary && limitStatus && retryAfter === null)) named = await limitNamed(response, deadline);
   else discardBody(response);
+  const rateLimited = toldByHeaders || named !== null;
   let retryAt = retryAfter;
   if (retryAt === null && rateLimited) {
     retryAt = exhausted && /^\d+$/.test(reset) ? Math.max(Number(reset) * 1000, now + 1000) : now + RATE_LIMIT_WAIT_MS;
   }
-  return new GitHubApiError(response.status, { rateLimited, retryAt });
+  return {
+    status: response.status,
+    rateLimited,
+    retryAt,
+    retryAfterSeconds: retryAfter === null ? null : Math.ceil((retryAfter - now) / 1000),
+    secondaryLimit: limitStatus && (retryAfter !== null || named === 'secondary'),
+  };
 }
 
 /**
  * Sends one call under its deadline and the caller's signal. An answer outside 2xx is read only as far as telling a
- * rate limit needs and thrown as {@link GitHubApiError}; a call that gets no answer, or whose refusal's body stops
- * while it is read, throws {@link GitHubNoAnswer}. The request and every read of its answer's body end at the
- * deadline or the caller's cancel, even through a fetch that leaves them open past its signal, and a body still being
- * read there is cancelled.
+ * rate limit needs and thrown as {@link GitHubApiError}, or as what the call's `refusedAs` makes of it; a call that
+ * gets no answer, or whose refusal's body stops while it is read, throws {@link GitHubNoAnswer}. The request and every
+ * read of its answer's body end at the deadline or the caller's cancel, even through a fetch that leaves them open
+ * past its signal, and a body still being read there is cancelled.
  */
 export async function githubSend(fetchImpl: typeof fetch, url: string, request: GitHubRequest): Promise<GitHubAnswer> {
   const headers = githubHeaders(request.token, request.accept);
@@ -356,7 +393,10 @@ export async function githubSend(fetchImpl: typeof fetch, url: string, request: 
     // The fetch's own error would name the address or its cause; the reason is all a caller acts on.
     throw deadline.noAnswer();
   }
-  if (!response.ok) throw await refusalOf(response, deadline);
+  if (!response.ok) {
+    const refusal = await refusalOf(response, deadline, request.refusedAs !== undefined);
+    throw request.refusedAs === undefined ? new GitHubApiError(refusal.status, refusal) : request.refusedAs(refusal);
+  }
   return {
     response,
     bytes: (maxBytes: number): Promise<Uint8Array> => readBody(response, maxBytes, deadline),
