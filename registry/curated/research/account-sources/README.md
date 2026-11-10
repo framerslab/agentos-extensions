@@ -22,18 +22,18 @@ Connectors obtain their grants through AgentOS's auth module and store them thro
 An `IssueTracker` connects a person's issue tracker (GitHub, Linear, Jira) on the person's own grant. It exposes its `kind` and five operations:
 
 - `destinations(signal?)` answers the places the person may open an issue in, each a `TrackerDestination`: a Linear team, a Jira project or a GitHub repository, with its id, its key where the tracker has one, its name, who can read an issue there where the tracker says, and the issue types it takes where the tracker asks for one.
-- `assignedIssues({ limit?, signal? })` answers the open issues assigned to the person, the newest change first, each a `TrackerIssue` with its id, its key (`ENG-123`), its title, its own page as an absolute address, `open` or `done`, its last change and its destination.
-- `createIssue(draft, signal?)` opens one issue from an `IssueDraft`: the destination's id, the title, the body as plain text with paragraphs apart by a blank line, which the tracker renders in its own form, and the issue type's id where the destination asks for one. It answers an `IssueRef`: the id, the key and the address. A tracker cuts nothing from a draft and refuses what it cannot take.
+- `assignedIssues({ limit?, signal? })` answers the open issues assigned to the person, the newest change first and at most `limit`, each a `TrackerIssue` with its id, its key (`ENG-123`), its title, its own page as an absolute https address, `open` or `done`, its last change and its destination.
+- `createIssue(draft, signal?)` opens one issue from an `IssueDraft`: the destination's id, the title, the body as plain text with paragraphs apart by a blank line, which the tracker renders in its own form, and the issue type's id where the destination asks for one. It answers an `IssueRef`: the id, the key and the https address. A tracker cuts nothing from a draft and refuses what it cannot take.
 - `closeIssue(ref, signal?)` moves an issue to its destination's done state; an issue already done resolves.
 - `revoke()` ends the access the tracker holds where the tracker has a way to, and answers `{ revoked }`, whether the tracker confirmed it.
 
-`kind` is one of `TRACKER_KINDS` (`github`, `linear`, `jira`; `isTrackerKind` tells them apart) or a later tracker's own word. A tracker reads nothing of other people beyond what an issue's listing carries, and keeps no person's id, name or address.
+`kind` is one of `TRACKER_KINDS` (`github`, `linear`, `jira`; `isTrackerKind` tells them apart) or a later tracker's own word: a lower-case letter, then at most 31 lower-case letters, digits or underscores (`isTrackerKindWord`). A tracker reads nothing of other people beyond what an issue's listing carries, and keeps no person's id, name or address.
 
 A call that does not go through throws a `TrackerFault` with a fixed `reason` (`grant`, `rate_limited`, `refused`, `not_found`, `no_answer`, `invalid_response` or `configuration`) and the HTTP `status` where there is one. Its message carries the reason and the status alone, never the vendor's text, a token or a person's words. Three subclasses carry more: `TrackerRateLimited` its `retryAt`, epoch milliseconds or null when the tracker named no time; `TrackerGrantRefused` a token refused, a grant revoked or a scope lost; `TrackerNoAnswer` its `cause`, `timeout`, `cancelled` or `network`.
 
 A tracker is reached in one of two ways, both behind this interface: a person's OAuth grant, and a workspace's own automation, such as Linear's client credentials grant or an Atlassian API token or service account. A pack's client takes its credential from a supplier, so a pack adds the second way as a constructor when a host needs it, and no caller changes.
 
-A tracker pack's tests run `trackerConformance` over its tracker on a fixture: eight checks of the kind, the destinations, the assigned issues, a create, a close, the refusal of an unknown destination, a rate limit and the revocation. The harness names what the fixture holds and gives the fixture's own `issueState`, read from the fixture's record and never through the tracker, so a close that changes nothing fails. Each check is a `name` and a `run` that throws an `Error` starting with the name; `run` binds nothing, so any runner calls it. The close check closes the issue the create check made, so run them in order:
+A tracker pack's tests run `trackerConformance` over its tracker on a fixture: eight checks of the kind, the destinations and the fields each carries, the assigned issues, their fields and their `limit`, a create in the destination the draft names, a close, the refusal of an unknown destination, a rate limit and the revocation. The harness names what the fixture holds and gives two reads of the fixture's own record, never through the tracker: `issueState`, so a close that changes nothing fails, and `issueDestination`, so an issue opened in another destination fails. Each check is a `name` and a `run` that throws an `Error` starting with the name, also when one of the tracker's calls rejects: that failure names what was thrown by its name alone and keeps it as the `cause`. `run` binds nothing, so any runner calls it. The close check closes the issue the create check made, so run them in order:
 
 ```ts
 import { trackerConformance } from '@framers/agentos-ext-account-sources';
@@ -43,6 +43,7 @@ describe('the tracker', () => {
     tracker,                       // the pack's tracker on a grant the fixture accepts
     fixture: { kind: 'linear', destinationIds: ['team-1', 'team-2'], assignedIssueKeys: ['ENG-1'] },
     issueState: (ref) => stub.issueState(ref),
+    issueDestination: (ref) => stub.issueDestination(ref),
     rateLimitNext: () => stub.limitNextCall(),   // leave it out where the fixture cannot limit
   })) it(check.name, check.run);
 });

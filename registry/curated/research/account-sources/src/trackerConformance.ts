@@ -1,12 +1,15 @@
 /**
  * @fileoverview The checks every tracker pack's tests run over its tracker on a fixture: the kind, the destinations,
- * the assigned issues, a create, a close, a refusal, a rate limit and the revocation. Each check is a name and a
- * function that throws an `Error` starting with the check's name when the tracker breaks the contract, so a pack runs
- * them under its own test runner with no shared dependency. A check's `run` binds nothing, so a runner may call it
- * detached (`it(check.name, check.run)`).
+ * the assigned issues and their limit, a create in the named destination, a close, a refusal, a rate limit and the
+ * revocation. Each check is a name and a function that throws an `Error` starting with the check's name when the
+ * tracker breaks the contract or one of its calls rejects, so a pack runs them under its own test runner with no shared
+ * dependency. A check's `run` binds nothing, so a runner may call it detached (`it(check.name, check.run)`).
  * @module agentos-ext-account-sources/trackerConformance
  */
-import { isTrackerKind, TrackerFault, TrackerRateLimited, type IssueTracker } from './trackers.js';
+import {
+  isTrackerKindWord, TrackerFault, TrackerRateLimited,
+  type IssueTracker, type TrackerDestination, type TrackerIssue,
+} from './trackers.js';
 
 /** A tracker over a fixture, and what the fixture holds. */
 export interface TrackerHarness {
@@ -25,6 +28,8 @@ export interface TrackerHarness {
   };
   /** Reads an issue's state from the fixture's own record, never through the tracker, so a close that changes nothing fails. */
   issueState: (ref: { id: string; key: string }) => Promise<'open' | 'done' | undefined>;
+  /** Reads the id of the destination an issue is in from the fixture's own record, never through the tracker, so an issue opened elsewhere fails. */
+  issueDestination: (ref: { id: string; key: string }) => Promise<string | undefined>;
   /** Makes the fixture answer a rate limit to the next call; left out where the fixture cannot. */
   rateLimitNext?: () => void;
 }
@@ -38,14 +43,34 @@ export interface ConformanceCheck {
 /** The failure a check throws: its name, a colon and the detail. */
 type Failure = (detail: string) => Error;
 
-/** A check whose body throws the failure it is handed; the run closes over the name and binds no `this`. */
+/**
+ * A check whose body throws the failure it is handed. The run closes over the name and binds no `this`. A rejection
+ * the body did not make (the tracker's or the fixture's own) becomes a failure naming what was thrown, by its name
+ * alone and never its message, which may carry a vendor's text, with the original as the failure's `cause`.
+ */
 function check(name: string, body: (failure: Failure) => Promise<void>): ConformanceCheck {
-  const failure: Failure = (detail) => new Error(`${name}: ${detail}`);
-  return { name, run: () => body(failure) };
+  const made = new WeakSet<Error>();
+  const failure: Failure = (detail) => {
+    const error = new Error(`${name}: ${detail}`);
+    made.add(error);
+    return error;
+  };
+  return {
+    name,
+    run: async () => {
+      try {
+        await body(failure);
+      } catch (error) {
+        if (error instanceof Error && made.has(error)) throw error;
+        throw new Error(`${name}: threw ${thrownName(error)}`, { cause: error });
+      }
+    },
+  };
 }
 
 /** True for an absolute https address. */
-function absolute(url: string): boolean {
+function absolute(url: unknown): boolean {
+  if (typeof url !== 'string') return false;
   try {
     return new URL(url).protocol === 'https:';
   } catch {
@@ -56,6 +81,41 @@ function absolute(url: string): boolean {
 /** The name of what a call threw, for a check's detail; never its message, which may carry a vendor's text. */
 function thrownName(error: unknown): string {
   return error instanceof Error ? error.name : 'no fault';
+}
+
+/** True for a string with at least one character. */
+function text(value: unknown): value is string {
+  return typeof value === 'string' && value !== '';
+}
+
+/** True for a key a tracker may give: a string with at least one character, or null. */
+function keyOrNull(value: unknown): boolean {
+  return value === null || text(value);
+}
+
+/** Whether a destination carries every field the contract requires, of the type it names. */
+function wholeDestination(each: TrackerDestination): boolean {
+  const value = each as Partial<Record<keyof TrackerDestination, unknown>> | null;
+  if (value === null || typeof value !== 'object') return false;
+  if (!text(value.id) || !text(value.name) || !keyOrNull(value.key)) return false;
+  if (value.visibility !== null && value.visibility !== 'public' && value.visibility !== 'private') return false;
+  if (!Array.isArray(value.issueTypes)) return false;
+  return value.issueTypes.every((type: unknown) => {
+    const kind = type as { id?: unknown; name?: unknown } | null;
+    return kind !== null && typeof kind === 'object' && text(kind.id) && text(kind.name);
+  });
+}
+
+/** Whether an assigned issue carries every field the contract requires, open, at an absolute https address. */
+function wholeIssue(each: TrackerIssue): boolean {
+  const value = each as Partial<Record<keyof TrackerIssue, unknown>> | null;
+  if (value === null || typeof value !== 'object') return false;
+  if (!text(value.id) || !text(value.key) || typeof value.title !== 'string') return false;
+  if (value.state !== 'open' || !absolute(value.url)) return false;
+  if (value.updatedAt !== null && (typeof value.updatedAt !== 'string' || Number.isNaN(Date.parse(value.updatedAt)))) return false;
+  const destination = value.destination as { id?: unknown; key?: unknown; name?: unknown } | null | undefined;
+  if (destination === null || typeof destination !== 'object') return false;
+  return text(destination.id) && keyOrNull(destination.key) && typeof destination.name === 'string';
 }
 
 /**
@@ -71,21 +131,24 @@ export function trackerConformance(harness: TrackerHarness): ConformanceCheck[] 
   return [
     check("the kind is a known tracker kind or the tracker's own word", async (failure) => {
       if (tracker.kind !== fixture.kind) throw failure(`kind ${tracker.kind}`);
-      if (!isTrackerKind(tracker.kind) && !/^[a-z][a-z0-9_]{0,31}$/.test(tracker.kind)) throw failure('kind is no word');
+      if (!isTrackerKindWord(tracker.kind)) throw failure('kind is no word');
     }),
     check("the destinations are the fixture's, each with a name and an issue type list", async (failure) => {
       const destinations = await tracker.destinations();
-      const ids = destinations.map((each) => each.id);
+      if (!Array.isArray(destinations)) throw failure('no list');
+      const ids = destinations.map((each) => each?.id);
       for (const id of fixture.destinationIds) if (!ids.includes(id)) throw failure(`missing ${id}`);
-      for (const each of destinations) {
-        if (each.name === '' || !Array.isArray(each.issueTypes)) throw failure(`destination ${each.id}`);
-      }
+      for (const each of destinations) if (!wholeDestination(each)) throw failure(`destination ${String(each?.id)}`);
     }),
     check("the assigned issues are the fixture's open ones, each with an absolute address", async (failure) => {
       const issues = await tracker.assignedIssues();
-      const keys = issues.map((each) => each.key);
+      if (!Array.isArray(issues)) throw failure('no list');
+      const keys = issues.map((each) => each?.key);
       for (const key of fixture.assignedIssueKeys) if (!keys.includes(key)) throw failure(`missing ${key}`);
-      for (const each of issues) if (each.state !== 'open' || !absolute(each.url)) throw failure(`issue ${each.key}`);
+      for (const each of issues) if (!wholeIssue(each)) throw failure(`issue ${String(each?.key)}`);
+      const first = await tracker.assignedIssues({ limit: 1 });
+      if (!Array.isArray(first)) throw failure('no list');
+      if (first.length > 1) throw failure(`limit 1 answered ${first.length}`);
     }),
     check('an issue created in the first destination has an id, a key and an absolute address', async (failure) => {
       const destinationId = fixture.destinationIds[0];
@@ -96,11 +159,13 @@ export function trackerConformance(harness: TrackerHarness): ConformanceCheck[] 
         body: 'From a meeting.\n\nOpened with a conformance check.',
         ...(fixture.issueTypeId === undefined ? {} : { issueTypeId: fixture.issueTypeId }),
       });
-      if (ref.id === '' || ref.key === '' || !absolute(ref.url)) {
-        throw failure(`ref ${JSON.stringify({ id: ref.id, key: ref.key })}`);
+      if (!text(ref?.id) || !text(ref.key) || !absolute(ref.url)) {
+        throw failure(`ref ${JSON.stringify({ id: ref?.id, key: ref?.key })}`);
       }
       made.id = ref.id;
       made.key = ref.key;
+      const opened = await harness.issueDestination(made);
+      if (opened !== destinationId) throw failure(`opened in ${String(opened)}`);
     }),
     check('closing the created issue leaves it done in the fixture, and closing it again resolves', async (failure) => {
       if (made.id === '') throw failure('no issue was created; run the create check first');

@@ -264,6 +264,7 @@
       "sourceGrantNamespace",
       "isAccountSourceKind",
       "isTrackerKind",
+      "isTrackerKindWord",
       "TrackerFault",
       "TrackerRateLimited",
       "TrackerGrantRefused",

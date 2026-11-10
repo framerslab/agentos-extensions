@@ -25,6 +25,19 @@ export function isTrackerKind(kind: string): kind is TrackerKind {
   return kinds.has(kind);
 }
 
+const kindWord = /^[a-z][a-z0-9_]{0,31}$/;
+
+/**
+ * Whether a kind is a word a tracker may answer as its own: a lower-case letter, then at most 31 lower-case letters,
+ * digits or underscores, as each of `TRACKER_KINDS` is.
+ *
+ * @param kind - A tracker's kind.
+ * @returns True for a kind of that form.
+ */
+export function isTrackerKindWord(kind: string): boolean {
+  return kindWord.test(kind);
+}
+
 /** A kind of issue a destination takes, where the tracker asks for one (Jira's issue types). */
 export interface TrackerIssueType {
   id: string;
@@ -52,7 +65,7 @@ export interface TrackerIssue {
   /** The identifier people use: "ENG-123", "ABC-7", "#42". */
   key: string;
   title: string;
-  /** The issue's own page, an absolute address. */
+  /** The issue's own page, an absolute https address. */
   url: string;
   /** Open, or done (completed or cancelled). */
   state: 'open' | 'done';
@@ -78,7 +91,7 @@ export interface IssueDraft {
 export interface IssueRef {
   id: string;
   key: string;
-  /** The issue's own page, an absolute address. */
+  /** The issue's own page, an absolute https address. */
   url: string;
 }
 
@@ -92,7 +105,7 @@ export interface IssueRef {
  * changes.
  */
 export interface IssueTracker {
-  /** One of `TRACKER_KINDS`, or a later tracker's own kind. */
+  /** One of `TRACKER_KINDS`, or a later tracker's own kind, a word of the form `isTrackerKindWord` accepts. */
   readonly kind: string;
   /** The destinations the person may open an issue in. */
   destinations(signal?: AbortSignal): Promise<TrackerDestination[]>;

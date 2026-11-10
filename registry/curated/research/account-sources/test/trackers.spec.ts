@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  isTrackerKind, TRACKER_KINDS, TrackerFault, TrackerGrantRefused, TrackerNoAnswer, TrackerRateLimited, trackerConformance,
+  isTrackerKind, isTrackerKindWord, TRACKER_KINDS, TrackerFault, TrackerGrantRefused, TrackerNoAnswer, TrackerRateLimited, trackerConformance,
   type IssueDraft, type IssueRef, type IssueTracker, type TrackerDestination, type TrackerIssue,
 } from '../src/index.js';
 
@@ -131,6 +131,11 @@ describe('the tracker kinds and faults', () => {
     expect(isTrackerKind('jira')).toBe(true);
     expect(isTrackerKind('asana')).toBe(false);
     expect(isTrackerKind('Linear')).toBe(false);
+    expect(TRACKER_KINDS.every((kind) => isTrackerKindWord(kind))).toBe(true);
+    expect(isTrackerKindWord('asana')).toBe(true);
+    expect(isTrackerKindWord('my-tracker')).toBe(false);
+    expect(isTrackerKindWord('Asana')).toBe(false);
+    expect(isTrackerKindWord(`a${'b'.repeat(32)}`)).toBe(false);
   });
 
   it('carries a reason and a status and no vendor text', () => {
