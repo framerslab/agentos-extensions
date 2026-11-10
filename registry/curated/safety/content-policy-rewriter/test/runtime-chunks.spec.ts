@@ -106,4 +106,171 @@ describe('ContentPolicyRewriterGuardrail under the AgentOS runtime', () => {
     expect(delta).toBeDefined();
     expect(delta.textDelta).toBe('[Content removed by policy]');
   });
+
+  describe('decisions on the final response', () => {
+    const judged = (violations: any[]) => JSON.stringify({ violations });
+
+    it('blocks when one enabled violation is in a block category and another in a sanitize one', async () => {
+      const llm = vi.fn().mockResolvedValueOnce(
+        judged([
+          { category: 'violence', severity: 'high', spans: ['a'] },
+          { category: 'profanity', severity: 'low', spans: ['b'] },
+        ]),
+      );
+      const g = new ContentPolicyRewriterGuardrail({
+        llmInvoker: llm,
+        keywordLists: { violence: [], profanity: [] },
+        categories: { violence: { enabled: true, action: 'block' }, profanity: { enabled: true, action: 'sanitize' } },
+      });
+      const result = await g.evaluateOutput({ context, chunk: finalResponse('A plain reply.') });
+      expect(result.action).toBe(GuardrailAction.BLOCK);
+      expect(result.reasonCode).toBe('violence');
+      expect(llm).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores a judged category that is unknown or not enabled', async () => {
+      const llm = vi.fn().mockResolvedValueOnce(
+        judged([
+          { category: 'nonsense', severity: 'high', spans: ['a'] },
+          { category: 'adult', severity: 'high', spans: ['b'] },
+        ]),
+      );
+      const g = new ContentPolicyRewriterGuardrail({
+        llmInvoker: llm,
+        keywordLists: { profanity: [] },
+        categories: { profanity: { enabled: true, action: 'sanitize' } },
+      });
+      const result = await g.evaluateOutput({ context, chunk: finalResponse('A plain reply.') });
+      expect(result).toBeNull();
+      expect(llm).toHaveBeenCalledTimes(1);
+    });
+
+    it('blocks at once on a block keyword even when a sanitize keyword comes first in the lists', async () => {
+      const llm = vi.fn();
+      const g = new ContentPolicyRewriterGuardrail({
+        llmInvoker: llm,
+        keywordLists: { profanity: ['heck'], illegal_harmful: ['zorbix'] },
+        categories: { profanity: { enabled: true, action: 'sanitize' }, illegal_harmful: { enabled: true, action: 'block' } },
+      });
+      const result = await g.evaluateOutput({ context, chunk: finalResponse('heck, a zorbix here') });
+      expect(result.action).toBe(GuardrailAction.BLOCK);
+      expect(result.reasonCode).toBe('KEYWORD_ILLEGAL_HARMFUL');
+      expect(llm).not.toHaveBeenCalled();
+    });
+
+    it('blocks when the judge call fails, and passes when the host chose judgeFailure allow', async () => {
+      const options = {
+        keywordLists: { profanity: [] },
+        categories: { profanity: { enabled: true, action: 'sanitize' } },
+      };
+      const failing = new ContentPolicyRewriterGuardrail({ ...options, llmInvoker: vi.fn().mockRejectedValue(new Error('down')) });
+      const blocked = await failing.evaluateOutput({ context, chunk: finalResponse('A plain reply.') });
+      expect(blocked.action).toBe(GuardrailAction.BLOCK);
+      expect(blocked.reasonCode).toBe('JUDGE_FAILED');
+
+      const malformed = new ContentPolicyRewriterGuardrail({ ...options, llmInvoker: vi.fn().mockResolvedValue('not json') });
+      const blockedToo = await malformed.evaluateOutput({ context, chunk: finalResponse('A plain reply.') });
+      expect(blockedToo.reasonCode).toBe('JUDGE_FAILED');
+
+      const allowing = new ContentPolicyRewriterGuardrail({
+        ...options,
+        judgeFailure: 'allow',
+        llmInvoker: vi.fn().mockRejectedValue(new Error('down')),
+      });
+      expect(await allowing.evaluateOutput({ context, chunk: finalResponse('A plain reply.') })).toBeNull();
+    });
+
+    it('blocks when the rewrite fails or comes back empty, never passing the original as a rewrite', async () => {
+      const options = {
+        keywordLists: { profanity: [] },
+        categories: { profanity: { enabled: true, action: 'sanitize' } },
+      };
+      const violation = judged([{ category: 'profanity', severity: 'low', spans: ['x'] }]);
+
+      const rejected = vi.fn().mockResolvedValueOnce(violation).mockRejectedValueOnce(new Error('down'));
+      const r1 = await new ContentPolicyRewriterGuardrail({ ...options, llmInvoker: rejected }).evaluateOutput({
+        context,
+        chunk: finalResponse('A plain reply.'),
+      });
+      expect(r1.action).toBe(GuardrailAction.BLOCK);
+      expect(r1.reasonCode).toBe('REWRITE_FAILED');
+      expect(r1.modifiedText).toBeUndefined();
+
+      const empty = vi.fn().mockResolvedValueOnce(violation).mockResolvedValueOnce('   ');
+      const r2 = await new ContentPolicyRewriterGuardrail({ ...options, llmInvoker: empty }).evaluateOutput({
+        context,
+        chunk: finalResponse('A plain reply.'),
+      });
+      expect(r2.action).toBe(GuardrailAction.BLOCK);
+      expect(r2.reasonCode).toBe('REWRITE_FAILED');
+    });
+
+    it('rewrites a judged violation that carries no spans', async () => {
+      const llm = vi
+        .fn()
+        .mockResolvedValueOnce(judged([{ category: 'profanity' }]))
+        .mockResolvedValueOnce('A cleaner reply.');
+      const g = new ContentPolicyRewriterGuardrail({
+        llmInvoker: llm,
+        keywordLists: { profanity: [] },
+        categories: { profanity: { enabled: true, action: 'sanitize' } },
+      });
+      const result = await g.evaluateOutput({ context, chunk: finalResponse('A plain reply.') });
+      expect(result.action).toBe(GuardrailAction.SANITIZE);
+      expect(result.modifiedText).toBe('A cleaner reply.');
+    });
+  });
+
+  describe('decisions on streamed deltas', () => {
+    it('catches a phrase split across two deltas', async () => {
+      const g = new ContentPolicyRewriterGuardrail({
+        llmInvoker: vi.fn(),
+        keywordLists: { illegal_harmful: ['zorbix plan'] },
+        categories: { illegal_harmful: { enabled: true, action: 'block' } },
+      });
+
+      const out = await collect(
+        wrapOutputGuardrails(g, context, streamOf([textDelta('the zorbix '), textDelta('plan is'), finalResponse('x')]), {
+          streamId: 'stream-1',
+        }),
+      );
+
+      expect(out.filter((c) => c.type === AgentOSResponseChunkType.TEXT_DELTA).map((c) => c.textDelta)).toEqual(['the zorbix ']);
+      const error = out.find((c) => c.type === AgentOSResponseChunkType.ERROR);
+      expect(error.code).toBe('KEYWORD_ILLEGAL_HARMFUL');
+    });
+
+    it('does not judge a keyword again once the delta that held it was replaced', async () => {
+      const g = new ContentPolicyRewriterGuardrail({
+        llmInvoker: vi.fn(),
+        keywordLists: { profanity: ['heck'] },
+        categories: { profanity: { enabled: true, action: 'sanitize' } },
+      });
+      const first = await g.evaluateOutput({ context, chunk: textDelta('oh heck ') });
+      expect(first.action).toBe(GuardrailAction.SANITIZE);
+      expect(await g.evaluateOutput({ context, chunk: textDelta('fine now') })).toBeNull();
+    });
+
+    it('keeps the streams apart', async () => {
+      const g = new ContentPolicyRewriterGuardrail({
+        llmInvoker: vi.fn(),
+        keywordLists: { illegal_harmful: ['zorbix plan'] },
+        categories: { illegal_harmful: { enabled: true, action: 'block' } },
+      });
+      expect(await g.evaluateOutput({ context, chunk: { ...textDelta('the zorbix '), streamId: 'a' } })).toBeNull();
+      expect(await g.evaluateOutput({ context, chunk: { ...textDelta('plan is'), streamId: 'b' } })).toBeNull();
+    });
+
+    it('skips deltas on a direct call when streamingPreFilter is false', async () => {
+      const g = new ContentPolicyRewriterGuardrail({
+        llmInvoker: vi.fn(),
+        streamingPreFilter: false,
+        categories: { profanity: { enabled: true, action: 'block' } },
+      });
+      expect(await g.evaluateOutput({ context, chunk: textDelta('What the fuck') })).toBeNull();
+      const final = await g.evaluateOutput({ context, chunk: finalResponse('What the fuck') });
+      expect(final.action).toBe(GuardrailAction.BLOCK);
+    });
+  });
 });
+
