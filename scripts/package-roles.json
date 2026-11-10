@@ -262,7 +262,13 @@
       "SourceRevocations",
       "sourceRevocationSchema",
       "sourceGrantNamespace",
-      "isAccountSourceKind"
+      "isAccountSourceKind",
+      "isTrackerKind",
+      "TrackerFault",
+      "TrackerRateLimited",
+      "TrackerGrantRefused",
+      "TrackerNoAnswer",
+      "trackerConformance"
     ],
     "registry/curated/research/public-sources": [
       "WikipediaSourceProvider",

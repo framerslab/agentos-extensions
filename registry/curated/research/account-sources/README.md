@@ -1,6 +1,6 @@
 # @framers/agentos-ext-account-sources
 
-A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, with helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read, the contracts, pure rules, PostgreSQL store and coordinator of a durable, resumable synchronization, weighted request quotas that every worker shares, and the fenced purge and revocation recovery of a connection's grant.
+A person's own accounts as sources. This library defines `AccountSourceConnector` and the `SourceRef` every passage carries, `IssueTracker`, which a tracker pack implements, with its faults and conformance checks, and helpers for line ranges, links, bounded body reads, requests under the shared public-sources limiter and the cache lifetime of a read, the contracts, pure rules, PostgreSQL store and coordinator of a durable, resumable synchronization, weighted request quotas that every worker shares, and the fenced purge and revocation recovery of a connection's grant.
 
 Install `@framers/agentos-ext-account-sources` with its peer `@framers/agentos` 0.13.134 or later. Node.js 22 or later is required, as it is for `@framers/agentos`. The runtime dependencies are `@framers/agentos-ext-public-sources` and `@framers/sql-storage-adapter`.
 
@@ -16,6 +16,37 @@ An `AccountSourceConnector` exposes its `kind` and four operations:
 A selection holds account item ids, and may name a `mode`: how the connector lists where the ids leave the choice to it, such as Slack's `invited`, `public` and `all` channel sets, a lower-case letter then at most 31 lower-case letters, digits or underscores (`isSourceSelectionMode`). A connector that lists by ids alone ignores the mode. A read carries text or bytes with a media type, the item and its attribution. A gone item names its id and the reason: `removed`, `no_access`, `not_owned`, or `too_large` for an item still in the account and readable by the grant whose content is past the connector's byte cap, whose earlier copy a caller may keep.
 
 Connectors obtain their grants through AgentOS's auth module and store them through its sealed token store. The connector interface holds no grant. The revocation lifecycle seals a stopped grant's refresh token into its revoke-only queue with the same module's sealing (see [Revocation and purge](#revocation-and-purge)).
+
+## Trackers
+
+An `IssueTracker` connects a person's issue tracker (GitHub, Linear, Jira) on the person's own grant. It exposes its `kind` and five operations:
+
+- `destinations(signal?)` answers the places the person may open an issue in, each a `TrackerDestination`: a Linear team, a Jira project or a GitHub repository, with its id, its key where the tracker has one, its name, who can read an issue there where the tracker says, and the issue types it takes where the tracker asks for one.
+- `assignedIssues({ limit?, signal? })` answers the open issues assigned to the person, the newest change first, each a `TrackerIssue` with its id, its key (`ENG-123`), its title, its own page as an absolute address, `open` or `done`, its last change and its destination.
+- `createIssue(draft, signal?)` opens one issue from an `IssueDraft`: the destination's id, the title, the body as plain text with paragraphs apart by a blank line, which the tracker renders in its own form, and the issue type's id where the destination asks for one. It answers an `IssueRef`: the id, the key and the address. A tracker cuts nothing from a draft and refuses what it cannot take.
+- `closeIssue(ref, signal?)` moves an issue to its destination's done state; an issue already done resolves.
+- `revoke()` ends the access the tracker holds where the tracker has a way to, and answers `{ revoked }`, whether the tracker confirmed it.
+
+`kind` is one of `TRACKER_KINDS` (`github`, `linear`, `jira`; `isTrackerKind` tells them apart) or a later tracker's own word. A tracker reads nothing of other people beyond what an issue's listing carries, and keeps no person's id, name or address.
+
+A call that does not go through throws a `TrackerFault` with a fixed `reason` (`grant`, `rate_limited`, `refused`, `not_found`, `no_answer`, `invalid_response` or `configuration`) and the HTTP `status` where there is one. Its message carries the reason and the status alone, never the vendor's text, a token or a person's words. Three subclasses carry more: `TrackerRateLimited` its `retryAt`, epoch milliseconds or null when the tracker named no time; `TrackerGrantRefused` a token refused, a grant revoked or a scope lost; `TrackerNoAnswer` its `cause`, `timeout`, `cancelled` or `network`.
+
+A tracker is reached in one of two ways, both behind this interface: a person's OAuth grant, and a workspace's own automation, such as Linear's client credentials grant or an Atlassian API token or service account. A pack's client takes its credential from a supplier, so a pack adds the second way as a constructor when a host needs it, and no caller changes.
+
+A tracker pack's tests run `trackerConformance` over its tracker on a fixture: eight checks of the kind, the destinations, the assigned issues, a create, a close, the refusal of an unknown destination, a rate limit and the revocation. The harness names what the fixture holds and gives the fixture's own `issueState`, read from the fixture's record and never through the tracker, so a close that changes nothing fails. Each check is a `name` and a `run` that throws an `Error` starting with the name; `run` binds nothing, so any runner calls it. The close check closes the issue the create check made, so run them in order:
+
+```ts
+import { trackerConformance } from '@framers/agentos-ext-account-sources';
+
+describe('the tracker', () => {
+  for (const check of trackerConformance({
+    tracker,                       // the pack's tracker on a grant the fixture accepts
+    fixture: { kind: 'linear', destinationIds: ['team-1', 'team-2'], assignedIssueKeys: ['ENG-1'] },
+    issueState: (ref) => stub.issueState(ref),
+    rateLimitNext: () => stub.limitNextCall(),   // leave it out where the fixture cannot limit
+  })) it(check.name, check.run);
+});
+```
 
 ## Attribution
 

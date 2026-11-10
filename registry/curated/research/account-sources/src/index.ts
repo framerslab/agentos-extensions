@@ -2,6 +2,9 @@
 export * from './types.js';
 /** The kinds of account the published connectors read or write. */
 export * from './kinds.js';
+/** The issue tracker interface, its faults, and the conformance checks a tracker pack runs. */
+export * from './trackers.js';
+export { trackerConformance, type TrackerHarness, type ConformanceCheck } from './trackerConformance.js';
 /** Attribution guards, line ranges, and source links. */
 export * from './sourceRef.js';
 /** Response body reads under a byte cap and their refusal. */
