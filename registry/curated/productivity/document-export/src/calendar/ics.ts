@@ -36,6 +36,11 @@ export interface IcsEventInput extends CalendarEventTimes {
   readonly productId?: string;
 }
 
+/** Whether `value` holds nothing but white space once the controls TEXT does not allow are dropped. */
+function blank(value: string): boolean {
+  return value.replace(CONTROLS, '').trim() === '';
+}
+
 /** `value` as an RFC 5545 TEXT value: controls dropped, then `\`, `;` and `,` escaped and each line break written `\n`. */
 function text(value: string): string {
   return wellFormed(value)
@@ -79,20 +84,20 @@ function fold(line: string): string {
 
 /**
  * The text of an iCalendar file holding one event: `BEGIN:VCALENDAR`, `VERSION:2.0`, `PRODID`, then one `VEVENT`
- * with `UID`, `DTSTAMP`, `DTSTART`, `DTEND` (left out for a timed event given no end, which RFC 5545 reads as ending
- * when it starts), `SUMMARY` and `DESCRIPTION` (when given). A timed event's times are written in UTC
+ * with `UID`, `DTSTAMP`, `DTSTART`, `DTEND` (left out for a timed event given no end or an end in the second it starts
+ * in, which RFC 5545 reads as ending when it starts), `SUMMARY` and `DESCRIPTION` (when given). A timed event's times are written in UTC
  * (`DTSTART:20261112T150000Z`); an all-day event's as dates (`DTSTART;VALUE=DATE:20261112`), with `DTEND` the day
  * after its last day, since `DTEND` is not inclusive (section 3.6.1). Every line ends in CRLF, the last included.
  *
  * @param input - The event.
  * @returns The file's text, to save as `text/calendar`.
- * @throws {RangeError} When `uid` or `productId` is empty, `stamp` is no instant, `start` or `end` is not in the form
+ * @throws {RangeError} When `uid` or `productId` is empty or holds only white space and control characters, `stamp` is no instant, `start` or `end` is not in the form
  *   the event takes (an instant for a timed event, `YYYY-MM-DD` for an all-day one), a time falls outside the years 0
- *   to 9999, or `end` is before `start`.
+ *   to 9999, or `end` falls in a second before the one `start` falls in.
  */
 export function icsEvent(input: IcsEventInput): string {
-  if (input.uid.trim() === '') throw new RangeError('icsEvent: uid is empty');
-  if (input.productId !== undefined && input.productId.trim() === '') throw new RangeError('icsEvent: productId is empty');
+  if (blank(input.uid)) throw new RangeError('icsEvent: uid is empty');
+  if (input.productId !== undefined && blank(input.productId)) throw new RangeError('icsEvent: productId is empty');
   const stamp = utcDateTime(readInstant(input.stamp, 'icsEvent', 'stamp'));
   const times = writtenTimes(input, 'icsEvent');
   const value = times.allDay ? ';VALUE=DATE:' : ':';

@@ -29,13 +29,14 @@ function field(value: string): string {
  * The address of Google Calendar's new-event page filled with one event:
  * `https://calendar.google.com/calendar/render?action=TEMPLATE&text=...&dates=...&details=...`. `text` and `details`
  * are percent-encoded. `dates` is two UTC date-times (`20261112T150000Z/20261112T153000Z`), the start twice for a
- * timed event given no end, or for an all-day event two dates, the second the day after its last day
+ * timed event given no end or an end in the second it starts in, or for an all-day event two dates, the second the day after its last day
  * (`20261112/20261113`). The address writes nothing to anyone's calendar until the person saves the event.
  *
  * @param input - The event.
  * @returns The address, to open in a new tab.
  * @throws {RangeError} When `start` or `end` is not in the form the event takes (an instant for a timed event,
- *   `YYYY-MM-DD` for an all-day one), a time falls outside the years 0 to 9999, or `end` is before `start`.
+ *   `YYYY-MM-DD` for an all-day one), a time falls outside the years 0 to 9999, or `end` falls in a second before
+ *   the one `start` falls in.
  */
 export function googleCalendarAddress(input: GoogleCalendarEventInput): string {
   const times = writtenTimes(input, 'googleCalendarAddress');

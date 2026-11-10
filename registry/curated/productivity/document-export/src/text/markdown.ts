@@ -35,6 +35,9 @@ const AUTOLINKS: ReadonlyArray<readonly [RegExp, string]> = [
   [/:(?=\/\/)/g, `:${ZERO_WIDTH_SPACE}`],
   // addresses that start `www.`
   [/\b(www)\./gi, `$1${ZERO_WIDTH_SPACE}.`],
+  // emoji shortcodes, `:tada:` and `:+1:`, which GitHub draws whatever comes before them; the backslashes of escaped
+  // underscores count, since `:white\_check\_mark:` reads as `:white_check_mark:`
+  [/:(?=[\w+\\-]+:)/g, `:${ZERO_WIDTH_SPACE}`],
 ];
 
 /** One line of text, made safe. */
@@ -50,8 +53,8 @@ function line(text: string): string {
  * `text` made safe as Markdown body text: it renders as the words it holds, with its line breaks, and starts no
  * heading, list, quote, thematic break, table, link, image, HTML, entity, code span or emphasis. On GitHub it also
  * mentions no one and references no issue, pull request, discussion or commit (`@name`, `#12`, `GH-12`,
- * `owner/repo#12`, `user@sha`, `owner/repo/issues/12`), and holds no address that links on its own (`https://`,
- * `www.`). Line breaks are written as LF, and each line's indentation is dropped. A bare commit hash still links to
+ * `owner/repo#12`, `user@sha`, `owner/repo/issues/12`), holds no address that links on its own (`https://`,
+ * `www.`) and draws no emoji from a shortcode (`:tada:`). Line breaks are written as LF, and each line's indentation is dropped. A bare commit hash still links to
  * its commit when the repository holds it, and text between two dollar signs can render as math on GitHub.
  *
  * @param text - The text, such as words someone said or wrote.

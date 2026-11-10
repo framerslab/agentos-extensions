@@ -11,12 +11,14 @@
 export interface CalendarEventTimes {
   /**
    * When the event starts. For a timed event, an instant: a `Date`, or an ISO 8601 date-time string that carries its
-   * offset (`2026-11-12T15:00:00Z`, `2026-11-12T10:00:00-05:00`). For an all-day event, its first day as `YYYY-MM-DD`.
+   * offset (`2026-11-12T15:00:00Z`, `2026-11-12T10:00:00.123456-05:00`), its fraction of a second as long as given and
+   * dropped when written. For an all-day event, its first day as `YYYY-MM-DD`.
    */
   readonly start: Date | string;
   /**
    * When the event ends, in the form `start` takes. A timed event ends at this instant, and ends when it starts
-   * without it. An all-day event covers this day, the last it covers, and covers its first day alone without it.
+   * without it or when it falls in the second the event starts in. An all-day event covers this day, the last it
+   * covers, and covers its first day alone without it.
    */
   readonly end?: Date | string;
   /** Whether the event takes whole days rather than a time of day. Default `false`. */
@@ -31,7 +33,8 @@ export interface WrittenTimes {
   readonly start: string;
   /**
    * The end, non-inclusive as both formats count it: the instant a timed event ends, or the day after an all-day
-   * event's last day. Absent for a timed event given no end.
+   * event's last day. Absent for a timed event given no end or an end in the second it starts in, since RFC 5545
+   * wants `DTEND` later than `DTSTART` (section 3.8.2.2).
    */
   readonly end?: string;
 }
@@ -41,8 +44,8 @@ const DAY_MS = 86_400_000;
 /** A day: four digits of year, two of month and two of day. */
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** A date-time with its offset: seconds and up to three digits of fraction optional, `Z` or `+hh:mm` / `-hh:mm`. */
-const DATE_TIME = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|[+-](\d{2}):(\d{2}))$/;
+/** A date-time with its offset: seconds and a fraction of any length optional, `Z` or `+hh:mm` / `-hh:mm`. */
+const DATE_TIME = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(Z|[+-](\d{2}):(\d{2}))$/;
 
 /** A lone half of a surrogate pair, which no UTF-8 text can hold. */
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
@@ -81,11 +84,16 @@ export function readInstant(value: Date | string, caller: string, field: string)
   } else if (typeof value === 'string') {
     const match = DATE_TIME.exec(value);
     if (match) {
-      const [, day, hour, minute, second, offsetHour, offsetMinute] = match;
+      const [, day, hour, minute, second, fraction, offset, offsetHour, offsetMinute] = match;
       const [year, month, date] = day!.split('-').map(Number) as [number, number, number];
       const inRange = Number(hour) < 24 && Number(minute) < 60 && Number(second ?? 0) < 60
         && (offsetHour === undefined || (Number(offsetHour) < 24 && Number(offsetMinute) < 60));
-      if (inRange && Number.isFinite(dayAt(year, month, date))) ms = Date.parse(value);
+      if (inRange && Number.isFinite(dayAt(year, month, date))) {
+        // ECMAScript's date-time string form holds three digits of fraction, so a longer one is cut, never rounded,
+        // which keeps the instant in the second it was given in
+        const milliseconds = fraction === undefined ? '' : `.${fraction.slice(0, 3).padEnd(3, '0')}`;
+        ms = Date.parse(`${day}T${hour}:${minute}:${second ?? '00'}${milliseconds}${offset}`);
+      }
     }
   }
   if (!writable(ms)) {
@@ -131,6 +139,10 @@ export function writtenTimes(times: CalendarEventTimes, caller: string): Written
   const start = readInstant(times.start, caller, 'start');
   if (times.end === undefined) return { allDay: false, start: utcDateTime(start) };
   const end = readInstant(times.end, caller, 'end');
-  if (end < start) throw new RangeError(`${caller}: end is before start`);
+  // the values are written to the second, so the seconds decide; an end in the start's second is no end at all
+  const startSecond = Math.floor(start / 1000);
+  const endSecond = Math.floor(end / 1000);
+  if (endSecond < startSecond) throw new RangeError(`${caller}: end is before start`);
+  if (endSecond === startSecond) return { allDay: false, start: utcDateTime(start) };
   return { allDay: false, start: utcDateTime(start), end: utcDateTime(end) };
 }
