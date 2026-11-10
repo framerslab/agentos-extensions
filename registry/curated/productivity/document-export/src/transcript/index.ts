@@ -5,6 +5,7 @@
 
 export type { ExportCheck, ExportPack, ExportPackEntry, ExportQuote, ExportTurn, TranscriptExport } from './types.js';
 export { csvField, cueText, vttText, xmlText } from './sanitize.js';
+export { markdownText } from '../text/markdown.js';
 export { clock, cueTime } from './times.js';
 export { toHtml, toJson, toMarkdown, toPlainText } from './text.js';
 export { actionItemsCsv } from './csv.js';

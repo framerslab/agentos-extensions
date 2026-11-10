@@ -412,6 +412,7 @@
     },
     "registry/curated/productivity/document-export": {
       "./archive": ["openArchive", "ArchiveError"],
+      "./calendar": ["icsEvent", "googleCalendarAddress"],
       "./transcript": [
         "toMarkdown",
         "toPlainText",
@@ -427,6 +428,7 @@
         "cueText",
         "vttText",
         "xmlText",
+        "markdownText",
         "clock",
         "cueTime"
       ]

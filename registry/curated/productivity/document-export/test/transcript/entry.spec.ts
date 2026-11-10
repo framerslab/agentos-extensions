@@ -13,6 +13,9 @@ const packRoot = resolve(here, '../..');
 /** The one module outside its folder the entry may import: the archive's refusal, for a stopped write. */
 const ARCHIVE_ERRORS = '../archive/errors.js';
 
+/** The Markdown body text helper, which the entry re-exports and which imports nothing either. */
+const MARKDOWN_TEXT = '../text/markdown.js';
+
 /** The modules a source file imports or re-exports values from; a type-only import is left out. */
 function valueImports(file: string): string[] {
   const source = readFileSync(file, 'utf8');
@@ -29,6 +32,7 @@ const FUNCTIONS = [
   'csvField',
   'cueText',
   'cueTime',
+  'markdownText',
   'readArchive',
   'toDocx',
   'toHtml',
@@ -43,17 +47,20 @@ const FUNCTIONS = [
 ];
 
 describe('the transcript entry', () => {
-  it("imports nothing but its own files, fflate and the archive's refusal, which imports nothing", () => {
+  it("imports nothing but its own files, fflate, the archive's refusal and the Markdown text helper, which import nothing", () => {
     const outside: string[] = [];
     for (const file of readdirSync(folder)) {
       for (const from of valueImports(join(folder, file))) {
-        if (!from.startsWith('./') && from !== 'fflate' && from !== ARCHIVE_ERRORS) outside.push(`${file}: ${from}`);
+        if (!from.startsWith('./') && from !== 'fflate' && from !== ARCHIVE_ERRORS && from !== MARKDOWN_TEXT) {
+          outside.push(`${file}: ${from}`);
+        }
       }
     }
     expect(outside).toEqual([]);
     // A stopped write throws the archive entry's own ArchiveError; that module stays free of imports, so the entry
     // reaches nothing more through it.
     expect(valueImports(resolve(folder, ARCHIVE_ERRORS.replace(/\.js$/, '.ts')))).toEqual([]);
+    expect(valueImports(resolve(folder, MARKDOWN_TEXT.replace(/\.js$/, '.ts')))).toEqual([]);
   });
 
   it('is published as the build the exports map names, with every function, and writes a zip through fflate', async () => {
