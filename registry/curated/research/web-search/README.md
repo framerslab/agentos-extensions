@@ -54,6 +54,12 @@ Run multiple searches and aggregate results.
 
 Cross-check a claim across sources.
 
+## Ranking
+
+With `multiSearch: true`, a query goes to every configured provider and DuckDuckGo in parallel. Results are merged by normalized URL and ordered by a confidence score built from how many providers returned the URL and where each placed it. The pack runs no reranking model and sends results to no reranking service.
+
+To rerank search results with a model, use AgentOS's `WebSearchService` (`@framers/agentos/cognition/web-search`) with a `RerankerService` and a `rerankChain`. AgentOS ships three reranking providers: `local` (a cross-encoder run in process through Transformers.js), `cohere` (Cohere's rerank API) and `llm-judge` (a model you call through your own `llmCallFn` scores and orders the results). See AgentOS's [Reranking](https://github.com/framerslab/agentos/blob/d2725ab9566cd7a58ce4666c42d4bdb492d281fa/docs/text/RERANKING.md) page.
+
 ## Notes
 
 - Tools are read-only (no side effects).
