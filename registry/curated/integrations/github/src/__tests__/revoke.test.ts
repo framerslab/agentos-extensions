@@ -68,23 +68,33 @@ describe("a person's grant revoked at GitHub", () => {
   });
 
   /*
-   * UNVERIFIED: what GitHub answers for a token whose grant is already gone. The page lists 204 and 422 for this
-   * address and says the token must be valid; of its neighbours on the same page, "Check a token" and "Reset a token",
-   * it says "Invalid tokens will return 404 NOT FOUND". Both answers are read as nothing deleted, never as an error:
-   * neither says a grant is left for the token.
+   * The page lists 204 and 422 for this address and says the token must be valid; of its neighbours on the same page,
+   * "Check a token" and "Reset a token", it says "Invalid tokens will return 404 NOT FOUND". GitHub's own client reads
+   * a 404 from this call as a token already invalid and throws any other failure on:
+   * "if (error.status !== 404) throw error"
+   *   https://github.com/octokit/auth-oauth-user.js/blob/6030b1fa583eda14b0a068a4ce16b8d3f6291e5c/src/auth.ts#L147
+   * UNVERIFIED: no page read says in words that a token whose grant is already gone gets 404 here.
    */
-  it('answers false when GitHub answers 404 or 422, as for a token that names no grant, having deleted nothing', async () => {
-    github = await startGitHub((request) => {
-      const { access_token: token } = JSON.parse(request.body) as { access_token: string };
-      if (token === 'ghu_madeUpGone404') return { status: 404, body: { message: 'Not Found', documentation_url: 'https://docs.github.com/rest/apps/oauth-applications#delete-an-app-authorization' } };
-      return { status: 422, body: { message: 'Validation Failed', errors: [{ resource: 'OauthAccess', code: 'invalid' }] } };
-    });
-    const at = { apiBase: github.base };
+  it('answers false when GitHub answers 404, as for a token that names no grant, having deleted nothing', async () => {
+    github = await startGitHub(() => ({ status: 404, body: { message: 'Not Found', documentation_url: 'https://docs.github.com/rest/apps/oauth-applications#delete-an-app-authorization' } }));
 
-    await expect(revokeGrant({ ...CLIENT, accessToken: 'ghu_madeUpGone404' }, at)).resolves.toBe(false);
-    await expect(revokeGrant({ ...CLIENT, accessToken: 'ghu_madeUpGone422' }, at)).resolves.toBe(false);
+    await expect(revokeGrant({ ...CLIENT, accessToken: 'ghu_madeUpGone404' }, { apiBase: github.base })).resolves.toBe(false);
     // One request a call: a refused revocation is not sent again.
-    expect(github.received).toHaveLength(2);
+    expect(github.received).toHaveLength(1);
+  });
+
+  /*
+   * "422 - Validation failed, or the endpoint has been spammed." A 422 does not say the grant is gone: an endpoint
+   * that has been spammed answers it while the grant and its tokens live. So it is thrown, never answered as nothing
+   * left to revoke, and a caller that drops its record on false keeps it.
+   */
+  it('throws for a 422, which GitHub also answers for a spammed endpoint while the grant lives', async () => {
+    github = await startGitHub(() => ({ status: 422, body: { message: 'Validation Failed', errors: [{ resource: 'OauthAccess', code: 'invalid' }] } }));
+
+    const refused: unknown = await revokeGrant({ ...CLIENT, accessToken: TOKEN }, { apiBase: github.base }).catch((error: unknown) => error);
+
+    expect(refused).toMatchObject({ name: 'OAuthGrantRefused', reason: 'revoke', status: 422 });
+    expect(github.received).toHaveLength(1);
   });
 
   it("throws for any other answer, another success included, telling its status and nothing of its body, the token or the client secret", async () => {
@@ -126,7 +136,7 @@ describe("a person's grant revoked at GitHub", () => {
   });
 
   it('refuses an empty token, client id or client secret before any request, so none reads as a grant already gone', async () => {
-    github = await startGitHub(() => ({ status: 422, body: { message: 'Validation Failed' } }));
+    github = await startGitHub(() => ({ status: 404, body: { message: 'Not Found' } }));
     const at = { apiBase: github.base };
 
     await expect(revokeGrant({ ...CLIENT, accessToken: '' }, at)).rejects.toBeInstanceOf(TypeError);
