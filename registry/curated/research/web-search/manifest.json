@@ -3,7 +3,7 @@
   "id": "com.framers.research.web-search",
   "name": "Web Search Extension",
   "version": "1.3.3",
-  "description": "Multi-provider web search (Serper, Tavily, Brave, SerpAPI, Firecrawl, SearXNG, DuckDuckGo fallback) with URL deduplication, ranking by cross-provider agreement, research aggregation, and fact-checking for AgentOS",
+  "description": "Multi-provider web search for AgentOS: by default the first configured provider that answers (Serper, Tavily, Brave, SerpAPI, Firecrawl, SearXNG, then DuckDuckGo); with multiSearch, every configured provider and DuckDuckGo in parallel, deduplicated by URL and ranked by cross-provider agreement; plus research aggregation and fact-checking",
   "author": {
     "name": "Frame.dev",
     "email": "support@frame.dev",

@@ -2,7 +2,7 @@
 
 Professional web search, research aggregation, and fact-checking for AgentOS agents.
 
-Supports multiple providers (Serper.dev, SerpAPI, Brave) with a DuckDuckGo fallback when no API keys are configured.
+Supports Serper.dev, Tavily, Brave, SerpAPI, Firecrawl and SearXNG. A search tries the configured providers in that order and answers with the first that succeeds, then falls back to DuckDuckGo, which needs no API key.
 
 ## Installation
 
@@ -21,7 +21,7 @@ const agentos = await AgentOS.create({
       {
         package: '@framers/agentos-ext-web-search',
         options: {
-          // Any one of these is enough; Serper/SerpAPI/Brave are tried in order.
+          // Any one of these is enough; configured providers are tried in the order above.
           serperApiKey: process.env.SERPER_API_KEY,
           serpApiKey: process.env.SERPAPI_API_KEY,
           braveApiKey: process.env.BRAVE_API_KEY,
@@ -37,6 +37,9 @@ const agentos = await AgentOS.create({
 - `SERPER_API_KEY` (optional)
 - `SERPAPI_API_KEY` (optional)
 - `BRAVE_API_KEY` (optional)
+- `TAVILY_API_KEY` (optional)
+- `FIRECRAWL_API_KEY` (optional)
+- `SEARXNG_URL` (optional, a SearXNG instance URL)
 
 If none are set, the extension falls back to DuckDuckGo.
 
