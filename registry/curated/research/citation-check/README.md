@@ -39,7 +39,7 @@ and exits 1. The output is the markdown for a document's "Citation check log" se
 npm install @framers/agentos-ext-citation-check
 ```
 
-It needs Node.js 22 or later, as `@framers/agentos` does. It reads pages with [public-sources](https://www.npmjs.com/package/@framers/agentos-ext-public-sources) (`htmlToBlocks` in page mode and `citationSources`), the [web scraper](https://www.npmjs.com/package/@framers/agentos-ext-web-scraper) (a browser's request headers and the fallback tiers) and the `values` entry of [grounding-guard](https://www.npmjs.com/package/@framers/agentos-ext-grounding-guard) (the sentence rule and the word rules). `@framers/agentos` 0.13.120 or later, the first release with the checked egress the tool reads pages through, is a peer, loaded only to grade with embeddings or to read pages through checked egress. Grounding-guard lists `@huggingface/transformers` as an optional dependency for its NLI model; `npm install --omit=optional` leaves it out when you do not use NLI.
+It needs Node.js 22 or later, as `@framers/agentos` does. It reads pages with [public-sources](https://www.npmjs.com/package/@framers/agentos-ext-public-sources) (`htmlToBlocks` in page mode, `citationSources` and the `SourceDocument` a page answers as, from 0.2.3), the [web scraper](https://www.npmjs.com/package/@framers/agentos-ext-web-scraper) (a browser's request headers and the fallback tiers) and the `values` entry of [grounding-guard](https://www.npmjs.com/package/@framers/agentos-ext-grounding-guard) (the sentence rule and the word rules). `@framers/agentos` 0.13.120 or later, the first release with the checked egress the tool reads pages through, is a peer, loaded only to grade with embeddings or to read pages through checked egress. Grounding-guard lists `@huggingface/transformers` as an optional dependency for its NLI model; `npm install --omit=optional` leaves it out when you do not use NLI.
 
 ## Input
 
@@ -123,6 +123,74 @@ Each distinct address is fetched once, its fragment removed, four at a time. A r
 
 The global `fetch` reaches any address a document names. A host that checks documents from people it does not trust passes `egress: 'hosted'`, which reaches public https addresses on port 443 alone and checks every redirect, or a `fetch` of its own. The fallback's requests go through neither, so it is off once either is given unless `fallback: true` turns it on.
 
+### The page reader
+
+`readPage(url, options)` is the reader `checkCitations` runs, exported for a host that reads pages of its own. It answers `{ status, blocks, passages, document, pageDate }`: the page's status as above, its text blocks, its sentences as passages, the page as a public-sources `SourceDocument` (null when it was not read) and the page's own date (null when it states none). It throws only the caller's own cancellation.
+
+```ts
+import { egressTransport, readPage } from '@framers/agentos-ext-citation-check';
+
+const transport = await egressTransport('hosted', { timeoutMs: 5_000, maxBytes: 2_000_000 }, 'ExampleReader/1.0 (https://example.org)');
+const page = await readPage('https://example.org/harbour', {
+  transport,
+  scraper: null,
+  timeoutMs: 5_000,
+  maxBytes: 2_000_000,
+  textBudget: 300_000,
+  now: Date.now,
+  allowUrl: (url) => !new URL(url).hostname.endsWith('.internal.example'),
+  robots: { token: 'ExampleReader', timeoutMs: 2_000, maxBytes: 512_000, cacheMs: 600_000 },
+});
+if (page.document !== null) console.log(page.document.title, page.document.licence.name, page.document.publisher);
+```
+
+`fetchTransport(fetch, userAgent?)` and `egressTransport(profile, bounds, userAgent?)` build the request a page goes through. A transport takes `(url, signal, rules?)` and answers `{ status, finalUrl, header, read, readPrefix, discard }`; a host can pass one of its own.
+
+The document's `url` and `key` are the address after redirects. Its `title` is the page's `<title>`, its character references read, its white space collapsed and cut to 255 characters, or the host when the page has none. Its `licence` is the one the page states (below), or `{ name: 'not read', url: '' }` (`UNREAD_LICENCE`) when the reader finds none. `publisher` is the site's name from `og:site_name`, else from JSON-LD `publisher.name`, cut to 255 characters and left out when the page names none. `pageDate` is the page's own date from `article:modified_time`, else JSON-LD `dateModified`, else the `Last-Modified` header, left out when none parses. The markup is read as served: a value a script writes later is not seen.
+
+#### The host's rule and robots.txt, on every hop
+
+`allowUrl(url)` is the host's rule for an address. `robots` reads robots.txt by [RFC 9309](https://www.rfc-editor.org/rfc/rfc9309.html) with the host's product token. Given either, the reader checks the first address before it is requested, and both transports check every redirect target before its request, following up to five redirects one at a time. A refused address ends the page as `unreachable` with `failure: 'refused'` and `detail: 'host'` or `detail: 'robots'`, and is never requested. A transport called with the rules applies them the same way, so an image or an icon read through it obeys them on every hop and throws `PageRefusal` for one they refuse.
+
+robots.txt is the file at the address's origin, read through the same transport with the host's rule on its own hops, under its own deadline (`timeoutMs`). The reader parses its first `maxBytes` bytes and ignores the rest along with the line the limit cuts; RFC 9309 sets that limit's floor at 500 KiB (`ROBOTS_PARSING_FLOOR`, 512,000 bytes). Groups are matched by product token without case, the `*` group when none names the token, and two groups for the token are read as one. The longest matching `Allow` or `Disallow` decides, an `Allow` over a `Disallow` of the same length; `*` matches any run of characters, a final `$` the end of the path and query, and paths are compared with their percent-encoding made one form. A 400-range answer allows every page. A 500-range answer, a failed request, a passed deadline or a hop the host's rule refuses disallows every page, as the RFC's sections 2.3.1.3 and 2.3.1.4 say. A file past five redirects is taken as unavailable and allows every page. Each origin's answer is kept for `cacheMs` per transport. `readRobots(url, options)`, `robotsAllows(file, token, url)` and `parseRobots(text)` are exported.
+
+#### The licence a page states
+
+`readLicence(html, baseUrl)` reads, in this order: a `<link rel="license" href>`, an `<a rel="license" href>`, a JSON-LD `license` (an address, or an object with its `url` and `name`), then any anchor to a Creative Commons deed (`creativecommons.org/licenses/<code>/<version>`) or public domain tool (`creativecommons.org/publicdomain/`) anywhere in the page, a footer's included. A deed is named from its address (`CC BY-SA 4.0`, `CC BY 3.0 US`, `CC0 1.0`, `Public Domain Mark 1.0`); another address is named by the anchor's text, the link's `title` or the JSON-LD `name`, else by the address. The address is the one the page gives, resolved against the page's own. A licence written in prose with no address is not read, so "not read" means the reader found none, not that the page states none.
+
+#### A page with no text
+
+`fallback`, a `PageFallbackReader` with `read(url, { signal })` answering text blocks or null, reads a page that answered 200 with no text a reader sees, such as one a script draws. It is called once, with the caller's signal, and keeps its own deadline; its blocks are held to `textBudget`, and the document keeps the page's own title, licence, publisher and date. With no fallback, or when it answers null or fails, the page is `unreadable` with `failure: 'no_text'`.
+
+### The open web as a public source
+
+`WebPageSourceProvider` is a public-sources `PublicSourceProvider` over the open web. The host gives the search, so the pack calls no search service of its own:
+
+```ts
+import { WebPageSourceProvider } from '@framers/agentos-ext-citation-check';
+
+const web = new WebPageSourceProvider({
+  search: async (phrase, signal) => mySearch(phrase, signal), // page addresses, best first
+  userAgent: 'ExampleReader/1.0 (https://example.org)',
+  robots: { token: 'ExampleReader', timeoutMs: 2_000, maxBytes: 512_000, cacheMs: 600_000 },
+  allowUrl: (url, phrase) => myHostRule(url, phrase), // false refuses the address before it is requested
+  timeoutMs: 5_000,
+  maxBytes: 2_000_000,
+});
+
+const found = await web.search('harbour opening year', { limit: 3, onSend: () => quota.take() });
+if (found.kind === 'hits') {
+  for (const hit of found.hits) {
+    const read = await web.read(hit, { signal: AbortSignal.timeout(10_000) });
+    if (read.kind === 'document') console.log(read.document.site, read.document.title, read.document.licence.name);
+  }
+}
+```
+
+`search(phrase, { limit, signal, onSend })` awaits `onSend` once, then runs the host's search, and answers its addresses as hits: `key` the address without its fragment, `title` the address, each page once, at most `limit` (3 when left out), an address that is not http or https passed over. It answers `limited` when `onSend` throws a limiter's refusal, and `failed` when `onSend` throws anything else or the search throws.
+
+`read(hit, { signal })` reads the page and answers `{ kind: 'document', document }`, with `site` the host without a leading "www.", `revision` null, `readAt` the clock's, and the title, licence, publisher and date as read; or `{ kind: 'skipped', status }` for a page that was not read, with its HTTP status when one came. `allowUrl(url, phrase)` is called on every address and redirect target with the phrase whose search found the page (the empty string for a hit this provider's search did not answer). robots.txt is read with `robots`, or with `DEFAULT_ROBOTS` (the `*` group, 2,000 ms, 512,000 bytes, ten minutes kept) when left out, and not at all with `robots: null`. Pages go through AgentOS's checked egress (`egress`, `hosted` by default) unless `transport` is given, with no scraper fallback, since the scraper's requests bypass both; `fallback` reads a page with no text. The provider queues nothing: the host reads at most as many pages at once as it calls `read` for. The caller's own cancellation is thrown.
+
 ### Grading with embeddings
 
 ```ts
@@ -161,7 +229,11 @@ The tool reads pages through AgentOS's checked egress with the hosted policy, so
 | `CitationVerifyTool`, `createExtensionPack` | The `citation_verify` tool and the pack |
 | `runCitationCli(argv, io)`, `CITATION_CLI_USAGE` | The command, for a host that runs it in its own process |
 | `CITATION_VERDICTS`, `pageKey`, `isHttpUrl` | The verdicts in order, a page's address without its fragment, the address check |
-| `CitedClaim`, `CitationCheck`, `CitationVerdict`, `CitationPassage`, `PageStatus`, `PageFailure`, `CitationReport`, `CitationSummary`, `CitationCheckOptions`, `CitationLogger`, `EmbedFn`, `NliFn` and the rest | The types |
+| `readPage(url, options)`, `fetchTransport(fetch, userAgent)`, `egressTransport(profile, bounds, userAgent)`, `PageRefusal`, `UNREAD_LICENCE` | The page reader, its two transports, a transport's refusal, the licence of a page that states none |
+| `readRobots(url, options)`, `robotsAllows(file, token, url)`, `parseRobots(text)`, `ROBOTS_PARSING_FLOOR` | robots.txt read through a transport, its answer for an address, its parser, RFC 9309's parsing floor |
+| `readLicence(html, baseUrl)` | The licence a page's markup states |
+| `WebPageSourceProvider`, `DEFAULT_ROBOTS` | The open web as a public source over the host's search, and its robots.txt rule when none is given |
+| `CitedClaim`, `CitationCheck`, `CitationVerdict`, `CitationPassage`, `PageStatus`, `PageFailure`, `CitationReport`, `CitationSummary`, `CitationCheckOptions`, `CitationLogger`, `EmbedFn`, `NliFn`, `PageReaderOptions`, `PageRead`, `PageFallbackReader`, `Transport`, `TransportAnswer`, `TransportRules`, `RobotsRule`, `RobotsFile`, `WebPageSourceOptions` and the rest | The types |
 
 ## License
 

@@ -34,7 +34,7 @@ function provider(options: Partial<WebPageSourceOptions> & Pick<WebPageSourceOpt
 }
 
 describe('WebPageSourceProvider.search', () => {
-  it('runs onSend once before the host’s search and answers its addresses as hits, the fragment gone, each once, up to the limit', async () => {
+  it('runs onSend once before the host’s search and answers its addresses as hits, keyed without the fragment, each once, up to the limit', async () => {
     const order: string[] = [];
     const web = provider({
       transport: stubTransport(() => undefined).transport,
@@ -58,7 +58,8 @@ describe('WebPageSourceProvider.search', () => {
     expect(outcome).toEqual({
       kind: 'hits',
       hits: [
-        { key: 'https://a.example.test/one', title: 'https://a.example.test/one' },
+        // The title is the address as the search gave it, until the read gives the page's own.
+        { key: 'https://a.example.test/one', title: 'https://a.example.test/one#part' },
         { key: 'https://b.example.test/two?id=2', title: 'https://b.example.test/two?id=2' },
         { key: 'https://c.example.test/three', title: 'https://c.example.test/three' },
       ],
