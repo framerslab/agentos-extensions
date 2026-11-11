@@ -112,16 +112,27 @@ function namesToken(agent: string, token: string): boolean {
   return agent === token || (token !== '*' && agent.startsWith(`${token}/`));
 }
 
-/** Whether a rule's pattern matches a path and query from their start: `*` any run of characters, a final `$` the end. */
+/**
+ * Whether a rule's pattern matches a path and query from their start: `*` any run of characters, a final `$` the end.
+ * Each piece between wildcards is found at its first place after the one before it, which is where it leaves the most
+ * path for the pieces after it, so the time grows with the pattern and the path and never with the ways to split them.
+ */
 function matches(pattern: string, path: string): boolean {
   const anchored = pattern.endsWith('$');
-  const body = (anchored ? pattern.slice(0, -1) : pattern).replace(/\*+/gu, '*');
-  if (!body.includes('*')) return anchored ? path === body : path.startsWith(body);
-  const source = body
-    .split('*')
-    .map((part) => part.replace(/[.+?^${}()|[\]\\]/gu, '\\$&'))
-    .join('.*');
-  return new RegExp(`^${source}${anchored ? '$' : ''}`, 's').test(path);
+  const pieces = (anchored ? pattern.slice(0, -1) : pattern).split('*');
+  const first = pieces[0] as string;
+  if (!path.startsWith(first)) return false;
+  if (pieces.length === 1) return !anchored || path.length === first.length;
+  let at = first.length;
+  for (const piece of pieces.slice(1, -1)) {
+    if (piece === '') continue;
+    const found = path.indexOf(piece, at);
+    if (found === -1) return false;
+    at = found + piece.length;
+  }
+  const last = pieces[pieces.length - 1] as string;
+  if (anchored) return path.length - last.length >= at && path.endsWith(last);
+  return path.indexOf(last, at) !== -1;
 }
 
 /**

@@ -76,9 +76,13 @@ export function attributesOf(source: string): Map<string, string> {
   return out;
 }
 
-/** Markup with its comments, scripts, styles and templates set aside, for reading the tags the page itself shows. */
+/**
+ * Markup with its comments, scripts, styles and templates set aside, for reading the tags the page itself shows. One
+ * pass in document order, so a comment opener inside a script is the script's, and a script inside a comment is the
+ * comment's.
+ */
 export function withoutScripts(html: string): string {
-  return html.replace(/<!--[\s\S]*?(?:-->|$)/gu, ' ').replace(/<(script|style|template|noscript)\b[\s\S]*?(?:<\/\1\s*>|$)/giu, ' ');
+  return html.replace(/<!--[\s\S]*?(?:-->|$)|<(script|style|template|noscript)\b[\s\S]*?(?:<\/\1\s*>|$)/giu, ' ');
 }
 
 /** Each element of a name with its attributes, in document order: `<name ...>`, with no content. */
@@ -133,7 +137,10 @@ export function metaContents(markup: string): Map<string, string> {
 const LD_BLOCKS = 20;
 const LD_NODES = 500;
 
-/** The page's JSON-LD objects, in document order: each block's top object or array, and the nodes of each `@graph`. */
+/**
+ * The page's JSON-LD objects, in document order: each block's top object or array, and the nodes of each `@graph`. A
+ * block inside a comment is passed over; a block whose script wraps its JSON in a comment is read.
+ */
 export function jsonLdNodes(html: string): Array<Record<string, unknown>> {
   const nodes: Array<Record<string, unknown>> = [];
   const visit = (value: unknown, depth: number): void => {
@@ -147,9 +154,11 @@ export function jsonLdNodes(html: string): Array<Record<string, unknown>> {
     nodes.push(node);
     if ('@graph' in node) visit(node['@graph'], depth + 1);
   };
-  const pattern = new RegExp(String.raw`<script\b${ATTRIBUTES}>([\s\S]*?)<\/script\s*>`, 'giu');
+  // Comments and scripts in one pass, in document order: a script a comment holds is inside the comment's match.
+  const pattern = new RegExp(String.raw`<!--[\s\S]*?(?:-->|$)|<script\b${ATTRIBUTES}>([\s\S]*?)<\/script\s*>`, 'giu');
   let blocks = 0;
   for (const match of html.matchAll(pattern)) {
+    if (match[0].startsWith('<!--')) continue;
     if ((attributesOf(match[1] ?? '').get('type') ?? '').trim().toLowerCase() !== 'application/ld+json') continue;
     blocks += 1;
     if (blocks > LD_BLOCKS) break;
