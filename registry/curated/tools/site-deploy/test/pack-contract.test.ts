@@ -207,6 +207,7 @@ describe('siteDeploy calls the tools the curated cloud packs register', () => {
 
     const result = await tool.execute({
       source: project,
+      framework: 'static',
       outputDirectory: 'dist',
       cloudProvider: 'aws',
       projectName: 'shop-site-bucket',

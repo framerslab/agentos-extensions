@@ -15,6 +15,8 @@
  * before any tool is called.
  */
 
+import { readdirSync } from 'node:fs';
+
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
@@ -168,8 +170,31 @@ function isGitUrl(source: string): boolean {
   return /^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/i.test(source.trim());
 }
 
+/** A Git repository URL as a Git host shows it (owner/repo, or any URL ending in .git). */
+function isRepositoryUrl(source: string): boolean {
+  const s = source.trim().replace(/[#?].*$/, '').replace(/\/+$/, '');
+  if (/\.git$/i.test(s) || /^(git@|ssh:\/\/|git:\/\/)/i.test(s)) return true;
+  return /^https?:\/\/(www\.)?(github\.com|gitlab\.com|bitbucket\.org)\/[^/]+\/[^/]+$/i.test(s);
+}
+
+/**
+ * A URL Heroku's build API can download a source archive from: any http(s)
+ * URL that is not a Git repository page, such as a .tar.gz file, GitHub's
+ * /tarball/<ref> or codeload URLs, or a signed URL from Heroku's sources
+ * endpoint, which has no file extension.
+ */
 function isTarballUrl(source: string): boolean {
-  return /^https?:\/\/\S+\.(tar\.gz|tgz)(\?\S*)?$/i.test(source.trim());
+  const s = source.trim();
+  return /^https?:\/\/\S+$/i.test(s) && !isRepositoryUrl(s);
+}
+
+/** Top-level entries of a directory that must never reach a public bucket. */
+function privateEntries(dir: string): string[] | { error: string } {
+  try {
+    return readdirSync(dir).filter((name) => name === '.git' || name === '.env' || name.startsWith('.env.'));
+  } catch (err: unknown) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /** "owner/repo" from a GitHub URL, or undefined for any other host. */
@@ -267,7 +292,7 @@ function planDeploy(provider: CloudProvider, opts: DeployOptions): DeployPlan {
       if (!isTarballUrl(source)) {
         return {
           tool,
-          error: `heroku's deploy tool ${tool} builds from a source tarball URL (.tar.gz or .tgz); "${source}" is not one. Pass a tarball URL as source.`,
+          error: `heroku's deploy tool ${tool} builds from a source tarball URL; "${source}" is a Git repository, not an archive. Pass the URL of a .tar.gz archive of it as source.`,
         };
       }
       if (!opts.projectName) {
@@ -283,17 +308,16 @@ function planDeploy(provider: CloudProvider, opts: DeployOptions): DeployPlan {
       return { tool, args };
     }
     case 'aws': {
-      if (isGitUrl(source)) {
-        const err = unsupported(provider, tool, opts, ['buildCommand', 'outputDirectory']);
-        if (err) return { tool, error: err };
-        const args: Record<string, unknown> = {
-          appName: opts.projectName ?? deriveName(source),
-          repository: source,
-        };
-        if (opts.envVars) args.environmentVariables = opts.envVars;
-        return { tool, args };
-      }
       const s3Tool = 'awsDeployS3Site';
+      if (isGitUrl(source)) {
+        // Amplify's CreateApp requires accessToken (GitHub) or oauthToken
+        // for a repository-connected app:
+        // https://docs.aws.amazon.com/amplify/latest/APIReference/API_CreateApp.html
+        return {
+          tool,
+          error: `aws's Git deploy tool ${tool} needs a repository access token, which siteDeploy does not take. Call ${tool} directly with oauthToken, or pass a local directory of the built site to deploy it to S3 with ${s3Tool}.`,
+        };
+      }
       if (opts.framework === 'node' || opts.framework === 'python') {
         return {
           tool: s3Tool,
@@ -308,13 +332,24 @@ function planDeploy(provider: CloudProvider, opts: DeployOptions): DeployPlan {
       }
       const err = unsupported(provider, s3Tool, opts, ['envVars', 'buildCommand']);
       if (err) return { tool: s3Tool, error: err };
-      return {
-        tool: s3Tool,
-        args: {
-          bucketName: opts.projectName,
-          sourceDir: opts.outputDirectory ? joinPath(source, opts.outputDirectory) : source,
-        },
-      };
+      if (opts.framework !== 'static' && !opts.outputDirectory) {
+        return {
+          tool: s3Tool,
+          error: `aws's ${s3Tool} uploads every file in the directory to a public bucket and builds nothing; for a ${opts.framework} project, build it and pass the built site's folder as outputDirectory.`,
+        };
+      }
+      const sourceDir = opts.outputDirectory ? joinPath(source, opts.outputDirectory) : source;
+      const found = privateEntries(sourceDir);
+      if (!Array.isArray(found)) {
+        return { tool: s3Tool, error: `aws's ${s3Tool} cannot read "${sourceDir}": ${found.error}` };
+      }
+      if (found.length > 0) {
+        return {
+          tool: s3Tool,
+          error: `"${sourceDir}" holds ${found.join(', ')}, and ${s3Tool} makes every file in it public. Pass the built site's folder as outputDirectory.`,
+        };
+      }
+      return { tool: s3Tool, args: { bucketName: opts.projectName, sourceDir } };
     }
     case 'railway': {
       const repo = githubRepo(source);
@@ -343,6 +378,11 @@ function planDeploy(provider: CloudProvider, opts: DeployOptions): DeployPlan {
     default:
       return { error: `Unknown cloud provider: ${provider}` };
   }
+}
+
+/** Manual DNS step when the provider returned no hostname for the deployment. */
+function noHostInstruction(provider: string, domain: string): string {
+  return `${provider} returned no hostname for the deployment, so no DNS record was written. Once ${provider} shows the deployment's hostname, add ${domain} as a custom domain there and create the record it gives you.`;
 }
 
 /** Dry-run copy of deploy arguments with environment values replaced by their names. */
@@ -530,7 +570,8 @@ const FRAMEWORK_PROVIDER_RECOMMENDATIONS: Record<string, CloudProvider[]> = {
 /** Framework detection heuristics: filename pattern -> framework. */
 const FRAMEWORK_INDICATORS: Array<{ pattern: string; framework: Framework }> = [
   { pattern: 'next.config', framework: 'nextjs' },
-  { pattern: 'nuxt.config', framework: 'vue' },
+  // Nuxt builds a Node server by default (https://nuxt.com/docs/getting-started/deployment).
+  { pattern: 'nuxt.config', framework: 'node' },
   { pattern: 'vue.config', framework: 'vue' },
   { pattern: 'vite.config', framework: 'vue' },
   { pattern: 'svelte.config', framework: 'svelte' },
@@ -552,9 +593,9 @@ export class SiteDeployTool {
   readonly displayName = 'Deploy Site';
   readonly description =
     'Deploy a site to a supported cloud provider (Vercel, Cloudflare Pages, DigitalOcean, Netlify, ' +
-    'AWS Amplify and Railway from a Git repository URL; Heroku from a source tarball URL; AWS S3 from a ' +
-    'local directory) with optional custom domain registration and DNS configuration. Linode and Fly.io ' +
-    'are refused with the tool to call instead. Auto-detects framework and selects a provider if not specified.';
+    'and Railway from a Git repository URL; Heroku from a source archive URL; AWS S3 from a local directory ' +
+    'of built files) with optional custom domain registration and DNS configuration. AWS Amplify, Linode and ' +
+    'Fly.io are refused with the tool to call instead. Auto-detects framework and selects a provider if not specified.';
   readonly category = 'cloud';
   readonly version = '0.1.0';
   readonly hasSideEffects = true;
@@ -814,9 +855,10 @@ export class SiteDeployTool {
     }
 
     // Heuristic: GitHub URLs often have framework in the name
+    if (lowerSource.includes('nuxt')) return 'node';
     if (lowerSource.includes('next')) return 'nextjs';
     if (lowerSource.includes('react') || lowerSource.includes('cra')) return 'react';
-    if (lowerSource.includes('vue') || lowerSource.includes('nuxt')) return 'vue';
+    if (lowerSource.includes('vue')) return 'vue';
     if (lowerSource.includes('svelte') || lowerSource.includes('sveltekit')) return 'svelte';
     if (lowerSource.includes('astro')) return 'astro';
     if (lowerSource.includes('flask') || lowerSource.includes('django') || lowerSource.includes('fastapi')) return 'python';
@@ -965,6 +1007,11 @@ export class SiteDeployTool {
 
       // ── Configure DNS records ──────────────────────────────────
       const dnsTarget = this.getDnsTarget(provider, deploymentUrl);
+      if (!dnsTarget) {
+        instructions.push(noHostInstruction(provider, domain));
+        steps.push({ step: 'domain_dns', success: false, error: `${provider} returned no hostname for the deployment.` });
+        return { status: 'pending_dns', instructions, steps };
+      }
       try {
         let dnsArgs: Record<string, unknown>;
         if (registrar === 'namecheap') {
@@ -1015,6 +1062,11 @@ export class SiteDeployTool {
 
     // No registrar specified — provide manual instructions
     const dnsTarget = this.getDnsTarget(provider, deploymentUrl);
+    if (!dnsTarget) {
+      instructions.push(noHostInstruction(provider, domain));
+      steps.push({ step: 'domain_manual_instructions', success: true, data: { dnsTarget: null } });
+      return { status: 'pending_dns', instructions, steps };
+    }
     instructions.push(
       `Add a ${dnsTarget.type} record for ${domain} pointing to ${dnsTarget.content} at your DNS provider.`,
     );
@@ -1053,6 +1105,24 @@ export class SiteDeployTool {
     }
     steps.push({ step: 'domain_dns_read', success: true, data: { records: current.length } });
 
+    // A CNAME cannot share its name with any other record (RFC 1034 section
+    // 3.6.2), so an apex CNAME beside apex MX, TXT or A records would break
+    // them. Those records are left alone and DNS is not written.
+    const apexOthers = [
+      ...new Set(
+        current
+          .filter((r) => r.name === '@' && String(r.type).toUpperCase() !== target.type)
+          .map((r) => String(r.type).toUpperCase()),
+      ),
+    ];
+    if (target.type === 'CNAME' && apexOthers.length > 0) {
+      const error = `${domain} has an apex ${apexOthers.join(', ')} record${apexOthers.length > 1 ? 's' : ''}, which an apex CNAME would break.`;
+      steps.push({ step: 'domain_dns_plan', success: false, error });
+      return {
+        error: `${error} Point ${domain} at ${target.content} with an ALIAS record, or use a subdomain such as www.`,
+      };
+    }
+
     const kept = current
       .filter((r) => !(r.name === '@' && String(r.type).toUpperCase() === target.type))
       .map((r) => {
@@ -1070,10 +1140,16 @@ export class SiteDeployTool {
   /* -------------------------------------------------------------- */
 
   /** Determine the appropriate DNS record to create based on the provider. */
+  /**
+   * The record to create for the custom domain: a CNAME to the deployment's
+   * own hostname. Without one, only Vercel and Netlify have a target that
+   * serves any site on their platform; every other provider gets null, and
+   * no record is written.
+   */
   private getDnsTarget(
     provider: CloudProvider,
     deploymentUrl?: string,
-  ): { type: string; name: string; content: string } {
+  ): { type: string; name: string; content: string } | null {
     // Extract hostname from deployment URL if available
     let deployHost = '';
     if (deploymentUrl) {
@@ -1086,28 +1162,14 @@ export class SiteDeployTool {
       }
     }
 
-    // Provider-specific DNS targets
+    if (deployHost) return { type: 'CNAME', name: '@', content: deployHost };
     switch (provider) {
       case 'vercel':
-        return { type: 'CNAME', name: '@', content: deployHost || 'cname.vercel-dns.com' };
-      case 'cloudflare':
-        return { type: 'CNAME', name: '@', content: deployHost || 'pages.dev' };
+        return { type: 'CNAME', name: '@', content: 'cname.vercel-dns.com' };
       case 'netlify':
-        return { type: 'CNAME', name: '@', content: deployHost || 'apex-loadbalancer.netlify.com' };
-      case 'heroku':
-        return { type: 'CNAME', name: '@', content: deployHost || 'dns-target.herokudns.com' };
-      case 'railway':
-        return { type: 'CNAME', name: '@', content: deployHost || 'railway.app' };
-      case 'flyio':
-        return { type: 'CNAME', name: '@', content: deployHost || 'fly.dev' };
-      case 'digitalocean':
-        return { type: 'CNAME', name: '@', content: deployHost || 'ondigitalocean.app' };
-      case 'aws':
-        return { type: 'CNAME', name: '@', content: deployHost || 'cloudfront.net' };
-      case 'linode':
-        return { type: 'CNAME', name: '@', content: deployHost || 'nodebalancer.linode.com' };
+        return { type: 'CNAME', name: '@', content: 'apex-loadbalancer.netlify.com' };
       default:
-        return { type: 'CNAME', name: '@', content: deployHost || 'unknown-provider' };
+        return null;
     }
   }
 }
