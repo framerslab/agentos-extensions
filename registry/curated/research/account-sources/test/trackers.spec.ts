@@ -23,6 +23,20 @@ interface MemoryOptions {
   misdirect?: boolean;
   /** Answers every assigned issue whatever limit the caller names. */
   ignoreLimit?: boolean;
+  /** Returns the oldest issue first. */
+  reverseOrder?: boolean;
+  /** Returns no issue or the wrong issue when a limit is requested. */
+  limitedResult?: 'empty' | 'oldest';
+  /** Includes an open issue assigned to someone else. */
+  includeOthers?: boolean;
+  /** Includes a completed issue, mislabeled as open. */
+  includeDone?: boolean;
+  /** Rejects a draft missing a required type or body, even if its destination is accepted. */
+  requireDraft?: 'type' | 'body';
+  /** Changes text when saving a draft. */
+  changeText?: 'title' | 'body';
+  /** The retry time returned by a rate-limited call. */
+  retryAt?: number | null;
   /** Answers a listing with a field the contract requires missing. */
   malformed?: 'destination name' | 'issue type id' | 'issue title' | 'issue destination';
   /** Rejects the destinations call as a refused grant does. */
@@ -39,6 +53,7 @@ function memoryTracker(options: MemoryOptions = {}): {
   issueState: (ref: { id: string; key: string }) => Promise<'open' | 'done' | undefined>;
   issueDestination: (ref: { id: string; key: string }) => Promise<string | undefined>;
   grantEnded: () => Promise<boolean>;
+  issueText: (ref: { id: string; key: string }) => Promise<Pick<IssueDraft, 'title' | 'body'> | undefined>;
 } {
   let ended = false;
   const destinations: TrackerDestination[] = [
@@ -55,11 +70,22 @@ function memoryTracker(options: MemoryOptions = {}): {
       updatedAt: '2026-11-09T12:00:00.000Z', destination: { id: 'team-2', key: 'OPS', name: 'Operations' },
     }],
   ]);
+  issues.set('i-other', {
+    id: 'i-other', key: 'ENG-OTHER', title: 'Someone else owns this',
+    url: 'https://tracker.example.invalid/ENG-OTHER', state: 'open', updatedAt: '2026-11-08T12:00:00.000Z',
+    destination: { id: 'team-1', key: 'ENG', name: 'Engineering' },
+  });
+  issues.set('i-done', {
+    id: 'i-done', key: 'ENG-DONE', title: 'Already completed',
+    url: 'https://tracker.example.invalid/ENG-DONE', state: 'done', updatedAt: '2026-11-07T12:00:00.000Z',
+    destination: { id: 'team-1', key: 'ENG', name: 'Engineering' },
+  });
+  const bodies = new Map<string, string>();
   let made = 1;
   const limited = (): void => {
     if (options.rateLimitNext?.on) {
       options.rateLimitNext.on = false;
-      throw new TrackerRateLimited(Date.now() + 5_000);
+      throw new TrackerRateLimited(options.retryAt === undefined ? retryAt : options.retryAt);
     }
   };
   const tracker: IssueTracker = {
@@ -78,8 +104,12 @@ function memoryTracker(options: MemoryOptions = {}): {
     async assignedIssues(listing) {
       limited();
       const open = [...issues.values()]
-        .filter((issue) => issue.state === 'open')
+        .filter((issue) => (options.includeDone || issue.state === 'open') && (options.includeOthers || issue.id !== 'i-other'))
+        .map((issue): TrackerIssue => options.includeDone ? { ...issue, state: 'open' } : issue)
         .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+      if (options.reverseOrder) open.reverse();
+      if (listing?.limit !== undefined && options.limitedResult === 'empty') return [];
+      if (listing?.limit !== undefined && options.limitedResult === 'oldest') return open.slice(-1);
       const answered = options.ignoreLimit || listing?.limit === undefined ? open : open.slice(0, listing.limit);
       if (options.malformed === 'issue title') {
         return answered.map(({ title: _title, ...rest }) => rest) as unknown as TrackerIssue[];
@@ -91,6 +121,8 @@ function memoryTracker(options: MemoryOptions = {}): {
     },
     async createIssue(draft: IssueDraft): Promise<IssueRef> {
       limited();
+      if (options.requireDraft === 'type' && draft.issueTypeId !== 'task') throw new TrackerFault('refused', 400);
+      if (options.requireDraft === 'body' && draft.body === '') throw new TrackerFault('refused', 400);
       const destination = options.misdirect
         ? destinations[1]
         : options.anyDestination
@@ -101,9 +133,10 @@ function memoryTracker(options: MemoryOptions = {}): {
       const key = `${destination.key ?? 'X'}-${made}`;
       const url = options.breakUrl ? '' : `${options.httpUrl ? 'http' : 'https'}://tracker.example.invalid/${key}`;
       issues.set(key, {
-        id: key, key, title: draft.title, url, state: 'open', updatedAt: null,
+        id: key, key, title: options.changeText === 'title' ? 'Changed title' : draft.title, url, state: 'open', updatedAt: null,
         destination: { id: destination.id, key: destination.key, name: destination.name },
       });
+      bodies.set(key, options.changeText === 'body' ? draft.body.replace(/\n/g, ' ') : draft.body);
       return { id: key, key, url };
     },
     async closeIssue(ref) {
@@ -124,11 +157,19 @@ function memoryTracker(options: MemoryOptions = {}): {
     issueState: async (ref) => issues.get(ref.id)?.state,
     issueDestination: async (ref) => issues.get(ref.id)?.destination.id,
     grantEnded: async () => ended,
+    issueText: async (ref) => {
+      const issue = issues.get(ref.id);
+      const body = bodies.get(ref.id);
+      return issue === undefined || body === undefined ? undefined : { title: issue.title, body };
+    },
   };
 }
 
+const retryAt = Date.parse('2026-11-10T12:00:05.000Z');
+
 const fixture = {
   kind: 'linear', destinationIds: ['team-1', 'team-2'], assignedIssueKeys: ['ENG-1', 'OPS-1'], revocable: true,
+  otherIssueKeys: ['ENG-OTHER'], doneIssueKeys: ['ENG-DONE'],
 } as const;
 
 /** The run of the check whose name starts with the given words. */
@@ -172,7 +213,7 @@ describe('the conformance checks', () => {
     const checks = trackerConformance({
       ...memoryTracker({ rateLimitNext }),
       fixture,
-      rateLimitNext: () => { rateLimitNext.on = true; },
+      rateLimitNext: () => { rateLimitNext.on = true; return retryAt; },
     });
     expect(checks.map((check) => check.name)).toEqual([
       'the kind is a known tracker kind or the tracker\'s own word',
@@ -247,7 +288,7 @@ describe('the conformance checks', () => {
   });
 
   it('fail the rate limit check over a tracker that answers through a rate limit, and skip it where the fixture cannot limit', async () => {
-    const run = runOf(trackerConformance({ ...memoryTracker(), fixture, rateLimitNext: () => {} }), 'a rate-limited call');
+    const run = runOf(trackerConformance({ ...memoryTracker(), fixture, rateLimitNext: () => retryAt }), 'a rate-limited call');
     await expect(run?.()).rejects.toThrow('a rate-limited call throws TrackerRateLimited with a retry time or null: resolved');
 
     const skipped = runOf(trackerConformance({ ...memoryTracker(), fixture }), 'a rate-limited call');
@@ -269,6 +310,78 @@ describe('the conformance checks', () => {
   it('pass the revoke check over a tracker with no way to end the access that answers false', async () => {
     const run = runOf(trackerConformance({ ...memoryTracker({ revoke: 'none' }), fixture: { ...fixture, revocable: false } }), 'revoke');
     await expect(run?.()).resolves.toBeUndefined();
+  });
+
+  it.each(['type', 'body'] as const)('isolates the unknown destination from a missing %s', async (requireDraft) => {
+    const run = runOf(trackerConformance({
+      ...memoryTracker({ anyDestination: true, requireDraft }),
+      fixture: { ...fixture, issueTypeId: 'task' },
+    }), 'an unknown destination');
+    await expect(run?.()).rejects.toThrow('an unknown destination is refused with not_found or refused: resolved');
+  });
+
+  it('accepts a destination refusal when a tracker requires an issue type', async () => {
+    const run = runOf(trackerConformance({
+      ...memoryTracker({ requireDraft: 'type' }), fixture: { ...fixture, issueTypeId: 'task' },
+    }), 'an unknown destination');
+    await expect(run?.()).resolves.toBeUndefined();
+  });
+
+  it.each([Math.floor(retryAt / 1_000), null])('rejects a retry time of %s when the fixture names epoch milliseconds', async (answer) => {
+    const rateLimitNext = { on: false };
+    const run = runOf(trackerConformance({
+      ...memoryTracker({ rateLimitNext, retryAt: answer }), fixture,
+      rateLimitNext: () => { rateLimitNext.on = true; return retryAt; },
+    }), 'a rate-limited call');
+    await expect(run?.()).rejects.toThrow('a rate-limited call throws TrackerRateLimited with a retry time or null: retry time differs from the fixture');
+  });
+
+  it('accepts a rate limit without a retry time only when the fixture supplies none', async () => {
+    const rateLimitNext = { on: false };
+    const run = runOf(trackerConformance({
+      ...memoryTracker({ rateLimitNext, retryAt: null }), fixture,
+      rateLimitNext: () => { rateLimitNext.on = true; return null; },
+    }), 'a rate-limited call');
+    await expect(run?.()).resolves.toBeUndefined();
+  });
+
+  it.each([{ assignedIssueKeys: ['ENG-1'] }, { assignedIssueKeys: ['ENG-1', 'ENG-1'] }])('rejects an insufficient assigned fixture $assignedIssueKeys', async ({ assignedIssueKeys }) => {
+    const run = runOf(trackerConformance({
+      ...memoryTracker(), fixture: { ...fixture, assignedIssueKeys },
+    }), 'the assigned issues');
+    await expect(run?.()).rejects.toThrow('the fixture needs at least two distinct assigned issues');
+  });
+
+  it.each(['otherIssueKeys', 'doneIssueKeys'] as const)('requires %s in the fixture to exercise filtering', async (field) => {
+    const run = runOf(trackerConformance({
+      ...memoryTracker(), fixture: { ...fixture, [field]: [] },
+    }), 'the assigned issues');
+    await expect(run?.()).rejects.toThrow('the fixture needs other people’s and done issues');
+  });
+
+  it('rejects issues returned oldest first', async () => {
+    const run = runOf(trackerConformance({ ...memoryTracker({ reverseOrder: true }), fixture }), 'the assigned issues');
+    await expect(run?.()).rejects.toThrow('assigned issue order differs from the fixture');
+  });
+
+  it.each(['empty', 'oldest'] as const)('rejects a limited listing that is %s', async (limitedResult) => {
+    const run = runOf(trackerConformance({ ...memoryTracker({ limitedResult }), fixture }), 'the assigned issues');
+    await expect(run?.()).rejects.toThrow('limit 1 did not answer the newest assigned issue');
+  });
+
+  it("rejects another person's open issue in the assigned listing", async () => {
+    const run = runOf(trackerConformance({ ...memoryTracker({ includeOthers: true }), fixture }), 'the assigned issues');
+    await expect(run?.()).rejects.toThrow('unexpected issue ENG-OTHER');
+  });
+
+  it('rejects a done issue even when the tracker labels it open', async () => {
+    const run = runOf(trackerConformance({ ...memoryTracker({ includeDone: true }), fixture }), 'the assigned issues');
+    await expect(run?.()).rejects.toThrow('unexpected issue ENG-DONE');
+  });
+
+  it.each(['title', 'body'] as const)('rejects a created issue whose %s was changed', async (changeText) => {
+    const run = runOf(trackerConformance({ ...memoryTracker({ changeText }), fixture }), 'an issue created');
+    await expect(run?.()).rejects.toThrow('stored draft text differs');
   });
 
   it('name the check when the tracker\'s own call rejects, keeping the fault as the cause and out of the message', async () => {
