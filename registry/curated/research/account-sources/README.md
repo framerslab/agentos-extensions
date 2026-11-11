@@ -33,7 +33,7 @@ A call that does not go through throws a `TrackerFault` with a fixed `reason` (`
 
 A tracker is reached in one of two ways, both behind this interface: a person's OAuth grant, and a workspace's own automation, such as Linear's client credentials grant or an Atlassian API token or service account. A pack's client takes its credential from a supplier, so a pack adds the second way as a constructor when a host needs it, and no caller changes.
 
-A tracker pack's tests run `trackerConformance` over its tracker on a fixture: eight checks of the kind, the destinations and the fields each carries, the assigned issues, their fields and their `limit`, a create in the destination the draft names, a close, the refusal of an unknown destination, a rate limit and the revocation. The harness names what the fixture holds and gives two reads of the fixture's own record, never through the tracker: `issueState`, so a close that changes nothing fails, and `issueDestination`, so an issue opened in another destination fails. Each check is a `name` and a `run` that throws an `Error` starting with the name, also when one of the tracker's calls rejects: that failure names what was thrown by its name alone and keeps it as the `cause`. `run` binds nothing, so any runner calls it. The close check closes the issue the create check made, so run them in order:
+A tracker pack's tests run `trackerConformance` over its tracker on a fixture: eight checks of the kind, the destinations and the fields each carries, the assigned issues, their fields and their `limit`, a create in the destination the draft names, a close, the refusal of an unknown destination, a rate limit and the revocation. The harness names what the fixture holds, with `revocable`, whether the tracker has a way to end its access, and gives three reads of the fixture's own record, never through the tracker: `issueState`, so a close that changes nothing fails, `issueDestination`, so an issue opened in another destination fails, and `grantEnded`, so a revoke that claims an end the fixture never saw, or leaves a revocable grant in place, fails. Each check is a `name` and a `run` that throws an `Error` starting with the name, also when one of the tracker's calls rejects: that failure names what was thrown by its name alone and keeps it as the `cause`. `run` binds nothing, so any runner calls it. The close check closes the issue the create check made, so run them in order:
 
 ```ts
 import { trackerConformance } from '@framers/agentos-ext-account-sources';
@@ -41,9 +41,10 @@ import { trackerConformance } from '@framers/agentos-ext-account-sources';
 describe('the tracker', () => {
   for (const check of trackerConformance({
     tracker,                       // the pack's tracker on a grant the fixture accepts
-    fixture: { kind: 'linear', destinationIds: ['team-1', 'team-2'], assignedIssueKeys: ['ENG-1'] },
+    fixture: { kind: 'linear', destinationIds: ['team-1', 'team-2'], assignedIssueKeys: ['ENG-1'], revocable: true },
     issueState: (ref) => stub.issueState(ref),
     issueDestination: (ref) => stub.issueDestination(ref),
+    grantEnded: () => stub.grantEnded(),
     rateLimitNext: () => stub.limitNextCall(),   // leave it out where the fixture cannot limit
   })) it(check.name, check.run);
 });

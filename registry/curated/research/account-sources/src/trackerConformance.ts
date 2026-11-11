@@ -25,11 +25,15 @@ export interface TrackerHarness {
     assignedIssueKeys: readonly string[];
     /** The issue type to open with in the first destination, where the tracker asks for one. */
     issueTypeId?: string;
+    /** Whether the tracker has a way to end its access (a revocation endpoint), so its revoke must end the grant. */
+    revocable: boolean;
   };
   /** Reads an issue's state from the fixture's own record, never through the tracker, so a close that changes nothing fails. */
   issueState: (ref: { id: string; key: string }) => Promise<'open' | 'done' | undefined>;
   /** Reads the id of the destination an issue is in from the fixture's own record, never through the tracker, so an issue opened elsewhere fails. */
   issueDestination: (ref: { id: string; key: string }) => Promise<string | undefined>;
+  /** Reads from the fixture's own record whether the grant was ended there, never through the tracker, so a revoke that claims an end it never made fails. */
+  grantEnded: () => Promise<boolean>;
   /** Makes the fixture answer a rate limit to the next call; left out where the fixture cannot. */
   rateLimitNext?: () => void;
 }
@@ -196,9 +200,14 @@ export function trackerConformance(harness: TrackerHarness): ConformanceCheck[] 
       }
       throw failure('resolved');
     }),
-    check('revoke answers whether the tracker confirmed the end', async (failure) => {
+    check('revoke ends the access where the tracker has a way to, and answers whether it did', async (failure) => {
       const answer = await tracker.revoke();
       if (typeof answer?.revoked !== 'boolean') throw failure('no boolean');
+      const ended = await harness.grantEnded();
+      if (fixture.revocable && !ended) throw failure('the fixture holds the grant');
+      if (answer.revoked !== ended) {
+        throw failure(`answered revoked ${answer.revoked}, the fixture ${ended ? 'ended' : 'holds'} the grant`);
+      }
     }),
   ];
 }
