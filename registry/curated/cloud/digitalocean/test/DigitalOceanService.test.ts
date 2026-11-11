@@ -146,6 +146,29 @@ describe('DigitalOceanService', () => {
       expect(body.spec.services).toBeUndefined();
     });
 
+    it('leaves output_dir unset without outputDir so App Platform finds the build folder', async () => {
+      mockFetch.mockResolvedValueOnce(mockResponse({
+        app: {
+          id: 'app-3',
+          default_ingress: '',
+          live_url: '',
+          spec: { name: 'astro-site', static_sites: [{ name: 'astro-site' }] },
+          created_at: '2024-01-01',
+          updated_at: '2024-01-01',
+        },
+      }));
+
+      await service.createApp({
+        name: 'astro-site',
+        gitUrl: 'https://github.com/acme/astro-site',
+        isStatic: true,
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      // App Platform scans _static, dist, public and build when output_dir is not set.
+      expect(body.spec.static_sites[0]).not.toHaveProperty('output_dir');
+    });
+
     it('should include env vars when provided', async () => {
       mockFetch.mockResolvedValueOnce(mockResponse({
         app: {
