@@ -1361,6 +1361,51 @@ test("7m the plan's wait outlasts the longest lag npm's version documents have s
   assert.deepEqual(pick(alpha(result)), { planned: null, bump: null, newest: '0.2.2', baseCommit: c, baseSource: 'tag' });
 });
 
+test("7n the plan's reads again of unserved documents share one budget: a second document's wait ends with the first's, not a budget of its own later", async (t) => {
+  // A run published beta 0.5.1 and alpha 0.2.2 and tagged them; npm lists neither new version yet. The document the
+  // plan reads first comes from its twenty-sixth read, the other's never: each read is a minute of the clock. With a
+  // budget per document the plan read the second again for thirty more minutes after the first's twenty-six; with one
+  // for the step it fails naming the second once DOCUMENT_WAIT's thirty minutes from the first read again have passed.
+  const wait = releasePlanModule.DOCUMENT_WAIT;
+  const { ws, table, releases } = three();
+  const c = ws.commit({ [`${GAMMA_DIR}/src/index.ts`]: 'export const reads = 2;\n' }, 'fix(gamma): a read');
+  ws.tag(BETA, '0.5.1', c);
+  ws.tag(ALPHA, '0.2.2', c);
+  releases.push(`${BETA}@0.5.1`, `${ALPHA}@0.2.2`);
+  const start = Date.UTC(2026, 10, 9, 10, 17);
+  let clock = start;
+  t.mock.method(Date, 'now', () => clock);
+  const unserved = {
+    [`${ALPHA}@0.2.2`]: { path: 'agentos-ext-alpha/0.2.2', serve: () => { table[ALPHA].versions['0.2.2'] = { gitHead: c, hidden: true, parses: true, dependencies: { [BETA]: '^0.5.0' } }; } },
+    [`${BETA}@0.5.1`]: { path: 'agentos-ext-beta/0.5.1', serve: () => { table[BETA].versions['0.5.1'] = { gitHead: c, hidden: true, parses: true, dependencies: { [GAMMA]: '^0.9.0' } }; } },
+  };
+  const reads = Object.fromEntries(Object.keys(unserved).map((id) => [id, 0]));
+  let first = null;
+  const calls = {
+    push({ url }) {
+      const id = Object.keys(unserved).find((key) => url.endsWith(unserved[key].path));
+      if (id === undefined) return;
+      first ??= id;
+      reads[id] += 1;
+      clock += 60_000;
+      if (id === first && reads[id] === 26) unserved[id].serve();
+    },
+  };
+
+  let failure;
+  await assert.rejects(plan(ws, { table, releases, calls, documentWait: { ...wait, every: 0 } }), (error) => {
+    failure = error;
+    return true;
+  });
+
+  const second = Object.keys(unserved).find((id) => id !== first);
+  assert.equal(reads[first], 26);
+  assert.ok(reads[second] >= 1, `${second}'s document was read`);
+  assert.ok(failure.message.includes(second), failure.message);
+  // One read past the budget at most, a minute of this clock.
+  assert.ok(clock - start <= wait.upTo * 1000 + 60_000, `the plan read again for ${(clock - start) / 60_000} minutes`);
+});
+
 // 8. workspace:^.
 
 test('8a a workspace text stays as it is while the published converted range admits the sibling', async () => {
