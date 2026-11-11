@@ -16,6 +16,7 @@ import { GmailSendMessageTool } from './tools/sendMessage';
 import { GmailReplyMessageTool } from './tools/replyMessage';
 import { GmailSearchMessagesTool } from './tools/searchMessages';
 import { GmailListLabelsTool } from './tools/listLabels';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface GmailExtensionOptions {
   clientId?: string;
@@ -89,7 +90,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-email-gmail',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'gmailListMessages', kind: 'tool', priority, payload: listMessagesTool },
       { id: 'gmailReadMessage', kind: 'tool', priority, payload: readMessageTool },

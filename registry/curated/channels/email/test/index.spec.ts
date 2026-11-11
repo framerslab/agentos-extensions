@@ -20,14 +20,14 @@ vi.mock('nodemailer', () => ({
 
 // Mock imapflow before importing the factory
 vi.mock('imapflow', () => ({
-  ImapFlow: vi.fn().mockImplementation(() => ({
+  ImapFlow: vi.fn().mockImplementation(function () { return ({
     connect: vi.fn().mockResolvedValue(undefined),
     logout: vi.fn().mockResolvedValue(undefined),
     getMailboxLock: vi.fn().mockResolvedValue({ release: vi.fn() }),
     mailbox: { exists: 0 },
     search: vi.fn().mockResolvedValue([]),
     fetch: vi.fn().mockReturnValue({ [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }) }),
-  })),
+  }); }),
 }));
 
 import { createExtensionPack, type EmailChannelAdapter, type EmailConfig, type EmailSendTool } from '../src/index';

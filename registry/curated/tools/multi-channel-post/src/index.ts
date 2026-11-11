@@ -4,6 +4,7 @@
  */
 
 import { MultiChannelPostTool } from './MultiChannelPostTool.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /* ------------------------------------------------------------------ */
 /*  Extension pack types                                               */
@@ -38,7 +39,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-tool-multi-channel-post',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: tool.name,

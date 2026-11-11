@@ -14,6 +14,7 @@ import { FlyDeployAppTool } from './tools/deployApp.js';
 import { FlyListAppsTool } from './tools/listApps.js';
 import { FlyScaleAppTool } from './tools/scaleApp.js';
 import { FlyCreateVolumeTool } from './tools/createVolume.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -73,7 +74,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-cloud-flyio',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'flyDeployApp', kind: 'tool', priority: 40, payload: deployAppTool },
       { id: 'flyListApps', kind: 'tool', priority: 40, payload: listAppsTool },

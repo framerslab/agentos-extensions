@@ -35,6 +35,7 @@ import type {
   ToolExecutionContext,
   ToolExecutionResult,
 } from '@framers/agentos';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface TeamsChannelOptions {
   appId?: string;
@@ -476,7 +477,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-teams',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'teamsChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'teamsChannel', kind: 'messaging-channel', priority, payload: adapter },

@@ -6,6 +6,7 @@
 
 import { LocalFileSearchTool } from './LocalFileSearchTool.js';
 import type { FileSearchConfig } from './types.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export { LocalFileSearchTool } from './LocalFileSearchTool.js';
 export type { FileSearchConfig, FileMatch, LocalFileSearchInput, LocalFileSearchOutput } from './types.js';
@@ -18,7 +19,7 @@ export function createExtensionPack(ctx?: { config?: Partial<FileSearchConfig> }
   const tool = new LocalFileSearchTool(ctx?.config);
   return {
     name: '@framers/agentos-ext-local-file-search',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: 'local_file_search',

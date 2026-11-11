@@ -14,6 +14,7 @@ import { NetlifyDeployTool } from './tools/deploy.js';
 import { NetlifyListSitesTool } from './tools/listSites.js';
 import { NetlifyConfigureDomainTool } from './tools/configureDomain.js';
 import { NetlifySetEnvVarsTool } from './tools/setEnvVars.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -73,7 +74,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-cloud-netlify',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'netlifyDeploySite', kind: 'tool', priority: 40, payload: deployTool },
       { id: 'netlifyListSites', kind: 'tool', priority: 40, payload: listSitesTool },

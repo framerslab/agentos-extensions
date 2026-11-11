@@ -5,6 +5,7 @@
  */
 
 import { SendFileToChannelTool } from './SendFileToChannelTool.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export { SendFileToChannelTool } from './SendFileToChannelTool.js';
 export type { ChannelContext, SendFileInput, SendFileOutput } from './types.js';
@@ -14,7 +15,7 @@ export function createExtensionPack() {
   const tool = new SendFileToChannelTool();
   return {
     name: '@framers/agentos-ext-send-file-to-channel',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [{ id: 'send_file_to_channel', kind: 'tool' as const, priority: 50, payload: tool }],
   };
 }

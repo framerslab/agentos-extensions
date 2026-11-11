@@ -31,6 +31,7 @@ import type {
   ToolExecutionContext,
   ToolExecutionResult,
 } from '@framers/agentos';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface SignalChannelOptions {
   /**
@@ -415,7 +416,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-signal',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'signalChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'signalChannel', kind: 'messaging-channel', priority, payload: adapter },

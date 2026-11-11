@@ -29,6 +29,7 @@ import { MccCategoryMap } from './cards/MccCategoryMap.js';
 import { DEFAULT_SPENDING_POLICY } from './types.js';
 import type { ChainId, WalletConfig } from './types.js';
 import type { CardConfig, ICardStore, AgentCardRecord, CardTransactionRecord, CardState, CardTxStatus } from './cards/types.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /* ------------------------------------------------------------------ */
 /*  Extension pack types                                               */
@@ -233,7 +234,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-wallet',
-    version: '0.2.0',
+    version: PACKAGE_VERSION,
     descriptors,
     onActivate: async () => context.logger?.info(`Wallet extension activated (${features.join(', ')})`),
     onDeactivate: async () => context.logger?.info('Wallet extension deactivated'),

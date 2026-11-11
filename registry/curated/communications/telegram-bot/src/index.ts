@@ -17,6 +17,7 @@ import { ManageChatTool } from './tools/manageChat';
 import { PollMessagesTool } from './tools/pollMessages';
 import { TelegramBotService } from './services/telegramBot';
 import { loadConfig } from './config';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /**
  * Extension configuration options
@@ -75,7 +76,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
   
   return {
     name: '@framers/agentos-communications-telegram',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: 'telegramSendMessage',

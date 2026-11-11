@@ -15,6 +15,7 @@ import { VercelListProjectsTool } from './tools/listProjects.js';
 import { VercelGetDeploymentTool } from './tools/getDeployment.js';
 import { VercelConfigureDomainTool } from './tools/configureDomain.js';
 import { VercelSetEnvVarsTool } from './tools/setEnvVars.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -79,7 +80,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-cloud-vercel',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'vercelDeploy', kind: 'tool', priority: 40, payload: deployTool },
       { id: 'vercelListProjects', kind: 'tool', priority: 40, payload: listProjectsTool },

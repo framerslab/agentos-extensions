@@ -18,6 +18,7 @@
 import { LetterboxdMovieTool } from './tools/letterboxdMovie.js';
 
 import type { RecipeToolLike } from './tools/letterboxdMovie.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /**
  * Configuration options for the Letterboxd extension pack.
@@ -59,7 +60,7 @@ export function createExtensionPack(context: any) {
 
   return {
     name: '@framers/agentos-ext-letterboxd',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         // IMPORTANT: ToolExecutor uses descriptor id as the lookup key for tool calls.

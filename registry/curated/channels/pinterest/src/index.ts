@@ -18,6 +18,7 @@ import { PinterestSearchTool } from './tools/search';
 import { PinterestTrendingTool } from './tools/trending';
 import { PinterestAnalyticsTool } from './tools/analytics';
 import { PinterestScheduleTool } from './tools/schedule';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface PinterestChannelOptions {
   accessToken?: string;
@@ -66,7 +67,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-pinterest',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'pinterestPin', kind: 'tool', priority, payload: pinTool },
       { id: 'pinterestBoard', kind: 'tool', priority, payload: boardTool },

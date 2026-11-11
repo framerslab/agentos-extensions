@@ -32,7 +32,7 @@
     "@framers/agentos": "^0.16.0",
     "@google-cloud/speech": "^6.0.0",
     "typescript": "^6.0.3",
-    "vitest": "^3.2.7"
+    "vitest": "^5.1.0"
   },
   "license": "Apache-2.0",
   "author": "Frame.dev",

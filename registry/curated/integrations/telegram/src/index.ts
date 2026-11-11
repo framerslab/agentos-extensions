@@ -18,6 +18,7 @@ import { ManageGroupTool } from './tools/manageGroup';
 import { HandleCallbackTool } from './tools/handleCallback';
 import { TelegramBotService, TelegramConfig } from './services/telegramBot';
 import * as dotenv from 'dotenv';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // Load environment variables
 dotenv.config();
@@ -164,7 +165,7 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
   
   return {
     name: '@framers/agentos-ext-telegram',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: 'telegramSendMessage',

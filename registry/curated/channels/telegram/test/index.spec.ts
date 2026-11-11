@@ -38,6 +38,7 @@ vi.mock('grammy', async (importOriginal) => {
 
 import { createExtensionPack } from '../src/index';
 import { TELEGRAM_BUSINESS_UPDATE_TYPES } from '../src/TelegramService';
+import { createRequire as createPackageRequire } from 'node:module';
 
 describe('createExtensionPack', () => {
   it('should create a pack with the correct name', () => {
@@ -45,7 +46,7 @@ describe('createExtensionPack', () => {
       options: { botToken: 'test-token' },
     } as any);
     expect(pack.name).toBe('@framers/agentos-ext-channel-telegram');
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   it('should include tool and messaging-channel descriptors', () => {

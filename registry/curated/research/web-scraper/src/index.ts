@@ -18,6 +18,7 @@ import { WebScraperService } from './WebScraperService.js';
 import { RecipeEngine } from './RecipeEngine.js';
 import { WebScrapeTool } from './tools/webScrape.js';
 import { WebScrapeRecipeTool } from './tools/webScrapeRecipe.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /* -------------------------------------------------------------------------- */
 /*  Extension options                                                          */
@@ -94,7 +95,7 @@ export function createExtensionPack(context: any) {
 
   return {
     name: '@framers/agentos-ext-web-scraper',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: scrapeTool.name,

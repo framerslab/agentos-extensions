@@ -12,6 +12,7 @@
 
 import { ClearbitCompanyTool } from './tools/clearbitCompany.js';
 import { ClearbitPersonTool } from './tools/clearbitPerson.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /** Configuration options for the Clearbit extension pack. */
 export interface ClearbitExtensionOptions {
@@ -44,7 +45,7 @@ export function createExtensionPack(context: any) {
 
   return {
     name: '@framers/agentos-ext-clearbit',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         // IMPORTANT: ToolExecutor uses descriptor id as the lookup key for tool calls.

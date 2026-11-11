@@ -4,6 +4,7 @@
  */
 
 import { GiphySearchTool } from './tools/giphySearch.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface GiphyExtensionOptions {
   giphyApiKey?: string;
@@ -17,7 +18,7 @@ export function createExtensionPack(context: any) {
 
   return {
     name: '@framers/agentos-ext-giphy',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         // IMPORTANT: ToolExecutor uses descriptor id as the lookup key for tool calls.

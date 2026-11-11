@@ -19,6 +19,7 @@ import { WhatsAppService, type WhatsAppChannelConfig, type WhatsAppAuthConfig } 
 import { WhatsAppChannelAdapter } from './WhatsAppChannelAdapter';
 import { WhatsAppSendMessageTool } from './tools/sendMessage';
 import { WhatsAppSendMediaTool } from './tools/sendMedia';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface WhatsAppChannelOptions {
   sessionData?: string;
@@ -76,7 +77,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-whatsapp',
-    version: '0.2.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'whatsappChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'whatsappChannelSendMedia', kind: 'tool', priority, payload: sendMediaTool },

@@ -14,6 +14,7 @@ import { WebSearchTool } from './tools/webSearch.js';
 import { ResearchAggregatorTool } from './tools/researchAggregator.js';
 import { FactCheckTool } from './tools/factCheck.js';
 import { SearchProviderService } from './services/searchProvider.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /**
  * Extension configuration options
@@ -98,7 +99,7 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
   
   return {
     name: '@framers/agentos-ext-web-search',
-    version: '1.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: webSearchTool.name,

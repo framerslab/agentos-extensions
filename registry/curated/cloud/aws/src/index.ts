@@ -17,6 +17,7 @@ import { AWSDeployAmplifyTool } from './tools/deployAmplify.js';
 import { AWSManageRoute53Tool } from './tools/manageRoute53.js';
 import { AWSConfigureCloudFrontTool } from './tools/configureCloudFront.js';
 import { AWSConfigureLambdaTool } from './tools/configureLambda.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -86,7 +87,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-cloud-aws',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'awsDeployS3Site', kind: 'tool', priority: 40, payload: deployS3SiteTool },
       { id: 'awsCreateLightsail', kind: 'tool', priority: 40, payload: createLightsailTool },

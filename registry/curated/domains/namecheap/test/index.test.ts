@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createExtensionPack } from '../src/index.js';
+import { createRequire as createPackageRequire } from 'node:module';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -18,7 +19,7 @@ describe('createExtensionPack (Namecheap)', () => {
   it('should return a valid ExtensionPack', () => {
     const pack = createExtensionPack({ secrets: { 'namecheap.apiUser': 'u', 'namecheap.apiKey': 'k' } });
     expect(pack.name).toBe('@framers/agentos-ext-domain-namecheap');
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
     expect(pack.descriptors).toHaveLength(5);
   });
 

@@ -11,6 +11,7 @@
 import { AgentPingTool } from './AgentPingTool.js';
 import { AgentDelegateTool } from './AgentDelegateTool.js';
 import { AgentBroadcastTool } from './AgentBroadcastTool.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Extension pack types (lightweight — avoids hard dep on @framers/agentos)
@@ -47,7 +48,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-agent-delegation',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: ping.name, kind: 'tool', priority: 50, payload: ping },
       { id: delegate.name, kind: 'tool', priority: 50, payload: delegate },

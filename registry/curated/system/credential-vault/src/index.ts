@@ -14,6 +14,7 @@ import { CredentialsGetTool } from './tools/get.js';
 import { CredentialsListTool } from './tools/list.js';
 import { CredentialsRotateTool } from './tools/rotate.js';
 import { CredentialsImportTool } from './tools/import.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -73,7 +74,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-credential-vault',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'credentialsSet', kind: 'tool', priority: 50, payload: setTool },
       { id: 'credentialsGet', kind: 'tool', priority: 50, payload: getTool },

@@ -19,6 +19,7 @@ import { BlueskySearchTool } from './tools/search.js';
 import { BlueskyFeedTool } from './tools/feed.js';
 import { BlueskyFollowTool } from './tools/follow.js';
 import { BlueskyAnalyticsTool } from './tools/analytics.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -90,7 +91,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-bluesky',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'blueskyPost', kind: 'tool', priority: 50, payload: postTool },
       { id: 'blueskyReply', kind: 'tool', priority: 50, payload: replyTool },

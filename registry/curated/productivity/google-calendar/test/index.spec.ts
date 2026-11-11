@@ -28,12 +28,12 @@ vi.mock('googleapis', () => {
     },
   };
 
-  const mockOAuth2 = vi.fn().mockImplementation(() => ({
+  const mockOAuth2 = vi.fn().mockImplementation(function () { return ({
     setCredentials: vi.fn(),
     refreshAccessToken: vi.fn().mockResolvedValue({
       credentials: { access_token: 'refreshed-token' },
     }),
-  }));
+  }); });
 
   return {
     google: {
@@ -45,6 +45,7 @@ vi.mock('googleapis', () => {
 
 import { createExtensionPack } from '../src/index';
 import type { ExtensionContext } from '@framers/agentos';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -110,7 +111,7 @@ describe('Google Calendar createExtensionPack', () => {
 
   it('should have version "0.1.0"', () => {
     const pack = createExtensionPack(makeContext());
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   // ---- Descriptor IDs ------------------------------------------------------

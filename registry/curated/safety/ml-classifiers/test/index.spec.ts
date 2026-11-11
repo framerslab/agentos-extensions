@@ -38,7 +38,7 @@ import type { ExtensionPackContext } from '@framers/agentos';
 vi.mock(
   '../src/classifiers/ToxicityClassifier',
   () => ({
-    ToxicityClassifier: vi.fn().mockImplementation(() => ({
+    ToxicityClassifier: vi.fn().mockImplementation(function () { return ({
       id: 'agentos:ml-classifiers:toxicity-pipeline',
       displayName: 'Toxicity Classifier (mock)',
       description: 'Mock toxicity classifier.',
@@ -46,7 +46,7 @@ vi.mock(
       isLoaded: false,
       classify: vi.fn().mockResolvedValue({ bestClass: 'benign', confidence: 0, allScores: [] }),
       dispose: vi.fn().mockResolvedValue(undefined),
-    })),
+    }); }),
   }),
 );
 
@@ -56,7 +56,7 @@ vi.mock(
 vi.mock(
   '../src/classifiers/InjectionClassifier',
   () => ({
-    InjectionClassifier: vi.fn().mockImplementation(() => ({
+    InjectionClassifier: vi.fn().mockImplementation(function () { return ({
       id: 'agentos:ml-classifiers:injection-pipeline',
       displayName: 'Injection Classifier (mock)',
       description: 'Mock injection classifier.',
@@ -64,7 +64,7 @@ vi.mock(
       isLoaded: false,
       classify: vi.fn().mockResolvedValue({ bestClass: 'SAFE', confidence: 0.1, allScores: [] }),
       dispose: vi.fn().mockResolvedValue(undefined),
-    })),
+    }); }),
   }),
 );
 
@@ -74,7 +74,7 @@ vi.mock(
 vi.mock(
   '../src/classifiers/JailbreakClassifier',
   () => ({
-    JailbreakClassifier: vi.fn().mockImplementation(() => ({
+    JailbreakClassifier: vi.fn().mockImplementation(function () { return ({
       id: 'agentos:ml-classifiers:jailbreak-pipeline',
       displayName: 'Jailbreak Classifier (mock)',
       description: 'Mock jailbreak classifier.',
@@ -82,7 +82,7 @@ vi.mock(
       isLoaded: false,
       classify: vi.fn().mockResolvedValue({ bestClass: 'benign', confidence: 0, allScores: [] }),
       dispose: vi.fn().mockResolvedValue(undefined),
-    })),
+    }); }),
   }),
 );
 
@@ -90,6 +90,7 @@ vi.mock(
 import { ToxicityClassifier } from '../src/classifiers/ToxicityClassifier';
 import { InjectionClassifier } from '../src/classifiers/InjectionClassifier';
 import { JailbreakClassifier } from '../src/classifiers/JailbreakClassifier';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -112,7 +113,7 @@ describe('createMLClassifierGuardrail', () => {
 
     it('returns an ExtensionPack with version "1.0.0"', () => {
       const pack = createMLClassifierGuardrail();
-      expect(pack.version).toBe('1.0.0');
+      expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
     });
   });
 
@@ -385,7 +386,7 @@ describe('createExtensionPack', () => {
     const context: ExtensionPackContext = {};
     const pack = createExtensionPack(context);
 
-    expect(pack.version).toBe('1.0.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   it('provides 2 descriptors with empty context', () => {

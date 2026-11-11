@@ -26,6 +26,7 @@ import type {
   ToolExecutionContext,
   ToolExecutionResult,
 } from '@framers/agentos';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface ZaloChannelOptions {
   /**
@@ -499,7 +500,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-zalo',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'zaloChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'zaloChannel', kind: 'messaging-channel', priority, payload: adapter },

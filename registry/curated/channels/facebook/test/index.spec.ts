@@ -22,12 +22,13 @@ const { mockAxios } = vi.hoisted(() => {
 vi.mock('axios', () => ({ default: mockAxios }));
 
 vi.mock('@framers/agentos/auth', () => ({
-  FileTokenStore: vi.fn().mockImplementation(() => ({
+  FileTokenStore: vi.fn().mockImplementation(function () { return ({
     load: vi.fn().mockResolvedValue(null),
-  })),
+  }); }),
 }));
 import { createExtensionPack } from '../src/index.js';
 import type { ExtensionPack, ExtensionContext } from '../src/index.js';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -81,7 +82,7 @@ describe('createExtensionPack', () => {
 
     it('should return version 0.1.0', () => {
       const pack = createExtensionPack(createContext());
-      expect(pack.version).toBe('0.1.0');
+      expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
     });
   });
 

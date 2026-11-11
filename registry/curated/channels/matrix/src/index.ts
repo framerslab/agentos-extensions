@@ -33,6 +33,7 @@ import type {
   ToolExecutionContext,
   ToolExecutionResult,
 } from '@framers/agentos';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface MatrixChannelOptions {
   homeserverUrl?: string;
@@ -399,7 +400,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-matrix',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'matrixChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'matrixChannel', kind: 'messaging-channel', priority, payload: adapter },
