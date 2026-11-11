@@ -280,8 +280,9 @@ describe('JiraClient', () => {
     expect(seconds).toBeInstanceOf(TrackerRateLimited);
     expect((seconds as TrackerRateLimited).retryAt).toBeGreaterThanOrEqual(before + 7_000);
     expect((seconds as TrackerRateLimited).retryAt).toBeLessThanOrEqual(Date.now() + 7_000);
-    const reset = standIn(() => json({}, 429, { 'x-ratelimit-reset': '2030-01-01T01:01:01Z' }));
-    expect(((await outcome(new JiraClient(token, site, { fetchImpl: reset.fetchImpl }).projects())) as TrackerRateLimited).retryAt).toBe(Date.parse('2030-01-01T01:01:01Z'));
+    const soon = new Date(Date.now() + 60_000).toISOString();
+    const reset = standIn(() => json({}, 429, { 'x-ratelimit-reset': soon }));
+    expect(((await outcome(new JiraClient(token, site, { fetchImpl: reset.fetchImpl }).projects())) as TrackerRateLimited).retryAt).toBe(Date.parse(soon));
     const long = standIn(() => json({}, 429, { 'retry-after': '10000000' }));
     const clamped = (await outcome(new JiraClient(token, site, { fetchImpl: long.fetchImpl }).projects())) as TrackerRateLimited;
     expect(clamped.retryAt).toBeGreaterThanOrEqual(before + 86_400_000);
@@ -290,6 +291,17 @@ describe('JiraClient', () => {
     const unnamed = await outcome(new JiraClient(token, site, { fetchImpl: none.fetchImpl }).projects());
     expect(unnamed).toBeInstanceOf(TrackerRateLimited);
     expect((unnamed as TrackerRateLimited).retryAt).toBeNull();
+  });
+
+  it('caps a dated Retry-After or X-RateLimit-Reset at a day from now, as it caps seconds', async () => {
+    for (const headers of [{ 'retry-after': 'Fri, 31 Dec 2027 23:59:59 GMT' }, { 'x-ratelimit-reset': '2027-12-31T23:59:59Z' }]) {
+      const before = Date.now();
+      const far = standIn(() => json({}, 429, headers));
+      const error = (await outcome(new JiraClient(token, site, { fetchImpl: far.fetchImpl }).projects())) as TrackerRateLimited;
+      expect(error).toBeInstanceOf(TrackerRateLimited);
+      expect(error.retryAt).toBeGreaterThanOrEqual(before + 86_400_000);
+      expect(error.retryAt).toBeLessThanOrEqual(Date.now() + 86_400_000);
+    }
   });
 
   it('turns a 401 into TrackerGrantRefused, a 403 and a 400 into refused, a 404 into not_found, with no vendor text', async () => {
@@ -378,6 +390,28 @@ describe('JiraClient', () => {
     expect(await pending).toSatisfy((error: unknown) => error instanceof TrackerNoAnswer && error.cause === 'cancelled');
     expect(await outcome(JiraClient.sites(stalled, { fetchImpl, timeoutMs: 20 }))).toSatisfy((error: unknown) => error instanceof TrackerNoAnswer && error.cause === 'timeout');
     expect(seen).toHaveLength(0);
+  });
+
+  it('holds the token wait and the call under one deadline, not one each', async () => {
+    const later = <T>(value: T, ms: number): Promise<T> => new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
+    const slowToken = (): Promise<string> => later('a1', 120);
+    const slowFetch = (async () => later(json({ isLast: true, values: [] }), 120)) as typeof fetch;
+    expect(await outcome(new JiraClient(slowToken, site, { fetchImpl: slowFetch, timeoutMs: 200 }).projects())).toSatisfy((error: unknown) => error instanceof TrackerNoAnswer && error.cause === 'timeout');
+    const slowSites = (async () => later(json([]), 120)) as typeof fetch;
+    expect(await outcome(JiraClient.sites(slowToken, { fetchImpl: slowSites, timeoutMs: 200 }))).toSatisfy((error: unknown) => error instanceof TrackerNoAnswer && error.cause === 'timeout');
+  });
+
+  it('asks the supplier once more when the grant was replaced under it, so a refresh another flow won is no refusal', async () => {
+    const { fetchImpl, seen } = standIn(() => json({ isLast: true, values: [] }));
+    let asked = 0;
+    const raced = async (): Promise<string> => {
+      asked += 1;
+      if (asked === 1) throw new OAuthGrantRefused('missing');
+      return 'a2';
+    };
+    expect(await new JiraClient(raced, site, { fetchImpl }).projects()).toEqual([]);
+    expect(asked).toBe(2);
+    expect(seen[0]?.headers.get('authorization')).toBe('Bearer a2');
   });
 
   it('refuses a site that is not an https address or a cloud id that is not one path segment', () => {
