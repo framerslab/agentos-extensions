@@ -45,6 +45,7 @@ function verify(name, role, extra = {}) {
     options: extra.fixture?.options ?? {},
     exports: extra.exports ?? [],
     entries: extra.entries ?? [],
+    ...(extra.version === undefined ? {} : { version: extra.version }),
   };
   return spawnSync(process.execPath, [verifyScript, JSON.stringify(payload)], { encoding: 'utf8' });
 }
@@ -52,6 +53,17 @@ function verify(name, role, extra = {}) {
 test('a valid pack constructs with placeholder secrets from its manifest', () => {
   const result = verify('valid-pack', 'pack');
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('a pack passes when it reports its package version, and fails when it reports another', () => {
+  // valid-pack reports 1.0.0.
+  const same = verify('valid-pack', 'pack', { version: '1.0.0' });
+  assert.equal(same.status, 0, same.stderr);
+  const other = verify('valid-pack', 'pack', { version: '1.0.3' });
+  assert.equal(other.status, 1);
+  assert.match(other.stderr, /createExtensionPack reports the version "1\.0\.0", not its package version 1\.0\.3/);
+  // A template is checked as the pack a new extension starts from.
+  assert.equal(verify('valid-pack', 'template', { version: '1.0.3' }).status, 1);
 });
 
 test('a pack whose entry point cannot be imported fails', () => {
@@ -1264,6 +1276,53 @@ test('every entry the role map lists imports from the built workspace and export
     }
   }
   t.diagnostic(`${checked} entries imported from the workspace build`);
+});
+
+test('every publishable pack built in the workspace reports its own package version', (t) => {
+  // AgentOS copies `pack.version` into its loaded-pack records and `pack:loaded` events. A version written into a
+  // pack's source stays where it was written while the package's version moves on with each release, so each pack
+  // reads its package.json (src/packageVersion.ts); CI's checkout holds the versions the release plan wrote.
+  const repoRoot = path.join(here, '..', '..');
+  const roleMap = JSON.parse(fs.readFileSync(path.join(here, '..', 'package-roles.json'), 'utf8'));
+  const { classified } = classify(lib.listWorkspacePackages(repoRoot), roleMap);
+  const stale = [];
+  let checked = 0;
+  for (const entry of classified.filter((candidate) => isPublishable(candidate) && ['pack', 'template'].includes(candidate.role))) {
+    const file = entryPathOf(entry.pkg, '.');
+    if (file === null) continue;
+    const built = path.join(repoRoot, entry.dir, file);
+    if (!fs.existsSync(built)) {
+      // CI builds every pack before this test runs; a checkout that was not built has nothing to import.
+      assert.ok(!process.env.CI, `${entry.dir}/${file} was not built`);
+      t.diagnostic(`${entry.pkg.name} not checked: ${entry.dir}/${file} is not built`);
+      continue;
+    }
+    const manifestFile = path.join(repoRoot, entry.dir, 'manifest.json');
+    const manifest = fs.existsSync(manifestFile) ? JSON.parse(fs.readFileSync(manifestFile, 'utf8')) : {};
+    const payload = {
+      module: pathToFileURL(built).href,
+      role: entry.role,
+      secrets: placeholderSecrets(manifest, entry.fixture),
+      options: entry.fixture.options ?? {},
+      version: entry.pkg.version,
+    };
+    const result = spawnSync(process.execPath, [verifyScript, JSON.stringify(payload)], { cwd: path.join(repoRoot, entry.dir), encoding: 'utf8', timeout: 60_000 });
+    // The verifier's reason is its last line: a pack's own warnings can come before it.
+    const reason = (result.stderr || result.error?.message || '').trim().split('\n').pop();
+    if (result.status === 0) {
+      checked += 1;
+    } else if (/reports the version/.test(reason)) {
+      checked += 1;
+      stale.push(`${entry.dir} (${entry.pkg.name}@${entry.pkg.version}): ${reason}`);
+    } else {
+      // A pack that does not construct from the workspace is the pack guard's to report, from its installed tarball.
+      t.diagnostic(`${entry.pkg.name} not checked: ${reason}`);
+    }
+  }
+  t.diagnostic(`${checked} packs constructed from the workspace build`);
+  // CI builds every pack, so a run in which none constructs checked no version at all.
+  assert.ok(checked > 0 || !process.env.CI, 'no pack constructed from the workspace build, so no version was checked');
+  assert.deepEqual(stale, [], `packs reporting a version other than their package's:\n${stale.join('\n')}`);
 });
 
 test('agentosPeerFloor reads the version of a plain agentos floor and nothing else', () => {

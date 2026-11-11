@@ -34,6 +34,7 @@ import type {
   ToolExecutionContext,
   ToolExecutionResult,
 } from '@framers/agentos';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface NostrChannelOptions {
   privateKey?: string;
@@ -368,7 +369,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-nostr',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'nostrChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'nostrChannel', kind: 'messaging-channel', priority, payload: adapter },

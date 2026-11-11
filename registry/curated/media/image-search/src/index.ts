@@ -4,6 +4,7 @@
  */
 
 import { ImageSearchTool } from './tools/imageSearch.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface ImageSearchExtensionOptions {
   pexelsApiKey?: string;
@@ -22,7 +23,7 @@ export function createExtensionPack(context: any) {
 
   return {
     name: '@framers/agentos-ext-image-search',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       // Keep descriptor id aligned with `tool.name` so ToolExecutor can find it.
       { id: tool.name, kind: 'tool' as const, priority: options.priority || 50, payload: tool },

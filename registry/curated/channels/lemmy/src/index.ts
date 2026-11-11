@@ -17,6 +17,7 @@ import { LemmyVoteTool } from './tools/vote.js';
 import { LemmySearchTool } from './tools/search.js';
 import { LemmySubscribeTool } from './tools/subscribe.js';
 import { LemmyFeedTool } from './tools/feed.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -85,7 +86,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-lemmy',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'lemmyPost', kind: 'tool', priority: 50, payload: postTool },
       { id: 'lemmyComment', kind: 'tool', priority: 50, payload: commentTool },

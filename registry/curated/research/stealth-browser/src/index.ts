@@ -27,6 +27,7 @@ import { StealthTypeTool } from './tools/type.js';
 import { StealthScreenshotTool } from './tools/screenshot.js';
 import { StealthSnapshotTool } from './tools/snapshot.js';
 import type { StealthBrowserConfig } from './types.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /**
  * Extension configuration options
@@ -86,7 +87,7 @@ export function createExtensionPack(context: {
 
   return {
     name: '@framers/agentos-ext-stealth-browser',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: navigateTool.name,

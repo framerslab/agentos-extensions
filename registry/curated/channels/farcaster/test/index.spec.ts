@@ -30,6 +30,7 @@ vi.mock('axios', () => ({
 }));
 
 import { createExtensionPack } from '../src/index.js';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -54,7 +55,7 @@ describe('Farcaster createExtensionPack', () => {
       const pack = createExtensionPack({
         secrets: { 'farcaster.signerUuid': 'uuid', 'farcaster.neynarApiKey': 'key' },
       });
-      expect(pack.version).toBe('0.1.0');
+      expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
     });
   });
 

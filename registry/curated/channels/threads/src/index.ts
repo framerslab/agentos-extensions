@@ -17,6 +17,7 @@ import { ThreadsLikeTool } from './tools/like.js';
 import { ThreadsSearchTool } from './tools/search.js';
 import { ThreadsAnalyticsTool } from './tools/analytics.js';
 import { ThreadsQuoteTool } from './tools/quote.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -82,7 +83,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-threads',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'threadsPost', kind: 'tool', priority: 50, payload: postTool },
       { id: 'threadsReply', kind: 'tool', priority: 50, payload: replyTool },

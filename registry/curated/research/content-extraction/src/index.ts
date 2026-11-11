@@ -14,6 +14,7 @@ import { ExtractYouTubeTool } from './tools/youtube.js';
 import { ExtractWikipediaTool } from './tools/wikipedia.js';
 import { ExtractPdfTool } from './tools/pdf.js';
 import { ExtractStructuredTool } from './tools/structured.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -55,7 +56,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-content-extraction',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'extractUrl', kind: 'tool', priority: 50, payload: urlTool },
       { id: 'extractYoutube', kind: 'tool', priority: 50, payload: youtubeTool },

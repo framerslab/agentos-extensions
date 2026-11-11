@@ -95,9 +95,9 @@ export interface CitationCheck {
 
 /**
  * Why a page was not read. A page is unreachable for `timeout` (no answer by the deadline), `network` (no connection,
- * or a name that does not resolve), `status` (an answer that is not 2xx), `refused` (the egress policy refused the
- * address) or `redirects` (too many redirects); it is unreadable for `too_large` (past the size cap), `pdf`, `binary`
- * (another type that is not text) or `no_text` (no text a reader sees).
+ * or a name that does not resolve), `status` (an answer that is not 2xx), `refused` (the egress policy, the host's rule
+ * or robots.txt refused the address or a redirect target) or `redirects` (too many redirects); it is unreadable for
+ * `too_large` (past the size cap), `pdf`, `binary` (another type that is not text) or `no_text` (no text a reader sees).
  */
 export type PageFailure = 'timeout' | 'network' | 'status' | 'refused' | 'redirects' | 'too_large' | 'pdf' | 'binary' | 'no_text';
 
@@ -113,9 +113,12 @@ export interface PageStatus {
   status: number | null;
   /** Why it was not read; null when it was. */
   failure: PageFailure | null;
-  /** More about the failure: the content type of a binary answer, the egress policy's reason; null otherwise. */
-  detail: string | null;
-  /** How its text was read: the plain request, or the web scraper's fallback; null when it was not read. */
+  /**
+   * More about the failure: the content type of a binary answer, the egress policy's reason, `host` for an address the
+   * host's rule refused, `robots` for one robots.txt disallows; null otherwise.
+   */
+  detail: 'host' | 'robots' | (string & {}) | null;
+  /** How its text was read: the plain request, or a fallback (the host's reader or the web scraper); null when it was not read. */
   via: 'fetch' | 'fallback' | null;
   /** How many sentences it gave. */
   passages: number;

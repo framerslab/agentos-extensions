@@ -5,12 +5,13 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createExtensionPack } from '../src/index';
+import { createRequire as createPackageRequire } from 'node:module';
 
 describe('createExtensionPack', () => {
   it('should create a pack with the correct name and version', () => {
     const pack = createExtensionPack({});
     expect(pack.name).toBe('@framers/agentos-ext-notifications');
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   it('should include exactly 3 tool descriptors', () => {

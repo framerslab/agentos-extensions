@@ -17,6 +17,7 @@ import type { ExtensionContext, ExtensionPack } from '@framers/agentos';
 import { WebChatService } from './WebChatService';
 import { WebChatChannelAdapter } from './WebChatChannelAdapter';
 import { WebChatSendMessageTool } from './tools/sendMessage';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface WebChatChannelOptions {
   /** Optional priority for extension descriptors. Defaults to 50. */
@@ -45,7 +46,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-webchat',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'webchatChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'webchatChannel', kind: 'messaging-channel', priority, payload: adapter },

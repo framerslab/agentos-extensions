@@ -36,6 +36,8 @@ export interface PolicyViolation {
 /** Result from the LLM policy judge. */
 export interface JudgeResult {
   violations: PolicyViolation[];
+  /** Set when the judge could not classify the text (the call failed or its answer was not the asked JSON). */
+  failed?: boolean;
 }
 
 /** LLM invoker callback — matches the pattern used by ml-classifiers. */
@@ -53,6 +55,11 @@ export interface ContentPolicyRewriterConfig {
   keywordLists?: Partial<Record<PolicyCategory, string[]>>;
   /** Enable keyword pre-filter on streaming chunks. Default: true. */
   streamingPreFilter?: boolean;
+  /**
+   * What the guard does with a final response the LLM judge could not classify (the call failed, or the answer was
+   * not the asked JSON): `'block'` (the default) blocks it with reason code `JUDGE_FAILED`, `'allow'` lets it pass.
+   */
+  judgeFailure?: 'block' | 'allow';
   /** LLM invoker callback. If not provided, uses a default fetch-based invoker. */
   llmInvoker?: LlmInvoker;
 }

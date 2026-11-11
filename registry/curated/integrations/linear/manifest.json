@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
+  "id": "com.framers.integrations.linear",
+  "name": "Linear",
+  "version": "0.1.0",
+  "description": "Linear for AgentOS: OAuth 2.0 with PKCE on the core's redirect flow, a GraphQL client over fetch, and the issue tracker interface of the account sources library",
+  "author": {
+    "name": "Frame",
+    "email": "team@frame.dev",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["linear", "issues", "oauth"],
+  "agentosVersion": ">=0.15.81",
+  "categories": ["integrations", "developer"],
+  "repository": { "type": "git", "url": "https://github.com/framerslab/agentos-extensions" },
+  "extensions": [{
+    "kind": "library", "id": "linear", "displayName": "Linear",
+    "description": "A person's Linear grant, their teams and assigned issues, and one issue opened or closed at a time", "entry": "./dist/index.js"
+  }]
+}

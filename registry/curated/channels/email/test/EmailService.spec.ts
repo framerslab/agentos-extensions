@@ -107,14 +107,18 @@ const TEST_CONFIG: EmailConfig = {
  * mockSearch / mockFetch fns.
  */
 function installDefaultImapMock(mailboxExists = 0) {
-  MockImapFlow.mockImplementation(() => ({
-    connect: mockConnect,
-    logout: mockLogout,
-    getMailboxLock: mockGetMailboxLock,
-    mailbox: { exists: mailboxExists },
-    search: mockSearch,
-    fetch: mockFetch,
-  }));
+  // EmailService calls `new ImapFlow(...)`, and a mock called with `new` needs a
+  // `function` or `class` implementation; an arrow function is not a constructor.
+  MockImapFlow.mockImplementation(function () {
+    return {
+      connect: mockConnect,
+      logout: mockLogout,
+      getMailboxLock: mockGetMailboxLock,
+      mailbox: { exists: mailboxExists },
+      search: mockSearch,
+      fetch: mockFetch,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------

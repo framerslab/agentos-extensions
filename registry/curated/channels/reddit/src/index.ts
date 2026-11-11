@@ -20,6 +20,7 @@ import { RedditTrendingTool } from './tools/trending';
 import { RedditSubscribeTool } from './tools/subscribe';
 import { RedditInboxTool } from './tools/inbox';
 import { RedditAnalyticsTool } from './tools/analytics';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface RedditChannelOptions {
   clientId?: string;
@@ -104,7 +105,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-reddit',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'redditSubmitPost', kind: 'tool', priority, payload: submitPostTool },
       { id: 'redditComment', kind: 'tool', priority, payload: commentTool },

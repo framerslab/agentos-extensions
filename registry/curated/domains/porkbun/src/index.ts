@@ -15,6 +15,7 @@ import { PorkbunRegisterDomainTool } from './tools/registerDomain.js';
 import { PorkbunListDomainsTool } from './tools/listDomains.js';
 import { PorkbunConfigureDnsTool } from './tools/configureDns.js';
 import { PorkbunTransferDomainTool } from './tools/transferDomain.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -79,7 +80,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-domain-porkbun',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'porkbunSearchDomain', kind: 'tool', priority: 40, payload: searchDomainTool },
       { id: 'porkbunRegisterDomain', kind: 'tool', priority: 40, payload: registerDomainTool },

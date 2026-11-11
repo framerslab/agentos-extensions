@@ -18,6 +18,7 @@ import { ResearchTrendingTool } from './tools/trending.js';
 import { DeepResearchEngine } from './engine/DeepResearchEngine.js';
 import { DeepResearchTool } from './engine/DeepResearchTool.js';
 import type { LLMInvoker, SearchResultItem } from './engine/types.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -186,7 +187,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-deep-research',
-    version: '0.2.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'researchInvestigate', kind: 'tool', priority: 50, payload: investigateTool },
       { id: 'researchAcademic', kind: 'tool', priority: 50, payload: academicTool },

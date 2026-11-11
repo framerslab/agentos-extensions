@@ -16,9 +16,9 @@ vi.mock('plivo', () => {
     hangup: vi.fn().mockResolvedValue({}),
     speak: vi.fn().mockResolvedValue({}),
   };
-  const MockClient = vi.fn().mockImplementation(() => ({
+  const MockClient = vi.fn().mockImplementation(function () { return ({
     calls: mockCallsApi,
-  }));
+  }); });
   return {
     default: { Client: MockClient },
     Client: MockClient,
@@ -29,7 +29,7 @@ vi.mock('plivo', () => {
 // Mock @framers/agentos — provide the minimal surface area the extension needs
 vi.mock('@framers/agentos', () => ({
   escapeXml: (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
-  CallManager: vi.fn().mockImplementation(() => ({
+  CallManager: vi.fn().mockImplementation(function () { return ({
     registerProvider: vi.fn(),
     initiateCall: vi.fn(),
     speakText: vi.fn(),
@@ -37,7 +37,7 @@ vi.mock('@framers/agentos', () => ({
     getCall: vi.fn(),
     getActiveCalls: vi.fn(() => []),
     dispose: vi.fn(),
-  })),
+  }); }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -46,6 +46,7 @@ vi.mock('@framers/agentos', () => ({
 
 import { createExtensionPack } from '../src/index';
 import type { ExtensionContext } from '@framers/agentos';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -90,7 +91,7 @@ describe('Plivo Voice Extension — createExtensionPack', () => {
 
     expect(pack).toBeDefined();
     expect(pack.name).toBe('@framers/agentos-ext-voice-plivo');
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
     expect(pack.descriptors).toBeDefined();
     expect(Array.isArray(pack.descriptors)).toBe(true);
     expect(pack.descriptors.length).toBeGreaterThanOrEqual(2);

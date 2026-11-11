@@ -5,7 +5,8 @@
  * 2026)`), in a markdown link, between angle brackets or bare, on the same line or a later line of the paragraph;
  * several quotations waiting in a sentence share the address that follows them. A quotation of four words or more that
  * no address follows before its sentence ends is uncited; a shorter one is a term or a title and is passed over.
- * Fenced code, code spans and escaped quotation marks hold no claim. JSON: an array of `{ claim, url, exact }`.
+ * Fenced code, code spans, escaped quotation marks and a link's title hold no claim; a quotation's emphasis marks are
+ * removed from its words. JSON: an array of `{ claim, url, exact }`.
  *
  * @module agentos/extensions/research/citation-check/parse
  */
@@ -45,6 +46,28 @@ const QUOTE_MARKER = /^ {0,3}>/u;
 const ADDRESS_END = /[\s<>"“”„`]/u;
 /** Punctuation that ends a sentence or a markdown span after an address, not the address itself. */
 const TRAILING = /[.,;:!?'*_~]/u;
+/** A markdown link's title after its address and before the closing parenthesis: `"…"`, `'…'` or `(…)`. */
+const LINK_TITLE = /^>?\s+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\))(?=\s*\))/u;
+/**
+ * Emphasis: a run of `*` and the same run closing it, each against the words they wrap, or the same with `_` at the
+ * words' edges (an `_` inside a word, as in `snake_case`, is no emphasis); an escaped mark is none. An unpaired mark, as
+ * in `2*3` or `char*`, is text.
+ */
+const EMPHASIS = [
+  /(?<!\\)(\*+)(?=\S)(.+?)(?<=[^\s\\])\1/gsu,
+  /(?<![\p{L}\p{N}\\])(_+)(?=\S)(.+?)(?<=[^\s\\])\1(?![\p{L}\p{N}])/gsu,
+];
+
+/** A quotation's text with its emphasis marks removed, inner emphasis included. */
+function withoutEmphasis(raw: string): string {
+  let text = raw;
+  for (let pass = 0; pass < 4; pass += 1) {
+    const next = EMPHASIS.reduce((value, pattern) => value.replace(pattern, '$2'), text);
+    if (next === text) break;
+    text = next;
+  }
+  return text;
+}
 
 /** Whether a string is an absolute http or https address with a host. */
 export function isHttpUrl(value: string): boolean {
@@ -116,9 +139,22 @@ function closingMark(text: string, from: number, closers: string): number {
   return -1;
 }
 
-/** A quotation's words: escapes and the markdown marks for bold and code removed, white space collapsed. */
+/** A code span in a quotation: a run of backticks, its text, and the same run closing it. */
+const CODE_SPAN = /(?<![\\`])(`+)(?!`)([\s\S]*?[^`])\1(?!`)/u;
+
+/**
+ * A quotation's words: outside code spans, the markdown marks for emphasis removed, then escapes and stray backticks;
+ * a code span's text kept as it stands, its backticks removed; white space collapsed.
+ */
 function cleanQuotation(raw: string): string {
-  return collapse(raw.replace(/\\(.)/gu, '$1').replace(/\*\*|__|`/gu, ''));
+  const prose = (text: string): string => withoutEmphasis(text).replace(/\\(.)/gu, '$1').replace(/`/gu, '');
+  let out = '';
+  let rest = raw;
+  for (let span = CODE_SPAN.exec(rest); span !== null; span = CODE_SPAN.exec(rest)) {
+    out += prose(rest.slice(0, span.index)) + (span[2] ?? '');
+    rest = rest.slice(span.index + span[0].length);
+  }
+  return collapse(out + prose(rest));
 }
 
 /** How many times a character stands in a string. */
@@ -142,6 +178,17 @@ function addressAt(text: string, start: number): string {
     else if (last === ']' && count(url, '[') < count(url, ']')) url = url.slice(0, -1);
     else return url;
   }
+}
+
+/**
+ * Whether the address at `start` is a markdown link's destination: `](` before it, then any white space, then `<` for
+ * an address in angle brackets.
+ */
+function linkDestination(text: string, start: number): boolean {
+  let at = start;
+  if (text[at - 1] === '<') at -= 1;
+  while (at > 0 && /\s/u.test(text[at - 1] ?? '')) at -= 1;
+  return text[at - 1] === '(' && text[at - 2] === ']';
 }
 
 /** The claims of one unit, appended to `out` in the order they stand. */
@@ -197,7 +244,10 @@ function scanUnit(unit: UnitLine[], out: CitedClaim[]): void {
         for (const quote of waiting) out.push({ line: quote.line, claim: quote.claim, url, exact: true });
         waiting = [];
       }
+      const inLink = linkDestination(text, index);
       index += Math.max(url.length, 1);
+      // A link's title, `[text](address "Title")`, is no quotation: the scan goes on at the closing parenthesis.
+      if (inLink) index += LINK_TITLE.exec(text.slice(index))?.[0].length ?? 0;
       continue;
     }
     if (char === '(' || char === '[') {

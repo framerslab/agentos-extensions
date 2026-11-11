@@ -4,6 +4,7 @@
  */
 
 import { NewsSearchTool } from './tools/newsSearch.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface NewsSearchExtensionOptions {
   newsApiKey?: string;
@@ -17,7 +18,7 @@ export function createExtensionPack(context: any) {
 
   return {
     name: '@framers/agentos-ext-news-search',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       // Keep descriptor id aligned with `tool.name` so ToolExecutor can find it.
       { id: tool.name, kind: 'tool' as const, priority: options.priority || 50, payload: tool, requiredSecrets: [{ id: 'newsapi.apiKey' }] },

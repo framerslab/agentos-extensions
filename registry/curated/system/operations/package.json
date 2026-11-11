@@ -137,7 +137,7 @@
   },
   "devDependencies": {
     "@framers/agentos-ext-triggers": "workspace:^",
-    "@framers/sql-storage-adapter": "^0.9.3",
+    "@framers/sql-storage-adapter": "^0.9.5",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",
@@ -155,7 +155,7 @@
     "sass": "1.107.1",
     "sharp": "0.35.5",
     "typescript": "^6.0.3",
-    "vitest": "^3.2.7",
+    "vitest": "^5.1.0",
     "zod": "4.6.7"
   },
   "engines": {

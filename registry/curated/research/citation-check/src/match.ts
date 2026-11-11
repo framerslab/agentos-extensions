@@ -26,14 +26,24 @@ export function withoutInvisible(text: string): string {
 }
 
 /**
+ * A dash run as the checks read it: a hyphen-minus with no space around it, except one with white space after it and a
+ * digit next, which keeps one space after it. That dash is punctuation (`1887 — 4,200 ships`), and a hyphen-minus
+ * against a digit would read as the number's sign, so a quotation that starts at the number would cut it.
+ */
+function dashAsRead(run: string, offset: number, text: string): string {
+  return /\s$/u.test(run) && /[0-9]/u.test(text.charAt(offset + run.length)) ? '- ' : '-';
+}
+
+/**
  * A text as the checks read it: NFKC, the invisible characters removed, typographic and angle quotation marks plain,
- * every dash a hyphen-minus with no space around it, lower case, white space collapsed.
+ * every dash a hyphen-minus with no space around it (one with white space after it before a digit keeps that space),
+ * lower case, white space collapsed.
  */
 export function normalizeForMatch(text: string): string {
   const folded = fold(withoutInvisible(text.normalize('NFKC')))
     .replace(/[«»]/gu, '"')
     .replace(/[‹›]/gu, "'");
-  return collapse(folded.replace(DASHES, '-').toLowerCase());
+  return collapse(folded.replace(DASHES, dashAsRead).toLowerCase());
 }
 
 /**

@@ -512,6 +512,16 @@ jobs:
           fi
           node scripts/pack-guard.mjs --only "$PLANNED" --tarballs "$RUNNER_TEMP/release-tarballs"
 
+      # The two copies of packs npm receives from another source tree (RELEASING.md, "Foreign names") are never
+      # planned, so the step above never checks them. Their built code must still load under Node's ESM loader, so
+      # that this repository can become their source again (issue 121). Their tarballs go to a directory of their
+      # own and are never uploaded with the release tarballs.
+      - name: Pack guard (the copies of packs published from another source tree)
+        run: |
+          node scripts/pack-guard.mjs \
+            --only registry/curated/safety/ml-classifiers,registry/curated/safety/topicality \
+            --tarballs "$RUNNER_TEMP/foreign-copy-tarballs"
+
       # The plan and the tarballs, for the release job of release.yml, which publishes them and installs and builds
       # nothing. A called workflow reads its caller's event, so in release.yml's call this is schedule or
       # workflow_dispatch; a pull request uploads nothing. The plan file and the tarball directory's expected.json are

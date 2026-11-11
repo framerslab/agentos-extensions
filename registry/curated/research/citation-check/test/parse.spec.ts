@@ -111,3 +111,51 @@ describe('parseCitedClaims on JSON', () => {
     expect(() => parseCitedClaims('[1]')).toThrow(CitationInputError);
   });
 });
+
+describe('parseCitedClaims on markdown links and emphasis', () => {
+  it("never reads a markdown link's title as a quotation, whether or not another address follows in the sentence", () => {
+    const text = [
+      'The keeper wrote "the brightest light on the coast" [the log](https://example.org/log "Title of four words").',
+      '',
+      'See [the log](https://example.org/log "Another title of words") and [the map](<https://example.org/map> "A third title here"), then https://example.org/other.',
+    ].join('\n');
+    expect(parseCitedClaims(text)).toEqual([
+      { line: 1, claim: 'the brightest light on the coast', url: 'https://example.org/log', exact: true },
+    ]);
+  });
+
+  it('removes paired emphasis from a quotation and keeps an unpaired asterisk and an underscore inside a word', () => {
+    const text = [
+      'They wrote "she was the *only* survivor of the _first_ wreck" (https://example.org/wreck).',
+      'The manual says "set the snake_case name to 2 * 3 rows" (https://example.org/manual).',
+      'It notes "the area is 2*3 square metres", "the pointer is char* in C" and "a **bold *inner* phrase** here" (https://example.org/notes).',
+    ].join('\n');
+    expect(parseCitedClaims(text)).toEqual([
+      { line: 1, claim: 'she was the only survivor of the first wreck', url: 'https://example.org/wreck', exact: true },
+      { line: 2, claim: 'set the snake_case name to 2 * 3 rows', url: 'https://example.org/manual', exact: true },
+      // An unpaired asterisk is text.
+      { line: 3, claim: 'the area is 2*3 square metres', url: 'https://example.org/notes', exact: true },
+      { line: 3, claim: 'the pointer is char* in C', url: 'https://example.org/notes', exact: true },
+      { line: 3, claim: 'a bold inner phrase here', url: 'https://example.org/notes', exact: true },
+    ]);
+  });
+});
+
+describe('parseCitedClaims on emphasis across lines, code spans and spaced link destinations', () => {
+  it('removes emphasis across a line break, keeps the marks inside a code span, and skips a title after a spaced destination', () => {
+    const text = [
+      'They wrote "the *only',
+      'survivor* returned home" (https://example.org/wreck).',
+      '',
+      'The manual says "The glob `*cat*` matches files" (https://example.org/glob).',
+      '',
+      'See [log]( https://example.org/log "Title of four words") then https://example.org/other.',
+      '',
+      `See [log](${' '.repeat(45)}<https://example.org/log> "Another title of words") then https://example.org/other.`,
+    ].join('\n');
+    expect(parseCitedClaims(text)).toEqual([
+      { line: 1, claim: 'the only survivor returned home', url: 'https://example.org/wreck', exact: true },
+      { line: 4, claim: 'The glob *cat* matches files', url: 'https://example.org/glob', exact: true },
+    ]);
+  });
+});

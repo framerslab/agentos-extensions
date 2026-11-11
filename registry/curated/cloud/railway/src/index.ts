@@ -14,6 +14,7 @@ import { RailwayDeployServiceTool } from './tools/deployService.js';
 import { RailwayListServicesTool } from './tools/listServices.js';
 import { RailwayAddDatabaseTool } from './tools/addDatabase.js';
 import { RailwayGetLogsTool } from './tools/getLogs.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -73,7 +74,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-cloud-railway',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'railwayDeployService', kind: 'tool', priority: 40, payload: deployServiceTool },
       { id: 'railwayListServices', kind: 'tool', priority: 40, payload: listServicesTool },

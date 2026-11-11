@@ -12,6 +12,7 @@ import { NotificationService } from './NotificationService.js';
 import { NotifySendTool } from './tools/send.js';
 import { NotifyBroadcastTool } from './tools/broadcast.js';
 import { NotifyScheduleTool } from './tools/schedule.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Extension Context (matches AgentOS extension protocol)
@@ -43,7 +44,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-notifications',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'notifySend', kind: 'tool', priority: 50, payload: sendTool },
       { id: 'notifyBroadcast', kind: 'tool', priority: 50, payload: broadcastTool },

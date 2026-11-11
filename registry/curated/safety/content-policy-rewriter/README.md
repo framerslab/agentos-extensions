@@ -37,6 +37,16 @@ const pack = createContentPolicyRewriter({
 const pack = createContentPolicyRewriter('uncensored');
 ```
 
+## What it judges
+
+The guard reads the chunks of an AgentOS output stream as the runtime emits them (`AgentOSResponseChunkType`):
+
+- **Text deltas** (`type: 'text_delta'`, text in `textDelta`): the keyword pre-filter scans each delta together with the last words of the stream's earlier deltas, so a phrase split across two deltas is found. Block categories are tried first. A match in a `block` category ends the stream with an error chunk whose `code` is `KEYWORD_<CATEGORY>`; a match in a `sanitize` category replaces the delta with `[Content removed by policy]`. The pre-filter is broad on purpose: a delta that ends partway through a word is scanned as it is, so a word cut at a delta's end can match a keyword it only begins with. Set `streamingPreFilter: false` to skip deltas, and pass `holdUntilFinal` to the output dispatcher to show nothing before the whole reply is judged.
+- **The final response** (`type: 'final_response'`, text in `finalResponseText`): a keyword match in any `block` category blocks at once, with no LLM call. Otherwise the LLM judge classifies the text against the enabled categories; violations of a category that is not enabled are ignored. Any violation in a `block` category blocks the reply, with the categories as the reason code. When every violation is in a `sanitize` category, the LLM rewriter writes the replacement and the guard returns it as a `sanitize`; when the rewrite call fails or returns no text the reply is blocked with `REWRITE_FAILED`.
+- **When the judge cannot classify** (the call fails, or the answer is not the asked JSON), the reply is blocked with `JUDGE_FAILED`. Set `judgeFailure: 'allow'` to let such a reply pass instead.
+
+Every other chunk passes unjudged. A host that calls `evaluateOutput()` itself passes the same chunk shapes.
+
 ## agent.config.json
 
 ```json

@@ -139,9 +139,10 @@ shipped files changed on `master` since its last release ([RELEASING.md](./RELEA
 The `registry/curated/safety/` directory contains **stub READMEs** pointing to the
 canonical core packages at the monorepo root. The actual source code for code-safety,
 pii-redaction, and grounding-guard lives exclusively in `packages/agentos-ext-*` at
-the monorepo root. The ml-classifiers and topicality packages still have curated
-copies with additional modules (ClassifierOrchestrator, TopicDriftTracker, etc.) that
-have not yet been merged upstream to the root packages.
+the monorepo root. The ml-classifiers and topicality packages have copies here that
+carry the code of their newest npm versions; npm still receives both from the root
+packages until [issue 121](https://github.com/framerslab/agentos-extensions/issues/121)
+moves their releases here.
 Two guardrails live only here and publish from this repository:
 `content-policy-rewriter` and `self-harm-referral`.
 

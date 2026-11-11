@@ -5,7 +5,7 @@
  * @module content-policy-rewriter/LlmPolicyJudge
  */
 
-import type { LlmInvoker, PolicyCategory, CategoryConfig, JudgeResult } from './types.js';
+import type { LlmInvoker, PolicyCategory, CategoryConfig, JudgeResult, PolicyViolation } from './types.js';
 import { CATEGORY_DESCRIPTIONS } from './categories.js';
 
 const SYSTEM_PROMPT = `You are a content policy classifier. Analyze the provided text and identify any violations of the enabled policy categories. Respond with JSON only. If no violations, respond: { "violations": [] }`;
@@ -29,14 +29,25 @@ export class LlmPolicyJudge {
     if (customRules) userPrompt += `\nCustom rules: ${customRules}\n`;
     userPrompt += `\nText to analyze:\n"""\n${text}\n"""\n\nRespond with JSON: { "violations": [{ "category": "...", "severity": "low|medium|high", "spans": ["offending phrase"] }] }`;
 
+    let parsed: any;
     try {
       const raw = await this.llmInvoker(SYSTEM_PROMPT, userPrompt);
-      const cleaned = raw.replace(/```json\n?|```\n?/g, '').trim();
-      const parsed = JSON.parse(cleaned) as JudgeResult;
-      if (!Array.isArray(parsed.violations)) return { violations: [] };
-      return parsed;
+      const cleaned = String(raw ?? '').replace(/```json\n?|```\n?/g, '').trim();
+      parsed = JSON.parse(cleaned);
     } catch {
-      return { violations: [] };
+      return { violations: [], failed: true };
     }
+    if (!parsed || !Array.isArray(parsed.violations)) return { violations: [], failed: true };
+
+    // Keep only violations of the categories asked about, each with a known severity and string spans.
+    const violations: PolicyViolation[] = [];
+    for (const v of parsed.violations) {
+      const category = v?.category;
+      if (typeof category !== 'string' || !enabledCategories[category as PolicyCategory]?.enabled) continue;
+      const severity = v.severity === 'low' || v.severity === 'high' ? v.severity : 'medium';
+      const spans = Array.isArray(v.spans) ? v.spans.filter((s: unknown) => typeof s === 'string') : [];
+      violations.push({ category: category as PolicyCategory, severity, spans });
+    }
+    return { violations };
   }
 }

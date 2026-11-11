@@ -59,7 +59,13 @@
 //
 // A package whose npm `latest` has no tag here and whose version document
 // names another repository is foreign: never planned, its checkout version
-// set to npm's, and the owning repository named in the summary.
+// set to npm's, and the owning repository named in the summary. A package
+// the role map lists under `adopted` is taken over instead: while its npm
+// `latest` is in that state, the plan publishes the patch above the highest
+// version npm holds (a version package.json names above that publishes as
+// written), its ranges read from master's text, and no tag or release is
+// made for the other repository's versions; once that version is tagged here
+// the package is planned as any other.
 //
 // Nothing here writes to master. The versions go into the job's checkout
 // alone (the apply command), master's package.json files keep the versions a
@@ -222,7 +228,9 @@
 // The role map scripts/package-roles.json is the one source of the package
 // list: every directory whose role is pack, library, template or root, whose
 // package.json exists and is not private (templates/basic-tool ships as
-// @framers/agentos-template-basic-tool; the other templates are private).
+// @framers/agentos-template-basic-tool; the other templates are private). Its
+// `adopted` list names the directories of copies this repository takes over
+// from the repository npm's versions name (see foreign names above).
 
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -483,13 +491,22 @@ export function isBreaking(message) {
 
 /**
  * The publishable packages the role map lists: every directory whose role is pack, library, template or root,
- * whose package.json exists and is not private, in directory order.
+ * whose package.json exists and is not private, in directory order. A package whose directory the role map's
+ * `adopted` list names carries `adopted: true`; a name there that is not the directory of a publishable pack,
+ * library or template (a misspelling, a trailing slash, a private package) fails, since the package would stay
+ * foreign without a word.
  * @param {string} root the checkout
  * @returns {{ name: string, dir: string, role: string, version: string, manifestVersion: string | null,
- *   fields: { dependencies?: object, peerDependencies?: object, optionalDependencies?: object, devDependencies?: object } }[]}
+ *   fields: { dependencies?: object, peerDependencies?: object, optionalDependencies?: object, devDependencies?: object },
+ *   adopted?: true }[]}
  */
 export function listPackages(root) {
   const roleMap = JSON.parse(fs.readFileSync(path.join(root, 'scripts', 'package-roles.json'), 'utf8'));
+  const adopted = Object.hasOwn(roleMap, 'adopted') ? roleMap.adopted : [];
+  if (!Array.isArray(adopted) || adopted.some((dir) => typeof dir !== 'string')) {
+    throw new Error("scripts/package-roles.json's adopted is not a list of package directories");
+  }
+  const adoptedDirs = new Set(adopted);
   const packages = [];
   for (const [dir, role] of Object.entries(roleMap.roles ?? {})) {
     if (!LISTED_ROLES.has(role)) continue;
@@ -518,7 +535,16 @@ export function listPackages(root) {
         optionalDependencies: pkg.optionalDependencies,
         devDependencies: pkg.devDependencies,
       },
+      ...(adoptedDirs.has(dir) ? { adopted: true } : {}),
     });
+  }
+  const adoptable = new Set(packages.filter((pkg) => PLANNED_ROLES.has(pkg.role)).map((pkg) => pkg.dir));
+  const unknown = adopted.filter((dir) => !adoptable.has(dir));
+  if (unknown.length > 0) {
+    throw new Error(
+      `scripts/package-roles.json's adopted list names ${unknown.join(', ')}, which is not the directory of a publishable package ` +
+        '(a pack, library or template of the role map whose package.json exists and is not private)',
+    );
   }
   return packages.sort((a, b) => (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
 }
@@ -702,16 +728,22 @@ export async function planRelease({
     const tagged = tagsByName.get(pkg.name) ?? [];
 
     // Step 8, a foreign name: npm's latest has no tag here and its document names another repository. The copy
-    // here is not planned; the checkout takes npm's version so the catalog lists the truth.
+    // here is not planned; the checkout takes npm's version so the catalog lists the truth. A package the role map
+    // lists under `adopted` is taken over instead (handover, below).
+    let adoptedLatest = null;
     if (repository !== null && typeof latest === 'string' && VERSION.test(latest) && !tagged.some((tag) => tag.version === latest)) {
       const latestDocument = await registry.versionDocument(pkg.name, latest);
       const address = typeof latestDocument?.repository === 'string' ? latestDocument.repository : latestDocument?.repository?.url;
       const owner = repositoryNamed(address);
       if (owner !== null && owner.toLowerCase() !== repository.toLowerCase()) {
-        const shown = String(address).replace(/^git\+/, '');
-        foreign.push({ name: pkg.name, dir: pkg.dir, npmVersion: latest, repository: shown });
-        const reason = `published from ${shown}, not from this repository: its copy here is not planned`;
-        return { pkg, entry: entryOf(pkg, { foreign: true, newest: latest, checkoutVersion: latest, reason }), document, eligible: false };
+        if (pkg.adopted === true) {
+          adoptedLatest = latest;
+        } else {
+          const shown = String(address).replace(/^git\+/, '');
+          foreign.push({ name: pkg.name, dir: pkg.dir, npmVersion: latest, repository: shown });
+          const reason = `published from ${shown}, not from this repository: its copy here is not planned`;
+          return { pkg, entry: entryOf(pkg, { foreign: true, newest: latest, checkoutVersion: latest, reason }), document, eligible: false };
+        }
       }
     }
 
@@ -766,6 +798,15 @@ export async function planRelease({
     };
 
     const subjectsOf = (history) => history.map(({ sha, subject }) => ({ sha, subject, pullRequest: pullRequestOf(subject) }));
+
+    /** Whether npm's document for a version of the package names a repository other than this one. */
+    const namesAnotherRepository = async (version) => {
+      if (repository === null) return false;
+      const versionDocument = await registry.versionDocument(pkg.name, version);
+      const address = typeof versionDocument?.repository === 'string' ? versionDocument.repository : versionDocument?.repository?.url;
+      const owner = repositoryNamed(address);
+      return owner !== null && owner.toLowerCase() !== repository.toLowerCase();
+    };
 
     /** Whether package.json's only difference since `commit` lies in devDependencies, which no consumer installs. */
     const onlyDevDependenciesChanged = (commit) => onlyDevDependenciesDiffer(git, commit, head, manifest);
@@ -892,27 +933,84 @@ export async function planRelease({
     // newest version, so a version whose tag push failed would stay untagged for good once a later run had published
     // past it and its own tag push had failed too. A tag above the newest one a release records gets its release the
     // same way. The versions at or below those are history and are left as they are.
+    // An adopted package whose latest is still the other repository's, and whose handover npm does not list yet, has
+    // no version of its own to repair but the handover version, which the handover below decides again from, and
+    // repairs, when npm serves it.
     const taggedVersions = new Set(tagged.map((tag) => tag.version));
     const highest = (versions) => versions.reduce((top, version) => (top === null || compareVersions(version, top) > 0 ? version : top), null);
     const newestTagged = highest([...taggedVersions]);
     const newestReleased = highest([...taggedVersions].filter((version) => released.has(`${pkg.name}@${version}`)));
-    for (const version of [...new Set(held)].filter((candidate) => VERSION.test(candidate)).sort(compareVersions)) {
+    const heldVersions = [...new Set(held)].filter((candidate) => VERSION.test(candidate)).sort(compareVersions);
+
+    // An adopted package's boundary: the newest version npm holds, with no tag here, whose document names another
+    // repository. It and every version below it are the other repository's, whatever their own documents say (an
+    // early one may name no repository, or a gitHead this clone also holds), and get no tag or release here; a
+    // version above it is this repository's, anchored and repaired as any package's is. The versions are read from
+    // the newest down, so only this repository's untagged versions and the boundary itself are read.
+    let otherNewest = null;
+    if (pkg.adopted === true) {
+      for (const version of [...heldVersions].reverse()) {
+        if (taggedVersions.has(version)) continue;
+        if (await namesAnotherRepository(version)) {
+          otherNewest = version;
+          break;
+        }
+      }
+    }
+    // npm holds a version above the other repository's newest: the handover reached npm, and npm's latest still
+    // names the other repository only until its dist-tag moves. The package is decided from its newest version, as
+    // any package is, and not handed over again.
+    if (adoptedLatest !== null && otherNewest !== null && heldVersions.some((version) => compareVersions(version, otherNewest) > 0)) {
+      adoptedLatest = null;
+    }
+
+    for (const version of adoptedLatest !== null ? [] : heldVersions) {
       if (version === newest || taggedVersions.has(version)) continue;
       if (newestTagged !== null && compareVersions(version, newestTagged) <= 0) continue;
+      if (otherNewest !== null && compareVersions(version, otherNewest) <= 0) continue;
       const found = await commitOf(version);
       if (found === null) {
         throw new Error(`npm holds ${pkg.name}@${version}, but no tag, gitHead or provenance attestation names a commit of this repository for it`);
       }
       repair({ name: pkg.name, version, commit: found.commit, kind: 'tag' });
     }
-    for (const tag of tagged) {
+    for (const tag of adoptedLatest !== null ? [] : tagged) {
       if (tag.version === newest || released.has(`${pkg.name}@${tag.version}`)) continue;
       if (newestReleased !== null && compareVersions(tag.version, newestReleased) <= 0) continue;
       repair({ name: pkg.name, version: tag.version, commit: tag.commit, kind: 'release' });
     }
 
+    /**
+     * Step 8's other side, an adopted package: the role map lists its directory under `adopted`, and npm's latest
+     * still names another repository. This repository takes it over with the patch above `newest`, the highest
+     * version npm holds or a tag here names (a tag whose publish never reached npm counts, so the version never
+     * names a tag at another commit); a version package.json names above that publishes as written. When npm already
+     * serves that version (a handover published while npm's package document still lists the other repository's
+     * versions alone, or whose tag push failed), or serves the version a tag here names above them, the decision is
+     * made again from it, as a shipped change's patch npm holds is. Otherwise no commit here was published, so there
+     * is no base: nothing is diffed, the ranges are master's text, no subject is listed, and the other repository's
+     * versions get no tag or release here. Once this version is tagged here, latest has a tag and the package is
+     * decided as any other, from that tag.
+     */
+    const handover = async (npmLatest) => {
+      // A tag here above every version npm lists, whose own document npm serves: the handover reached npm before npm's
+      // package document listed it, and the decision is made from it as from any version npm holds.
+      if (taggedVersions.has(newest) && (await registry.versionDocument(pkg.name, newest)) !== null) return decideFrom(newest, 1);
+      const onNpm = highest([npmLatest, ...held].filter((version) => typeof version === 'string' && VERSION.test(version)));
+      const name = named !== null && compareVersions(named, newest) > 0 ? named : null;
+      const planned = name ?? raisePatch(newest);
+      if ((await registry.versionDocument(pkg.name, planned)) !== null) return decideFrom(planned, 1);
+      const reason =
+        `npm's ${pkg.name}@${npmLatest} names another repository, and the role map lists ${pkg.dir} under adopted, ` +
+        `so this repository publishes ${planned}` +
+        (name === null ? `, the patch above ${newest}, the highest version npm holds or a tag here names` : `, the version package.json names above ${newest}`);
+      return entryOf(pkg, { adopted: true, adoptedAfter: onNpm, newest, planned, bump: name === null ? 'patch' : 'named', named: name, reason, subjects: [] });
+    };
+
     let entry;
-    if (newest === null) {
+    if (adoptedLatest !== null) {
+      entry = await handover(adoptedLatest);
+    } else if (newest === null) {
       if (named === null) {
         throw new Error(`${manifest}'s version ${pkg.version} is not x.y.z, and npm holds no version of ${pkg.name} to count from`);
       }
@@ -958,16 +1056,19 @@ export async function planRelease({
    * own document. A version known from its tag alone may have no document on npm yet, in the minutes after its
    * publish: it is read again, as the publish step waits for a version before its dependents, and the plan fails
    * naming it when npm still serves none, since master's text in its place would raise again a range an earlier run
-   * raised and plan a patch nothing needs.
+   * raised and plan a patch nothing needs. Every such wait of the plan draws on one budget of `documentWait.upTo`,
+   * counted from the first read again, as the publish step's waits share theirs, so the job's time limit holds one
+   * plan wait however many unserved documents the plan reads; a document read once the budget is spent gets one read.
    */
+  let documentDeadline = null;
   const publishedManifest = async ({ pkg, entry, document }) => {
     const listed = document?.versions?.[entry.newest];
     if (listed) return listed;
-    const deadline = Date.now() + documentWait.upTo * 1000;
     for (let fresh = false; ; fresh = true) {
       const held = await registry.versionDocument(pkg.name, entry.newest, { fresh });
       if (held !== null) return held;
-      if (Date.now() >= deadline) {
+      documentDeadline ??= Date.now() + documentWait.upTo * 1000;
+      if (Date.now() >= documentDeadline) {
         throw new Error(
           `npm serves no document for ${pkg.name}@${entry.newest}, its newest version, after ${documentWait.upTo} seconds of reading again; ` +
             "its ranges on its siblings are read from what consumers hold, so it is not planned from master's text: re-run once npm " +
@@ -990,7 +1091,8 @@ export async function planRelease({
         if (sibling === pkg.name || !byName.has(sibling)) continue;
         const master = String(text);
         let effective = master;
-        let source = 'never-published';
+        // An adopted package's published manifest is the other repository's, so master's text is its range.
+        let source = entry.adopted === true ? 'master' : 'never-published';
         if (entry.newest !== null && entry.baseCommit !== null) {
           if (await git.entryChanged(entry.baseCommit, pkg.dir, sibling)) {
             source = 'master';
@@ -1870,6 +1972,8 @@ function report(plan, file, { applied = false } = {}) {
   for (const { entry, range } of raised) lines.push(`range: ${entry.name} ${range.field} ${range.sibling} ${range.effective} -> ${range.applied}`);
   for (const record of plan.repairs) lines.push(`repair: ${record.name}@${record.version} needs its ${record.kind} at ${record.commit.slice(0, 8)}`);
   for (const record of plan.foreign) lines.push(`foreign: ${record.name} is published from ${record.repository}; its copy here is not planned`);
+  const adopted = plan.packages.filter((entry) => entry.adopted === true);
+  for (const entry of adopted) lines.push(`adopted: ${entry.name} takes over from another repository: ${entry.reason}`);
   for (const warning of plan.warnings) lines.push(`::warning::${warning}`);
   console.log(lines.join('\n'));
 
@@ -1888,6 +1992,7 @@ function report(plan, file, { applied = false } = {}) {
     ...raised.map(({ entry, range }) => `- range: \`${entry.name}\` ${range.field} on \`${range.sibling}\`: ${range.effective} -> ${range.applied}`),
     ...plan.repairs.map((record) => `- repair: \`${record.name}@${record.version}\` needs its ${record.kind} at ${record.commit.slice(0, 8)}`),
     ...plan.foreign.map((record) => `- foreign: \`${record.name}\` is published from ${record.repository}; its copy here is not planned`),
+    ...adopted.map((entry) => `- adopted: \`${entry.name}\` takes over from another repository: ${entry.reason}`),
     ...plan.warnings.map((warning) => `- warning: ${warning}`),
     '',
   ];
@@ -2425,11 +2530,16 @@ export async function publishPlan({
 export function releaseNotes(plan, entry) {
   if (entry?.event !== 'published') return `${entry.name}@${entry.version} as npm holds it, published from ${entry.commit}.\n`;
   const planned = [...(plan.packages ?? []), ...(plan.root ? [plan.root] : [])].find((candidate) => candidate.name === entry.name);
-  if (planned && planned.baseCommit === null) return `The first release of ${entry.name}.\n`;
-  const lines = (planned?.subjects ?? []).map(({ subject, pullRequest }) => {
-    const number = Number.isInteger(pullRequest) ? pullRequest : pullRequestOf(subject);
-    return number === null ? `- ${subject}` : `- ${subject.replace(/\s*\(#\d+\)\s*$/, '')} (#${number})`;
-  });
+  const adopted = planned?.adopted === true;
+  if (planned && planned.baseCommit === null && !adopted) return `The first release of ${entry.name}.\n`;
+  // An adopted package's first release here has no base and no subjects: one line says where its earlier versions
+  // came from, and the ranges the release raised follow it.
+  const lines = adopted
+    ? [`The first release of ${entry.name} from this repository; npm's versions up to ${planned.adoptedAfter ?? planned.newest} were published from another repository.`]
+    : (planned?.subjects ?? []).map(({ subject, pullRequest }) => {
+        const number = Number.isInteger(pullRequest) ? pullRequest : pullRequestOf(subject);
+        return number === null ? `- ${subject}` : `- ${subject.replace(/\s*\(#\d+\)\s*$/, '')} (#${number})`;
+      });
   const siblingVersion = (name) => {
     const sibling = (plan.packages ?? []).find((candidate) => candidate.name === name);
     return sibling ? (sibling.planned ?? sibling.newest ?? null) : null;

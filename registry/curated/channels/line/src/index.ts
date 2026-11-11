@@ -31,6 +31,7 @@ import type {
   ToolExecutionContext,
   ToolExecutionResult,
 } from '@framers/agentos';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface LineChannelOptions {
   channelAccessToken?: string;
@@ -559,7 +560,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-line',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'lineChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'lineChannel', kind: 'messaging-channel', priority, payload: adapter },

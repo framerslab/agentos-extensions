@@ -10,8 +10,8 @@
  * @module ml-classifiers/llm-classifier
  */
 
-import type { ClassifierCategory, CategoryScore, LlmInvoker } from './types';
-import { ALL_CATEGORIES } from './types';
+import type { ClassifierCategory, CategoryScore, LlmInvoker } from './types.js';
+import { ALL_CATEGORIES } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Prompt template

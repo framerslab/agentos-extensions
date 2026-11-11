@@ -56,6 +56,8 @@
     "registry/curated/domains/porkbun": "pack",
     "registry/curated/integrations/clearbit": "pack",
     "registry/curated/integrations/github": "pack",
+    "registry/curated/integrations/jira": "library",
+    "registry/curated/integrations/linear": "library",
     "registry/curated/integrations/notion": "library",
     "registry/curated/integrations/telegram": "pack",
     "registry/curated/media/giphy": "pack",
@@ -137,6 +139,20 @@
   "libraryExports": {
     "registry/curated/auth": [
       "createAuthExtension"
+    ],
+    "registry/curated/integrations/jira": [
+      "JiraOAuthFlow",
+      "JiraClient",
+      "JiraTracker",
+      "JiraFault",
+      "adfParagraphs"
+    ],
+    "registry/curated/integrations/linear": [
+      "LinearOAuthFlow",
+      "LinearClient",
+      "LinearTracker",
+      "LinearFault",
+      "linearGraphql"
     ],
     "registry/curated/integrations/notion": [
       "NotionOAuthFlow",
@@ -262,7 +278,14 @@
       "SourceRevocations",
       "sourceRevocationSchema",
       "sourceGrantNamespace",
-      "isAccountSourceKind"
+      "isAccountSourceKind",
+      "isTrackerKind",
+      "isTrackerKindWord",
+      "TrackerFault",
+      "TrackerRateLimited",
+      "TrackerGrantRefused",
+      "TrackerNoAnswer",
+      "trackerConformance"
     ],
     "registry/curated/research/public-sources": [
       "WikipediaSourceProvider",
@@ -420,6 +443,7 @@
     },
     "registry/curated/productivity/document-export": {
       "./archive": ["openArchive", "ArchiveError"],
+      "./calendar": ["icsEvent", "googleCalendarAddress"],
       "./transcript": [
         "toMarkdown",
         "toPlainText",
@@ -435,6 +459,7 @@
         "cueText",
         "vttText",
         "xmlText",
+        "markdownText",
         "clock",
         "cueTime"
       ]
@@ -498,5 +523,6 @@
   "images": {
     "registry/curated/meetings/browser": { "image": "ghcr.io/framerslab/agentos-meeting-bot", "workflow": "meeting-bot-image.yml" },
     "registry/curated/tools/document-parser": { "image": "ghcr.io/framerslab/agentos-document-parser", "workflow": "document-parser-image.yml" }
-  }
+  },
+  "adopted": []
 }

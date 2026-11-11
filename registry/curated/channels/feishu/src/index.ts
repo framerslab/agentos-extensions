@@ -31,6 +31,7 @@ import type {
   ToolExecutionContext,
   ToolExecutionResult,
 } from '@framers/agentos';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface FeishuChannelOptions {
   appId?: string;
@@ -419,7 +420,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-feishu',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'feishuChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'feishuChannel', kind: 'messaging-channel', priority, payload: adapter },

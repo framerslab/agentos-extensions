@@ -69,9 +69,9 @@ vi.mock('googleapis', () => ({
   google: {
     youtube: vi.fn().mockReturnValue(mockYoutubeInstance),
     auth: {
-      OAuth2: vi.fn().mockImplementation(() => ({
+      OAuth2: vi.fn().mockImplementation(function () { return ({
         setCredentials: mockSetCredentials,
-      })),
+      }); }),
     },
   },
 }));

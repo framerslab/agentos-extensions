@@ -44,6 +44,10 @@ export const PARAPHRASE_PAGE = [
   '</body></html>',
 ].join('');
 
+/** A spaced dash before a number, and a phrase a quotation sets in emphasis. */
+export const DASH_PAGE =
+  '<html><body><p>The harbour opened in 1887 — 4,200 ships came in its first year.</p><p>She was the only survivor of the wreck.</p></body></html>';
+
 /** A page with no text a reader sees. */
 export const EMPTY_PAGE = '<html><head><title>Nothing here</title></head><body><script>var shown = false;</script></body></html>';
 
@@ -87,6 +91,29 @@ export async function startFixtureServer(): Promise<FixtureServer> {
           return html(200, 'First paragraph of plain notes.\n\nThe archive keeps letters from 1850 onward.\n', 'text/plain; charset=utf-8');
         case '/report.pdf':
           return html(200, '%PDF-1.4\n% synthetic\n', 'application/pdf');
+        case '/dash':
+          return html(200, DASH_PAGE);
+        case '/utf16': {
+          // Plain text in UTF-16LE after its byte order mark, with no content type: the NUL bytes of every ASCII character.
+          response.writeHead(200);
+          return response.end(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('The tide tables were printed in 1902.\n', 'utf16le')]));
+        }
+        case '/declared-large': {
+          // A body whose content-length is past the tests' cap of 1,000 bytes.
+          const body = Buffer.from(`<p>${'Too long a page. '.repeat(120)}</p>`);
+          response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': String(body.length) });
+          return response.end(body);
+        }
+        case '/streamed-large': {
+          // The same size streamed in chunks with no content-length.
+          response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'transfer-encoding': 'chunked' });
+          for (let chunk = 0; chunk < 4; chunk += 1) response.write(`<p>${'Too long a page. '.repeat(30)}</p>`);
+          return response.end();
+        }
+        case '/loop':
+          // A redirect to itself, which never ends.
+          response.writeHead(302, { location: '/loop' });
+          return response.end();
         case '/slow': {
           const timer = setTimeout(() => html(200, '<p>Late.</p>'), 3_000);
           response.on('close', () => clearTimeout(timer));

@@ -96,6 +96,10 @@ Wikipedia's page on [reusing its content](https://en.wikipedia.org/wiki/Wikipedi
 
 The provider reads page HTML from `/api/rest_v1/page/html/{key}` (`PAGE_PATH`), the cached interface the robot policy names. [RESTBase](https://www.mediawiki.org/wiki/Wikimedia_REST_API), the service behind it, is being deprecated: pass `pagePath: '/w/rest.php/v1/page/{key}/html'` to read the same HTML from MediaWiki's own REST API. A read uses the search hit's `key`, so it follows no redirect; a title that redirects answers 307 at both paths, and the read answers `skipped`.
 
+## A document's fields
+
+A `SourceDocument` is what a provider's `read` answers: `site` (the source's name as a reader sees it), `key`, `title`, `url` (the address an attribution links to), `revision` (null when the source names none), `readAt` (when it was fetched, in milliseconds), `licence` (`name` and `url`) and `blocks`. Two fields are optional, for a source that reads them from the page: `publisher`, the site's name as the page states it, and `pageDate`, the page's own date in milliseconds. Wikipedia's provider sets neither; `@framers/agentos-ext-citation-check`'s web page source sets each where a page states it.
+
 ## API
 
 | Export | What it is |

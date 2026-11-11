@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { createExtensionPack } from '../src/index.js';
 import type { ExtensionPack } from '../src/index.js';
+import { createRequire as createPackageRequire } from 'node:module';
 
 /* ------------------------------------------------------------------ */
 /*  Mock fetch for Lithic API calls                                    */
@@ -112,7 +113,7 @@ describe('card integration', () => {
     });
 
     it('should set version to 0.2.0', () => {
-      expect(pack.version).toBe('0.2.0');
+      expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
     });
 
     it('should call onActivate with card mention', async () => {

@@ -2,8 +2,8 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.research.citation-check",
   "name": "Citation Check",
-  "version": "0.1.3",
-  "description": "Checks the quoted claims of a document against the pages they cite, with AgentOS's citation tooling: word for word first, then by embeddings when a model is configured",
+  "version": "0.2.0",
+  "description": "Checks the quoted claims of a document against the pages they cite, with AgentOS's citation tooling: word for word first, then by embeddings when a model is configured. Reads public pages under robots.txt and a host's rules, and serves the open web as a public source",
   "author": {
     "name": "Frame",
     "email": "team@frame.dev",
@@ -14,7 +14,8 @@
     "citations",
     "fact-checking",
     "grounding",
-    "research"
+    "research",
+    "robots-txt"
   ],
   "agentosVersion": ">=0.13.120",
   "categories": ["research"],

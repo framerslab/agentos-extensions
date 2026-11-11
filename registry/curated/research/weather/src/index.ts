@@ -7,6 +7,7 @@ import type {
 
 import { WeatherService } from './services/weatherService.js';
 import { WeatherLookupTool } from './tools/weatherLookup.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface WeatherExtensionOptions {
   weatherApiKey?: string;
@@ -26,7 +27,7 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
 
   return {
     name: '@framers/agentos-ext-weather',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: tool.name,

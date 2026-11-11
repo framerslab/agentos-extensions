@@ -16,14 +16,14 @@ const mockReposGet = vi.fn();
 const mockGetAuthenticated = vi.fn();
 
 vi.mock('@octokit/rest', () => ({
-  Octokit: vi.fn().mockImplementation(() => ({
+  Octokit: vi.fn().mockImplementation(function () { return ({
     rest: {
       users: { getAuthenticated: mockGetAuthenticated },
       git: { getTree: mockGetTree },
       repos: { getContent: mockGetContent, get: mockReposGet },
       rateLimit: { get: mockRateLimitGet },
     },
-  })),
+  }); }),
 }));
 
 /* ---------- Helpers ---------- */

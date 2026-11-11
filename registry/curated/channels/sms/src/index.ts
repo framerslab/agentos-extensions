@@ -30,6 +30,7 @@ import type {
   ToolExecutionContext,
   ToolExecutionResult,
 } from '@framers/agentos';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface SmsChannelOptions {
   accountSid?: string;
@@ -518,7 +519,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-sms',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'smsChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'smsChannel', kind: 'messaging-channel', priority, payload: adapter },
