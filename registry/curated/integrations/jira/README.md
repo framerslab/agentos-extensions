@@ -41,7 +41,7 @@ await tracker.revoke(); // { revoked: false }
 npm install @framers/agentos-ext-jira @framers/agentos @framers/agentos-ext-account-sources
 ```
 
-`@framers/agentos` (0.13.144 or later) and `@framers/agentos-ext-account-sources` (0.11.3 or later) are peer dependencies. The pack has no dependency of its own: every call runs on `fetch`.
+`@framers/agentos` (0.16.0 or later, the floor `@framers/agentos-ext-account-sources` 0.11.3 asks) and `@framers/agentos-ext-account-sources` (0.11.3 or later) are peer dependencies. The pack has no dependency of its own: every call runs on `fetch`.
 
 ## The grant
 

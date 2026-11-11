@@ -37,7 +37,7 @@
     "manifest.json"
   ],
   "peerDependencies": {
-    "@framers/agentos": ">=0.13.144",
+    "@framers/agentos": ">=0.16.0",
     "@framers/agentos-ext-account-sources": ">=0.11.3"
   },
   "devDependencies": {
