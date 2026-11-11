@@ -1,0 +1,62 @@
+{
+  "name": "@framers/agentos-ext-jira",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Jira Cloud for AgentOS: OAuth 2.0 (3LO) on granular scopes on the core's redirect flow, a REST v3 client over fetch through the site's cloud id, and the issue tracker interface of the account sources library",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "tsc -p tsconfig.test.json && vitest run --passWithNoTests",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "agentos",
+    "extension",
+    "jira",
+    "atlassian",
+    "issues",
+    "oauth"
+  ],
+  "author": {
+    "name": "Frame",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "manifest.json"
+  ],
+  "peerDependencies": {
+    "@framers/agentos": ">=0.16.0",
+    "@framers/agentos-ext-account-sources": ">=0.11.3"
+  },
+  "devDependencies": {
+    "@framers/agentos": "workspace:^",
+    "@framers/agentos-ext-account-sources": "workspace:^",
+    "@types/node": "^20.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/framerslab/agentos-extensions.git",
+    "directory": "registry/curated/integrations/jira"
+  },
+  "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/integrations/jira#readme",
+  "bugs": {
+    "url": "https://github.com/framerslab/agentos-extensions/issues"
+  }
+}
