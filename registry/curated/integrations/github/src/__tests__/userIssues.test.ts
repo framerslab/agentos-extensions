@@ -523,8 +523,10 @@ describe("a rate limit the headers name, whose message never arrives", () => {
    *   https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit
    * The headers alone say the call was refused for a rate limit and when it may be made again; the message would only
    * have told a secondary limit from the primary one. So a message that stalls or breaks while it is read leaves the
-   * refusal told by its headers, never an answer that GitHub gave none. The bodies below are streams a loopback server
-   * cannot send on demand (one that never ends, one that breaks after a few bytes), so these calls are handed a fetch.
+   * refusal told by its headers, never an answer that GitHub gave none. The first two tests hand the calls a fetch whose
+   * bodies are streams (one that never ends, one that breaks after a few bytes); the last two send the same refusals
+   * from the stand-in on the loopback address through the runtime's own fetch, the body held open or its connection
+   * dropped after its first bytes.
    */
   it('answers a 403 or a 429 with `x-ratelimit-remaining: 0` as a rate limit with the reset time when its body stalls or breaks', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -570,6 +572,76 @@ describe("a rate limit the headers name, whose message never arrives", () => {
     expect(refused).toBeInstanceOf(GitHubNoAnswer);
     expect(refused).toMatchObject({ reason: 'timeout' });
   });
+
+  /** Each call on the person's token under a deadline of `timeoutMs`, against `apiBase`. */
+  function callsUnder(apiBase: string, timeoutMs: number): [string, () => Promise<unknown>][] {
+    const at = { apiBase, timeoutMs };
+    return [
+      ['listAssignedIssues', () => listAssignedIssues(TOKEN, { repositories: ['acme-team/planner'] }, at)],
+      ['issueTargets', () => issueTargets(TOKEN, at)],
+      ['createIssueAsUser', () => createIssueAsUser(TOKEN, { repository: 'acme-team/planner', title: 'A title', body: 'A body' }, at)],
+      ['closeIssueAsUser', () => closeIssueAsUser(TOKEN, { repository: 'acme-team/planner', number: 91 }, at)],
+    ];
+  }
+
+  /** What the four calls ask the stand-in, in order: the person and then the repository for the listing. */
+  const ASKED = ['GET /user', 'GET /repos/acme-team/planner/issues', 'GET /user/installations', 'POST /repos/acme-team/planner/issues', 'PATCH /repos/acme-team/planner/issues/91'];
+
+  it('keeps the refusal its headers tell, over the loopback address, when its body stalls or its connection drops', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-10T20:00:00Z'));
+    const now = Date.now();
+    const reset = Math.floor(now / 1000) + 1800;
+    const exhausted = { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) };
+    // A 429 is a rate limit by its status; with no `x-ratelimit-reset` to wait for, the page's rule is a minute on.
+    const refusals: [string, number, Record<string, string>, number][] = [
+      ['403, none remaining', 403, exhausted, reset * 1000],
+      ['429, none remaining', 429, exhausted, reset * 1000],
+      ['429 alone', 429, {}, now + 60_000],
+    ];
+    for (const [told, status, headers, retryAt] of refusals) {
+      for (const cut of ['stall', 'drop'] as const) {
+        github = await startGitHub((request) =>
+          request.path === '/user'
+            ? { status: 200, body: { login: 'test-person', id: 501 } }
+            : { status, headers: { 'content-type': 'application/json; charset=utf-8', ...headers }, body: '{"message":"API rate', cut },
+        );
+        for (const [name, call] of callsUnder(github.base, 200)) {
+          const limited: unknown = await call().catch((error: unknown) => error);
+          const what = `${name}, ${told}, ${cut}`;
+          expect(limited, what).not.toBeInstanceOf(GitHubNoAnswer);
+          expect(limited, what).toBeInstanceOf(GitHubApiError);
+          expect(limited, what).not.toBeInstanceOf(GitHubSecondaryLimitError);
+          expect(limited, what).toMatchObject({ status, rateLimited: true, retryAt });
+        }
+        // Each refusal was GitHub's answer to the call's own request, sent once: no call asked again.
+        expect(github.received.map((request) => `${request.method} ${request.path}`), `${told}, ${cut}`).toEqual(ASKED);
+        await github.close();
+        github = undefined;
+      }
+    }
+  }, 30_000);
+
+  it('still ends with GitHubNoAnswer, over the loopback address, when a 403 whose headers name no rate limit stalls or drops', async () => {
+    for (const [cut, reason] of [
+      ['stall', 'timeout'],
+      ['drop', 'network'],
+    ] as const) {
+      github = await startGitHub((request) =>
+        request.path === '/user'
+          ? { status: 200, body: { login: 'test-person', id: 501 } }
+          : { status: 403, headers: { 'content-type': 'application/json; charset=utf-8' }, body: '{"message":"Resource not accessible', cut },
+      );
+      for (const [name, call] of callsUnder(github.base, 200)) {
+        const refused: unknown = await call().catch((error: unknown) => error);
+        expect(refused, `${name}, ${cut}`).toBeInstanceOf(GitHubNoAnswer);
+        expect(refused, `${name}, ${cut}`).toMatchObject({ reason });
+      }
+      expect(github.received.map((request) => `${request.method} ${request.path}`), cut).toEqual(ASKED);
+      await github.close();
+      github = undefined;
+    }
+  }, 30_000);
 });
 
 describe('a call without a token', () => {

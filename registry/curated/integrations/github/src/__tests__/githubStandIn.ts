@@ -24,8 +24,12 @@ export interface Received {
   body: string;
 }
 
-/** What the stand-in answers: a status, headers and a body (anything but a string is sent as JSON), or `hang` to never answer. */
-export type Answer = { status: number; headers?: Record<string, string>; body?: unknown } | 'hang';
+/**
+ * What the stand-in answers: a status, headers and a body (anything but a string is sent as JSON), or `hang` to never
+ * answer. With `cut`, the status, the headers and the body's text are sent and the body then never ends (`stall`) or
+ * its connection is dropped once they are written (`drop`).
+ */
+export type Answer = { status: number; headers?: Record<string, string>; body?: unknown; cut?: 'stall' | 'drop' } | 'hang';
 
 /** A running stand-in. */
 export interface GitHubStandIn {
@@ -70,7 +74,17 @@ export async function startGitHub(route: (request: Received, base: string) => An
           if (answer === 'hang') return;
           const text = answer.body === undefined || typeof answer.body === 'string';
           res.writeHead(answer.status, { ...(text ? {} : { 'content-type': 'application/json; charset=utf-8' }), ...answer.headers });
-          res.end(answer.body === undefined ? '' : typeof answer.body === 'string' ? answer.body : JSON.stringify(answer.body));
+          const payload = answer.body === undefined ? '' : typeof answer.body === 'string' ? answer.body : JSON.stringify(answer.body);
+          const { cut } = answer;
+          if (cut === undefined) {
+            res.end(payload);
+            return;
+          }
+          // The headers and what there is of the body go out now; the body's end never does.
+          res.flushHeaders();
+          res.write(payload, () => {
+            if (cut === 'drop') res.socket?.destroy();
+          });
         })
         .catch(() => {
           res.writeHead(500);
