@@ -90,9 +90,9 @@ const packageJson = (name, version, fields = {}) => json({ name, version, ...fie
  * src/index.ts and CHANGELOG.md; a git repository on master with one commit, "feat: the workspace".
  * A `root` of null is the other repository's shape (plan C): no root role, a private monorepo root package.
  * @param {{ root?: { version: string, fields?: object } | null, packages?: { dir: string, name: string, version: string,
- *   role?: string, fields?: object, manifest?: boolean }[], images?: object }} [shape]
+ *   role?: string, fields?: object, manifest?: boolean }[], images?: object, adopted?: string[] }} [shape]
  */
-function makeWorkspace({ root = { version: '1.0.0' }, packages = [], images } = {}) {
+function makeWorkspace({ root = { version: '1.0.0' }, packages = [], images, adopted } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-plan-'));
   dirs.push(dir);
   const write = (file, text) => {
@@ -101,7 +101,7 @@ function makeWorkspace({ root = { version: '1.0.0' }, packages = [], images } = 
   };
   const roles = root === null ? {} : { '.': 'root' };
   for (const pkg of packages) roles[pkg.dir] = pkg.role ?? 'pack';
-  write('scripts/package-roles.json', json({ roles, ...(images ? { images } : {}) }));
+  write('scripts/package-roles.json', json({ roles, ...(images ? { images } : {}), ...(adopted ? { adopted } : {}) }));
   write(
     'package.json',
     root === null
@@ -1486,6 +1486,147 @@ test('9b a latest with no tag whose document names this repository is not foreig
   assert.equal(alpha(result).foreign, false);
   assert.deepEqual(pick(alpha(result)), { planned: '0.2.4', bump: 'patch', newest: '0.2.3', baseCommit: b, baseSource: 'gitHead' });
   assert.deepEqual(result.foreign, []);
+});
+
+// 9c-9h. An adopted package: a copy this repository takes over from the repository npm's versions name.
+
+const OTHER_TREE = 'git+https://github.com/example/other-tree.git';
+
+/**
+ * Alpha and beta, whose versions on npm all came from another repository (no tag, gitHead or attestation here);
+ * alpha is listed under `adopted` in the role map, beta is not. Beta depends on alpha.
+ */
+function handover({ alphaLatest = '0.3.3', alphaHeld = ['0.2.1', '0.3.1', '0.3.3'], alphaVersion = '0.2.1' } = {}) {
+  const ws = makeWorkspace({
+    packages: [
+      { dir: ALPHA_DIR, name: ALPHA, version: alphaVersion },
+      { dir: BETA_DIR, name: BETA, version: '0.5.0', fields: { peerDependencies: { [ALPHA]: '^0.2.0' } } },
+    ],
+    adopted: [ALPHA_DIR],
+  });
+  const other = () => ({ repository: { type: 'git', url: OTHER_TREE } });
+  const table = {
+    [ALPHA]: { latest: alphaLatest, versions: Object.fromEntries(alphaHeld.map((version) => [version, other()])) },
+    [BETA]: { latest: '0.5.0', versions: { '0.5.0': { ...other(), peerDependencies: { [ALPHA]: '^0.2.0' } } } },
+  };
+  return { ws, table };
+}
+
+test("9c an adopted package whose npm latest names another repository plans a patch above that latest; an unlisted one stays foreign", async () => {
+  const { ws, table } = handover();
+  const calls = [];
+
+  const result = await plan(ws, { table, calls });
+
+  assert.equal(alpha(result).foreign, false);
+  assert.equal(alpha(result).adopted, true);
+  assert.deepEqual(pick(alpha(result)), { planned: '0.3.4', bump: 'patch', newest: '0.3.3', baseCommit: null, baseSource: null });
+  assert.match(alpha(result).reason, /adopted/);
+  assert.match(alpha(result).reason, /0\.3\.3/);
+  // The other repository's versions get no tag or release here.
+  assert.deepEqual(result.repairs, []);
+  // npm's provenance for the other repository's versions is never read: nothing here anchors on them.
+  assert.deepEqual(calls.map((call) => call.url).filter((url) => url.includes('/-/npm/v1/attestations/')), []);
+  // Beta is not listed, so it stays foreign; its copy is not planned.
+  assert.equal(entryOf(result, BETA).foreign, true);
+  assert.equal(entryOf(result, BETA).planned, null);
+  assert.deepEqual(result.foreign.map((record) => record.name), [BETA]);
+});
+
+test("9d an adopted package counts from the highest version npm holds, and a version package.json names above it publishes as written", async () => {
+  const lagging = handover({ alphaLatest: '0.3.3', alphaHeld: ['0.3.3', '0.3.5'] });
+  assert.deepEqual(pick(alpha(await plan(lagging.ws, { table: lagging.table }))), { planned: '0.3.6', bump: 'patch', newest: '0.3.5', baseCommit: null, baseSource: null });
+
+  const named = handover({ alphaVersion: '0.4.0' });
+  const result = await plan(named.ws, { table: named.table });
+  assert.deepEqual(pick(alpha(result)), { planned: '0.4.0', bump: 'named', newest: '0.3.3', baseCommit: null, baseSource: null });
+  assert.equal(alpha(result).named, '0.4.0');
+
+  // A version named at or below npm's is not a name: the patch above npm's highest version publishes.
+  const below = handover({ alphaVersion: '0.3.3' });
+  assert.deepEqual(pick(alpha(await plan(below.ws, { table: below.table }))), { planned: '0.3.4', bump: 'patch', newest: '0.3.3', baseCommit: null, baseSource: null });
+});
+
+test("9e an adopted package's ranges on its siblings are master's text, and a sibling's release raises them as any package's", async () => {
+  const ws = makeWorkspace({
+    packages: [
+      { dir: ALPHA_DIR, name: ALPHA, version: '0.2.1', fields: { peerDependencies: { [BETA]: '^0.5.0' } } },
+      { dir: BETA_DIR, name: BETA, version: '0.5.0' },
+    ],
+    adopted: [ALPHA_DIR],
+  });
+  const base = ws.head();
+  const table = {
+    // npm's alpha, from the other repository, named beta at ^0.4.0; master names ^0.5.0.
+    [ALPHA]: { latest: '0.3.3', versions: { '0.3.3': { repository: { type: 'git', url: OTHER_TREE }, peerDependencies: { [BETA]: '^0.4.0' } } } },
+    [BETA]: released(ws, BETA, '0.5.0', base),
+  };
+  ws.commit({ [`${BETA_DIR}/package.json`]: packageJson(BETA, '1.0.0') }, 'feat(beta): one');
+
+  const result = await plan(ws, { table, releases: [`${BETA}@0.5.0`] });
+
+  const range = rangeOn(alpha(result), BETA);
+  assert.deepEqual([range.master, range.effective, range.source], ['^0.5.0', '^0.5.0', 'master']);
+  assert.equal(entryOf(result, BETA).planned, '1.0.0');
+  assert.deepEqual([range.raised, range.applied], [true, '^1.0.0']);
+  assert.equal(alpha(result).planned, '0.3.4');
+});
+
+test('9f the role map lists under adopted only the directories of publishable packages', async () => {
+  const misspelt = makeWorkspace({ packages: [{ dir: ALPHA_DIR, name: ALPHA, version: '0.2.1' }], adopted: [`${ALPHA_DIR}/`] });
+  assert.throws(() => listPackages(misspelt.dir), /adopted.*registry\/curated\/research\/alpha\//);
+
+  const hidden = makeWorkspace({
+    packages: [{ dir: 'registry/curated/research/hidden', name: '@framers/agentos-ext-hidden', version: '0.1.0', fields: { private: true } }],
+    adopted: ['registry/curated/research/hidden'],
+  });
+  assert.throws(() => listPackages(hidden.dir), /adopted.*registry\/curated\/research\/hidden/);
+
+  const notAList = makeWorkspace({ packages: [{ dir: ALPHA_DIR, name: ALPHA, version: '0.2.1' }], adopted: { [ALPHA_DIR]: true } });
+  assert.throws(() => listPackages(notAList.dir), /adopted/);
+
+  const { ws } = handover();
+  assert.deepEqual(
+    listPackages(ws.dir).filter((pkg) => pkg.adopted === true).map((pkg) => pkg.dir),
+    [ALPHA_DIR],
+  );
+});
+
+test("9g once the adopted version is tagged here, the package is planned as any other: from its tag, with no repair for the other repository's versions", async () => {
+  const { ws, table } = handover();
+  const handed = ws.head();
+  ws.tag(ALPHA, '0.3.4', handed);
+  table[ALPHA].latest = '0.3.4';
+  table[ALPHA].versions['0.3.4'] = { gitHead: handed, repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` } };
+  ws.commit(src(2), 'fix(alpha): the first change made here');
+
+  const result = await plan(ws, { table, releases: [`${ALPHA}@0.3.4`] });
+
+  assert.equal(alpha(result).adopted, undefined);
+  assert.deepEqual(pick(alpha(result)), { planned: '0.3.5', bump: 'patch', newest: '0.3.4', baseCommit: handed, baseSource: 'tag' });
+  assert.deepEqual(result.repairs, []);
+});
+
+test("9h apply writes the adopted package's version, its release notes say where its earlier versions came from, and the summary names it", async () => {
+  const { ws, table } = handover();
+
+  const { planned, applied, written, expected, summary } = await runApply(ws, { table });
+
+  assert.equal(planned.status, 0, planned.stderr);
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.equal(readJson(ws, `${ALPHA_DIR}/package.json`).version, '0.3.4');
+  assert.equal(readJson(ws, `${ALPHA_DIR}/package.json`).gitHead, ws.head());
+  assert.equal(readJson(ws, `${BETA_DIR}/package.json`).version, '0.5.0');
+  assert.ok(written.order.includes(ALPHA_DIR), JSON.stringify(written.order));
+  assert.ok(!written.order.includes(BETA_DIR), JSON.stringify(written.order));
+  assert.ok(expected.tarballs.some((entry) => entry.name === ALPHA), JSON.stringify(expected.tarballs));
+  assert.match(planned.stdout, /^adopted: @framers\/agentos-ext-alpha /m);
+  assert.match(summary, /adopted: `@framers\/agentos-ext-alpha`/);
+  // The release notes never name the other repository: they say the versions up to npm's newest came from another one.
+  const notes = releaseNotes(written, { event: 'published', name: ALPHA, version: '0.3.4' });
+  assert.match(notes, /^The first release of @framers\/agentos-ext-alpha from this repository/);
+  assert.match(notes, /0\.3\.3/);
+  assert.doesNotMatch(notes, /other-tree/);
 });
 
 // --only.
