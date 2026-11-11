@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { PageRefusal, parseRobots, readRobots, robotsAllows, type RobotsRule, type Transport } from '../src/index';
 import { stubTransport } from './stub-transport';
@@ -73,6 +74,23 @@ describe('robotsAllows over a parsed robots.txt', () => {
     expect(allows(text, '/~user/home')).toBe(false);
     expect(allows(text, '/a%2Fb')).toBe(false);
     expect(allows(text, '/a/b')).toBe(true);
+  });
+
+  it('matches a pattern of many wildcards against a long path at once, in the built package', () => {
+    // A site writes the pattern; a matcher that backtracks over its wildcards would hold the process for good, past any
+    // test timeout, so the built package runs in a child process under a deadline.
+    const text = `User-agent: *\nDisallow: /${'*a'.repeat(30)}b$\n`;
+    const paths = [`/${'a'.repeat(60)}`, `/${'a'.repeat(60)}b`];
+    const dist = new URL('../dist/index.js', import.meta.url).href;
+    const script = [
+      `import { parseRobots, robotsAllows } from ${JSON.stringify(dist)};`,
+      `const file = parseRobots(${JSON.stringify(text)});`,
+      `process.stdout.write(JSON.stringify(${JSON.stringify(paths)}.map((path) => robotsAllows(file, 'ExampleReader', 'https://pages.example.test' + path))));`,
+    ].join('\n');
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 5_000 });
+    expect(run.signal).toBeNull();
+    expect(JSON.parse(run.stdout)).toEqual([true, false]);
+    expect(allows(text, paths[0] as string)).toBe(true);
   });
 
   it('answers the whole file as allowed or refused for the two answers that are no file', () => {

@@ -246,6 +246,14 @@ describe('what a read page carries', () => {
     expect(none.document).not.toHaveProperty('publisher');
   });
 
+  it('takes no publisher or date from JSON-LD a comment holds', async () => {
+    const page = await read(
+      htmlPage('<!-- <script type="application/ld+json">{"publisher":{"name":"Old Name"},"dateModified":"2020-01-01T00:00:00Z"}</script> -->', '<p>The harbour opened in 1887.</p>'),
+    );
+    expect(page.document).not.toHaveProperty('publisher');
+    expect(page.pageDate).toBeNull();
+  });
+
   it('carries no document for a page that was not read', async () => {
     const page = await read({ status: 404, body: 'Not found.' });
     expect(page).toMatchObject({ document: null, pageDate: null, blocks: [], passages: [] });

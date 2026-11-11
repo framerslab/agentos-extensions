@@ -58,6 +58,15 @@ describe('readLicence', () => {
     expect(readLicence(html, BASE)).toEqual({ name: 'CC BY-SA 3.0', url: 'https://creativecommons.org/licenses/by-sa/3.0/' });
   });
 
+  it('passes over JSON-LD inside a comment, keeps a block a script wraps in one, and reads past a script that holds a comment opener', () => {
+    const commented = page('<!-- <script type="application/ld+json">{"license":"https://creativecommons.org/publicdomain/zero/1.0/"}</script> -->', '<p>Text.</p>');
+    expect(readLicence(commented, BASE)).toBeNull();
+    const wrapped = page('<script type="application/ld+json"><!-- {"license":"https://creativecommons.org/licenses/by-sa/4.0/"} --></script>', '<p>Text.</p>');
+    expect(readLicence(wrapped, BASE)).toEqual({ name: 'CC BY-SA 4.0', url: 'https://creativecommons.org/licenses/by-sa/4.0/' });
+    const opener = page('<script>var marker = "<!--";</script><link rel="license" href="https://creativecommons.org/licenses/by/4.0/">', '<p>Text.</p>');
+    expect(readLicence(opener, BASE)).toEqual({ name: 'CC BY 4.0', url: 'https://creativecommons.org/licenses/by/4.0/' });
+  });
+
   it('finds none in a page that states none, links Creative Commons’ home, marks another rel, or names no web address', () => {
     expect(readLicence(page('<title>Harbour</title>', '<p>All rights reserved.</p>'), BASE)).toBeNull();
     expect(readLicence(page('', '<a href="https://creativecommons.org/">Creative Commons</a>'), BASE)).toBeNull();
