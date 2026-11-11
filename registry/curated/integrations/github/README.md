@@ -10,7 +10,7 @@ Its second entry, `@framers/agentos-ext-github/documents`, is for a server that 
 npm install @framers/agentos-ext-github @framers/agentos @framers/agentos-ext-account-sources
 ```
 
-Peer dependencies: `@framers/agentos` with range `>=0.15.92`, the lowest core that `@framers/agentos-ext-account-sources` 0.11.2 installs beside, and `@framers/agentos-ext-account-sources`, whose connector types, capped reads and retry timing the `./documents` entry uses, at or above the floor this package's `peerDependencies` names; `npm view @framers/agentos-ext-github peerDependencies` prints the latest release's. A host keeps one copy of each; only the `./documents` entry loads `@framers/agentos-ext-account-sources`.
+Peer dependencies: `@framers/agentos` with range `>=0.16.0`, the lowest core that `@framers/agentos-ext-account-sources` 0.11.3 installs beside, and `@framers/agentos-ext-account-sources`, whose connector types, capped reads and retry timing the `./documents` entry uses, at or above the floor this package's `peerDependencies` names; `npm view @framers/agentos-ext-github peerDependencies` prints the latest release's. A host keeps one copy of each; only the `./documents` entry loads `@framers/agentos-ext-account-sources`.
 
 ## Usage
 
