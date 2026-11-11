@@ -46,8 +46,8 @@ const QUOTE_MARKER = /^ {0,3}>/u;
 const ADDRESS_END = /[\s<>"“”„`]/u;
 /** Punctuation that ends a sentence or a markdown span after an address, not the address itself. */
 const TRAILING = /[.,;:!?'*_~]/u;
-/** What stands before a markdown link's address: `](`, or `](<` for an address in angle brackets. */
-const LINK_OPEN = /\]\(<?$/u;
+/** What stands before a markdown link's address: `](`, or `](<` for an address in angle brackets, with any white space after `(`. */
+const LINK_OPEN = /\]\(\s*<?$/u;
 /** A markdown link's title after its address and before the closing parenthesis: `"…"`, `'…'` or `(…)`. */
 const LINK_TITLE = /^>?\s+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\))(?=\s*\))/u;
 /**
@@ -56,8 +56,8 @@ const LINK_TITLE = /^>?\s+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\
  * in `2*3` or `char*`, is text.
  */
 const EMPHASIS = [
-  /(?<!\\)(\*+)(?=\S)(.+?)(?<=[^\s\\])\1/gu,
-  /(?<![\p{L}\p{N}\\])(_+)(?=\S)(.+?)(?<=[^\s\\])\1(?![\p{L}\p{N}])/gu,
+  /(?<!\\)(\*+)(?=\S)(.+?)(?<=[^\s\\])\1/gsu,
+  /(?<![\p{L}\p{N}\\])(_+)(?=\S)(.+?)(?<=[^\s\\])\1(?![\p{L}\p{N}])/gsu,
 ];
 
 /** A quotation's text with its emphasis marks removed, inner emphasis included. */
@@ -141,9 +141,22 @@ function closingMark(text: string, from: number, closers: string): number {
   return -1;
 }
 
-/** A quotation's words: the markdown marks for emphasis and code removed, then escapes, white space collapsed. */
+/** A code span in a quotation: a run of backticks, its text, and the same run closing it. */
+const CODE_SPAN = /(?<![\\`])(`+)(?!`)([\s\S]*?[^`])\1(?!`)/u;
+
+/**
+ * A quotation's words: outside code spans, the markdown marks for emphasis removed, then escapes and stray backticks;
+ * a code span's text kept as it stands, its backticks removed; white space collapsed.
+ */
 function cleanQuotation(raw: string): string {
-  return collapse(withoutEmphasis(raw).replace(/\\(.)/gu, '$1').replace(/`/gu, ''));
+  const prose = (text: string): string => withoutEmphasis(text).replace(/\\(.)/gu, '$1').replace(/`/gu, '');
+  let out = '';
+  let rest = raw;
+  for (let span = CODE_SPAN.exec(rest); span !== null; span = CODE_SPAN.exec(rest)) {
+    out += prose(rest.slice(0, span.index)) + (span[2] ?? '');
+    rest = rest.slice(span.index + span[0].length);
+  }
+  return collapse(out + prose(rest));
 }
 
 /** How many times a character stands in a string. */
@@ -222,7 +235,7 @@ function scanUnit(unit: UnitLine[], out: CitedClaim[]): void {
         for (const quote of waiting) out.push({ line: quote.line, claim: quote.claim, url, exact: true });
         waiting = [];
       }
-      const inLink = LINK_OPEN.test(text.slice(Math.max(0, index - 3), index));
+      const inLink = LINK_OPEN.test(text.slice(Math.max(0, index - 40), index));
       index += Math.max(url.length, 1);
       // A link's title, `[text](address "Title")`, is no quotation: the scan goes on at the closing parenthesis.
       if (inLink) index += LINK_TITLE.exec(text.slice(index))?.[0].length ?? 0;

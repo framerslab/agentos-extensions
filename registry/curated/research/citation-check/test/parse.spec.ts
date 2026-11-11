@@ -140,3 +140,20 @@ describe('parseCitedClaims on markdown links and emphasis', () => {
     ]);
   });
 });
+
+describe('parseCitedClaims on emphasis across lines, code spans and spaced link destinations', () => {
+  it('removes emphasis across a line break, keeps the marks inside a code span, and skips a title after a spaced destination', () => {
+    const text = [
+      'They wrote "the *only',
+      'survivor* returned home" (https://example.org/wreck).',
+      '',
+      'The manual says "The glob `*cat*` matches files" (https://example.org/glob).',
+      '',
+      'See [log]( https://example.org/log "Title of four words") then https://example.org/other.',
+    ].join('\n');
+    expect(parseCitedClaims(text)).toEqual([
+      { line: 1, claim: 'the only survivor returned home', url: 'https://example.org/wreck', exact: true },
+      { line: 4, claim: 'The glob *cat* matches files', url: 'https://example.org/glob', exact: true },
+    ]);
+  });
+});
