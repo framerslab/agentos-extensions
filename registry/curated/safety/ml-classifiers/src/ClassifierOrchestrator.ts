@@ -20,14 +20,14 @@
  * @module agentos/extensions/packs/ml-classifiers/ClassifierOrchestrator
  */
 
-import type { IContentClassifier } from './IContentClassifier';
+import type { IContentClassifier } from './IContentClassifier.js';
 import type {
   AnnotatedClassificationResult,
   ChunkEvaluation,
   ClassifierThresholds,
   ClassifierConfig,
-} from './types';
-import { DEFAULT_THRESHOLDS } from './types';
+} from './types.js';
+import { DEFAULT_THRESHOLDS } from './types.js';
 import { GuardrailAction } from '@framers/agentos';
 
 // ---------------------------------------------------------------------------

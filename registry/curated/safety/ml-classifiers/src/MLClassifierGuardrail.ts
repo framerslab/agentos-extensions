@@ -36,10 +36,10 @@ import type {
   ClassifierCategory,
   ClassifierResult,
   CategoryScore,
-} from './types';
-import { ALL_CATEGORIES } from './types';
-import { classifyByKeywords } from './keyword-classifier';
-import { classifyByLlm } from './llm-classifier';
+} from './types.js';
+import { ALL_CATEGORIES } from './types.js';
+import { classifyByKeywords } from './keyword-classifier.js';
+import { classifyByLlm } from './llm-classifier.js';
 
 // ---------------------------------------------------------------------------
 // MLClassifierGuardrail

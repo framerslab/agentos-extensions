@@ -30,8 +30,8 @@
  */
 
 import type { ClassificationResult } from '@framers/agentos';
-import type { IContentClassifier } from '../IContentClassifier';
-import type { BrowserConfig } from '../types';
+import type { IContentClassifier } from '../IContentClassifier.js';
+import type { BrowserConfig } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Internal message shapes

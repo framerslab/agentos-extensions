@@ -27,7 +27,7 @@
  */
 
 import { cosineSimilarity } from '@framers/agentos/core/utils/text-utils';
-import type { TopicDescriptor, TopicMatch } from './types';
+import type { TopicDescriptor, TopicMatch } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Internal storage shape

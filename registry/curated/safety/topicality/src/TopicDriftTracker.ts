@@ -37,14 +37,14 @@
  * @module topicality/TopicDriftTracker
  */
 
-import type { TopicEmbeddingIndex } from './TopicEmbeddingIndex';
+import type { TopicEmbeddingIndex } from './TopicEmbeddingIndex.js';
 import {
   DEFAULT_DRIFT_CONFIG,
   type DriftConfig,
   type DriftResult,
   type TopicMatch,
   type TopicState,
-} from './types';
+} from './types.js';
 
 // ---------------------------------------------------------------------------
 // TopicDriftTracker

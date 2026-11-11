@@ -28,9 +28,9 @@
 
 import type { ClassificationResult } from '@framers/agentos';
 import type { ISharedServiceRegistry } from '@framers/agentos';
-import type { IContentClassifier } from '../IContentClassifier';
-import type { ClassifierConfig } from '../types';
-import { ML_CLASSIFIER_SERVICE_IDS } from '../types';
+import type { IContentClassifier } from '../IContentClassifier.js';
+import type { ClassifierConfig } from '../types.js';
+import { ML_CLASSIFIER_SERVICE_IDS } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Internal raw pipeline output type
