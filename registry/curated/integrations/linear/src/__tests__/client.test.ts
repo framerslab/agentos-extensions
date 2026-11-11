@@ -7,7 +7,7 @@
 import { TrackerFault, TrackerGrantRefused, TrackerNoAnswer, TrackerRateLimited } from '@framers/agentos-ext-account-sources';
 import { OAuthGrantRefused } from '@framers/agentos/auth';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LINEAR_ENDPOINTS, LinearClient, LinearFault } from '../index.js';
+import { LINEAR_ENDPOINTS, LinearClient, LinearFault, linearGraphql } from '../index.js';
 import { graphql, json, neverAnswers, sent, standIn } from './standIn.js';
 
 const token = async (): Promise<string> => 'a1';
@@ -60,7 +60,7 @@ describe('LinearClient', () => {
     expect(sent(seen[0]).query).toContain('teams(first: 50, after: $after)');
   });
 
-  it('stops paging the teams at 250, and refuses a page that repeats its cursor', async () => {
+  it('stops paging the teams at 250 and at an empty page, and refuses a page that repeats its cursor', async () => {
     let calls = 0;
     const many = standIn(graphql(() => {
       calls += 1;
@@ -73,6 +73,17 @@ describe('LinearClient', () => {
     await expect(new LinearClient(token, { fetchImpl: looping.fetchImpl }).teams()).rejects.toSatisfy(
       (error: unknown) => error instanceof TrackerFault && error.reason === 'invalid_response',
     );
+    // Pages with no team, each naming a new cursor and another page: the paging stops at the first of them. The
+    // stand-in refuses a sixth call, so a client that keeps paging fails here rather than calling without end.
+    let emptyCalls = 0;
+    const emptyPages = standIn(graphql(() => {
+      emptyCalls += 1;
+      if (emptyCalls > 5) return { errors: [{ message: 'asked too often' }] };
+      const nodes = emptyCalls === 1 ? [{ id: 't1', key: 'ENG', name: 'Engineering' }] : [];
+      return { data: { teams: { nodes, pageInfo: { hasNextPage: true, endCursor: `e${emptyCalls}` } } } };
+    }));
+    expect(await new LinearClient(token, { fetchImpl: emptyPages.fetchImpl }).teams()).toEqual([{ id: 't1', key: 'ENG', name: 'Engineering' }]);
+    expect(emptyCalls).toBe(2);
   });
 
   it('lists the open issues assigned to the person, newest change first, with the done states left out of the filter', async () => {
@@ -270,6 +281,46 @@ describe('LinearClient', () => {
     expect(seen).toHaveLength(0);
   });
 
+  it('ends a call at the caller\'s cancel or the deadline while the token supplier is still refreshing', async () => {
+    const { fetchImpl, seen } = standIn(() => json({ data: { viewer: { organization: { name: 'Acme', urlKey: 'acme' } } } }));
+    // A refresh that is refused 300 ms in: a cancel at 20 ms wins, and the later refusal is not what the caller sees.
+    const refusedLate = new LinearClient(() => new Promise<string>((_resolve, reject) => {
+      setTimeout(() => reject(new OAuthGrantRefused('refresh', 400, 'invalid_grant')), 300);
+    }), { fetchImpl });
+    const cancel = new AbortController();
+    setTimeout(() => cancel.abort(), 20);
+    await expect(refusedLate.organization(cancel.signal)).rejects.toSatisfy(
+      (error: unknown) => error instanceof TrackerNoAnswer && error.cause === 'cancelled',
+    );
+    // A token that comes 300 ms in, past a deadline of 20 ms: the call ends at the deadline and nothing is sent.
+    const late = new LinearClient(() => new Promise<string>((resolve) => {
+      setTimeout(() => resolve('a1'), 300);
+    }), { fetchImpl, timeoutMs: 20 });
+    await expect(late.organization()).rejects.toSatisfy(
+      (error: unknown) => error instanceof TrackerNoAnswer && error.cause === 'timeout',
+    );
+    expect(seen).toHaveLength(0);
+  });
+
+  it("posts a host's own document to Linear's address, and refuses any other address or deadline before any call", async () => {
+    const { fetchImpl, seen } = standIn(graphql(() => ({ data: { viewer: { id: 'v1' } } })));
+    const document = 'query Viewer { viewer { id } }';
+    expect(await linearGraphql('a1', 'Viewer', document, {}, { fetchImpl })).toEqual({ viewer: { id: 'v1' } });
+    const configuration = (error: unknown): boolean => error instanceof TrackerFault && error.reason === 'configuration';
+    vi.stubEnv('CI', 'true');
+    for (const options of [
+      { fetchImpl, endpoint: 'https://elsewhere.example.com/graphql' },
+      { fetchImpl, timeoutMs: -1 },
+      { fetchImpl, timeoutMs: 600_001 },
+    ]) {
+      await expect(linearGraphql('a1', 'Viewer', document, {}, options)).rejects.toSatisfy(configuration);
+    }
+    await linearGraphql('a1', 'Viewer', document, {}, { fetchImpl, endpoint: 'http://127.0.0.1:9452/graphql' });
+    vi.stubEnv('CI', 'false');
+    await expect(linearGraphql('a1', 'Viewer', document, {}, { fetchImpl, endpoint: 'http://127.0.0.1:9452/graphql' })).rejects.toSatisfy(configuration);
+    expect(seen.map((each) => each.url)).toEqual([LINEAR_ENDPOINTS.graphql, 'http://127.0.0.1:9452/graphql']);
+  });
+
   it("refuses an answer with no data, an answer past the cap and any other error, with none of Linear's words in the fault", async () => {
     await expect(new LinearClient(token, { fetchImpl: standIn(() => json({})).fetchImpl }).organization()).rejects.toSatisfy(
       (error: unknown) => error instanceof TrackerFault && error.reason === 'invalid_response',
@@ -304,6 +355,9 @@ describe('LinearClient', () => {
       (error: unknown) => error instanceof TrackerFault && error.reason === 'refused' && error.status === 307,
     );
     expect(seen).toHaveLength(1);
+    // The stand-in answers a redirect as it came; the global fetch would follow it unless the call says not to.
+    expect(seen[0]?.redirect).toBe('manual');
+    expect(seen[0]?.credentials).toBe('omit');
   });
 
   it('takes a stand-in GraphQL address only on CI at a loopback or .invalid host', () => {

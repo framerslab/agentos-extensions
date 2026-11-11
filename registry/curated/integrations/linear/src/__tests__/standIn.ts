@@ -9,6 +9,10 @@ export interface Seen {
   url: string;
   headers: Headers;
   body: string | null;
+  /** The redirect mode the call was made with, so a test can pin that no redirect is followed. */
+  redirect: RequestInit['redirect'];
+  /** The credentials mode the call was made with. */
+  credentials: RequestInit['credentials'];
 }
 
 /** A fetch that answers from `route` and records every request. */
@@ -21,6 +25,8 @@ export function standIn(route: (request: Seen) => Response | Promise<Response>):
       url,
       headers: new Headers(init?.headers),
       body: typeof init?.body === 'string' ? init.body : null,
+      redirect: init?.redirect,
+      credentials: init?.credentials,
     };
     seen.push(request);
     return route(request);

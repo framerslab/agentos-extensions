@@ -97,6 +97,9 @@ describe('LinearOAuthFlow', () => {
     expect(body.get('redirect_uri')).toBe(redirectUri);
     expect(body.get('client_id')).toBe('client-1');
     expect(body.get('client_secret')).toBe('secret-1');
+    // A followed 307 or 308 would post the code, the verifier and the secret on to its target.
+    expect(call?.redirect).toBe('manual');
+    expect(call?.credentials).toBe('omit');
   });
 
   it('refuses a state that is not the one kept before any call', async () => {
@@ -139,6 +142,7 @@ describe('LinearOAuthFlow', () => {
     expect(form(seen[1]).get('grant_type')).toBe('refresh_token');
     expect(form(seen[1]).get('refresh_token')).toBe('r1');
     expect(form(seen[1]).get('client_id')).toBe('client-1');
+    expect(seen[1]?.redirect).toBe('manual');
     expect(store.kept.get('person-1')?.refreshToken).toBe('r2');
     // A token with time left is answered from memory, with no call.
     expect(await flow.accessToken('person-1')).toBe('a2');
@@ -160,6 +164,8 @@ describe('LinearOAuthFlow', () => {
     expect(seen[0]?.headers.get('content-type')).toContain('application/x-www-form-urlencoded');
     expect(form(seen[0]).get('token')).toBe('r1');
     expect(form(seen[0]).get('token_type_hint')).toBe('refresh_token');
+    expect(seen[0]?.redirect).toBe('manual');
+    expect(seen[0]?.credentials).toBe('omit');
     await flow.revoke('a1', 'access_token');
     expect(form(seen[1]).get('token_type_hint')).toBe('access_token');
     for (const status of [400, 401]) {
