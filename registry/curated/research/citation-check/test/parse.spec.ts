@@ -124,14 +124,19 @@ describe('parseCitedClaims on markdown links and emphasis', () => {
     ]);
   });
 
-  it('removes single-mark emphasis from a quotation and keeps an underscore inside a word and a spaced asterisk', () => {
+  it('removes paired emphasis from a quotation and keeps an unpaired asterisk and an underscore inside a word', () => {
     const text = [
       'They wrote "she was the *only* survivor of the _first_ wreck" (https://example.org/wreck).',
       'The manual says "set the snake_case name to 2 * 3 rows" (https://example.org/manual).',
+      'It notes "the area is 2*3 square metres", "the pointer is char* in C" and "a **bold *inner* phrase** here" (https://example.org/notes).',
     ].join('\n');
     expect(parseCitedClaims(text)).toEqual([
       { line: 1, claim: 'she was the only survivor of the first wreck', url: 'https://example.org/wreck', exact: true },
       { line: 2, claim: 'set the snake_case name to 2 * 3 rows', url: 'https://example.org/manual', exact: true },
+      // An unpaired asterisk is text.
+      { line: 3, claim: 'the area is 2*3 square metres', url: 'https://example.org/notes', exact: true },
+      { line: 3, claim: 'the pointer is char* in C', url: 'https://example.org/notes', exact: true },
+      { line: 3, claim: 'a bold inner phrase here', url: 'https://example.org/notes', exact: true },
     ]);
   });
 });

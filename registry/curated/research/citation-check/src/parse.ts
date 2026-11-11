@@ -51,10 +51,25 @@ const LINK_OPEN = /\]\(<?$/u;
 /** A markdown link's title after its address and before the closing parenthesis: `"…"`, `'…'` or `(…)`. */
 const LINK_TITLE = /^>?\s+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\))(?=\s*\))/u;
 /**
- * Emphasis marks: a run of `*` against a word on either side, or a run of `_` at a word's edge (an `_` inside a word,
- * as in `snake_case`, is no emphasis); an escaped mark is none.
+ * Emphasis: a run of `*` and the same run closing it, each against the words they wrap, or the same with `_` at the
+ * words' edges (an `_` inside a word, as in `snake_case`, is no emphasis); an escaped mark is none. An unpaired mark, as
+ * in `2*3` or `char*`, is text.
  */
-const EMPHASIS = /(?<!\\)(?:\*+(?=\S)|(?<=\S)\*+|(?<![\p{L}\p{N}\\])_+(?=\S)|(?<=\S)_+(?![\p{L}\p{N}]))/gu;
+const EMPHASIS = [
+  /(?<!\\)(\*+)(?=\S)(.+?)(?<=[^\s\\])\1/gu,
+  /(?<![\p{L}\p{N}\\])(_+)(?=\S)(.+?)(?<=[^\s\\])\1(?![\p{L}\p{N}])/gu,
+];
+
+/** A quotation's text with its emphasis marks removed, inner emphasis included. */
+function withoutEmphasis(raw: string): string {
+  let text = raw;
+  for (let pass = 0; pass < 4; pass += 1) {
+    const next = EMPHASIS.reduce((value, pattern) => value.replace(pattern, '$2'), text);
+    if (next === text) break;
+    text = next;
+  }
+  return text;
+}
 
 /** Whether a string is an absolute http or https address with a host. */
 export function isHttpUrl(value: string): boolean {
@@ -128,7 +143,7 @@ function closingMark(text: string, from: number, closers: string): number {
 
 /** A quotation's words: the markdown marks for emphasis and code removed, then escapes, white space collapsed. */
 function cleanQuotation(raw: string): string {
-  return collapse(raw.replace(EMPHASIS, '').replace(/\\(.)/gu, '$1').replace(/`/gu, ''));
+  return collapse(withoutEmphasis(raw).replace(/\\(.)/gu, '$1').replace(/`/gu, ''));
 }
 
 /** How many times a character stands in a string. */
