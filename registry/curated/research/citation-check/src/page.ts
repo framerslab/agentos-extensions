@@ -151,7 +151,7 @@ async function checkAddress(url: string, rules: TransportRules, transport: Trans
 }
 
 /** A body read up to `cap` bytes: its bytes, or null past the cap with the rest of the stream cancelled. */
-async function readCapped(response: Response, cap: number): Promise<Uint8Array | null> {
+export async function readCapped(response: Response, cap: number): Promise<Uint8Array | null> {
   if (response.body === null) return new Uint8Array(0);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -405,7 +405,7 @@ function textBlocks(text: string, budget: number): string[] {
 }
 
 /** A page's text as blocks, the characters a reader never sees removed. */
-function pageBlocks(kind: 'html' | 'text', text: string, budget: number): string[] {
+export function pageBlocks(kind: 'html' | 'text', text: string, budget: number): string[] {
   const raw = kind === 'html' ? htmlToBlocks(text, { mode: 'page', budget }) : textBlocks(text, budget);
   return raw.map((block) => collapse(withoutInvisible(block))).filter((block) => block !== '');
 }
