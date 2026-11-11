@@ -2,7 +2,8 @@
  * @fileoverview The account sources' tracker conformance checks over `JiraTracker`, on a REST stand-in that keeps a
  * Jira Cloud site in memory: two projects that take a Task, the person's open and done issues and someone else's,
  * issues created into a map with their descriptions in Atlassian Document Format, transitions to the other status
- * categories, an issue's own read refused as Atlassian refuses a scope the grant lacks, a
+ * categories, a search index that follows a change only when the search reconciles the issue, an issue's own read
+ * refused as Atlassian refuses a scope the grant lacks, a
  * rate limit armed on demand, and the grant ended by the host's `forget` of a real `JiraOAuthFlow`, which has no
  * revocation endpoint to call.
  */
@@ -29,6 +30,8 @@ interface SiteIssue {
   summary: string;
   description: unknown;
   category: Category;
+  /** The category the search index holds, which follows a change only when a search reconciles the issue's id. */
+  indexed: Category;
   assignee: 'me' | 'someone' | null;
   updated: string;
 }
@@ -40,7 +43,7 @@ function memorySite() {
     { id: '10010', key: 'OPS', name: 'Operations', issueTypes: [{ id: '10001', name: 'Task', subtask: false }] },
   ];
   const issues = new Map<string, SiteIssue>();
-  const add = (issue: SiteIssue) => issues.set(issue.key, issue);
+  const add = (issue: Omit<SiteIssue, 'indexed'>) => issues.set(issue.key, { ...issue, indexed: issue.category });
   add({ id: '20001', key: 'ABC-1', projectId: '10000', summary: 'Send the slides', description: null, category: 'new', assignee: 'me', updated: '2026-11-10T12:00:00.000+0000' });
   add({ id: '20002', key: 'OPS-2', projectId: '10010', summary: 'Book the room', description: null, category: 'indeterminate', assignee: 'me', updated: '2026-11-09T12:00:00.000+0000' });
   add({ id: '20003', key: 'ABC-3', projectId: '10000', summary: 'Someone else’s', description: null, category: 'new', assignee: 'someone', updated: '2026-11-10T13:00:00.000+0000' });
@@ -59,7 +62,7 @@ function memorySite() {
     key: issue.key,
     fields: {
       summary: issue.summary,
-      status: { name: issue.category, statusCategory: { key: issue.category } },
+      status: { name: issue.indexed, statusCategory: { key: issue.indexed } },
       updated: issue.updated,
       project: { id: projectOf(issue).id, key: projectOf(issue).key, name: projectOf(issue).name },
       assignee: issue.assignee === null ? null : { accountId: `account-${issue.assignee}` },
@@ -84,6 +87,8 @@ function memorySite() {
       return json({ startAt: 0, maxResults: 50, total: projects.length, isLast: true, values: projects });
     }
     if (request.method === 'POST' && path === '/search/jql') {
+      // The search is eventually consistent: a change shows once a search reconciles the issue's id.
+      for (const each of issues.values()) if (Array.isArray(body.reconcileIssues) && body.reconcileIssues.includes(Number(each.id))) each.indexed = each.category;
       const one = /^issue = "([^"\\]+)"$/.exec(String(body.jql));
       if (one !== null) {
         const issue = byIdOrKey(one[1]!);
@@ -91,7 +96,7 @@ function memorySite() {
       }
       if (body.jql !== JQL) return json({ errorMessages: ['unexpected jql'] }, 400);
       const mine = [...issues.values()]
-        .filter((each) => each.assignee === 'me' && each.category !== 'done')
+        .filter((each) => each.assignee === 'me' && each.indexed !== 'done')
         .sort((a, b) => Date.parse(b.updated.replace(/([+-]\d{2})(\d{2})$/, '$1:$2')) - Date.parse(a.updated.replace(/([+-]\d{2})(\d{2})$/, '$1:$2')));
       return json({ issues: mine.slice(0, body.maxResults ?? 50).map(listed), isLast: true });
     }
@@ -100,7 +105,7 @@ function memorySite() {
       if (project === undefined) return json({ errorMessages: [], errors: { project: 'valid project is required' } }, 400);
       if (!project.issueTypes.some((type) => type.id === body.fields?.issuetype?.id && !type.subtask)) return json({ errors: { issuetype: 'invalid' } }, 400);
       made += 1;
-      const issue: SiteIssue = { id: String(made), key: `${project.key}-${made}`, projectId: project.id, summary: body.fields.summary, description: body.fields.description, category: 'new', assignee: null, updated: '2026-11-10T15:00:00.000+0000' };
+      const issue: SiteIssue = { id: String(made), key: `${project.key}-${made}`, projectId: project.id, summary: body.fields.summary, description: body.fields.description, category: 'new', indexed: 'new', assignee: null, updated: '2026-11-10T15:00:00.000+0000' };
       add(issue);
       return json({ id: issue.id, key: issue.key, self: `${API}/issue/${issue.id}` }, 201);
     }
@@ -206,6 +211,7 @@ describe('JiraTracker', () => {
       `GET ${new URL(API).pathname}/issue/ABC-4/transitions`,
       `POST ${new URL(API).pathname}/search/jql`,
     ]);
+    expect(JSON.parse(seen.at(-1)?.body ?? '{}').reconcileIssues).toEqual([20004]);
     expect(site.issues.get('ABC-4')?.category).toBe('done');
   });
 

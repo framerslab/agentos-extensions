@@ -7,8 +7,8 @@
 import { OAuthGrantRefused } from '@framers/agentos/auth';
 import { TrackerFault, TrackerGrantRefused, TrackerNoAnswer, TrackerRateLimited } from '@framers/agentos-ext-account-sources';
 import { describe, expect, it } from 'vitest';
-import { adfParagraphs, JIRA_ENDPOINTS, JiraClient, JiraFault } from '../index.js';
-import { adfText, ignoresSignal, json, neverAnswers, standIn, type Seen } from './standIn.js';
+import { adfParagraphs, JIRA_ENDPOINTS, JiraClient, JiraFault, JiraOAuthFlow } from '../index.js';
+import { adfText, ignoresSignal, json, MemoryStore, neverAnswers, standIn, type Seen } from './standIn.js';
 
 const token = async () => 'a1';
 const site = { id: 'cloud-1', url: 'https://acme.atlassian.net' };
@@ -206,10 +206,17 @@ describe('JiraClient', () => {
       if (request.method === 'POST' && path.endsWith('/search/jql')) return json({ issues: key === null ? [] : [{ id: '10001', key: 'ABC-7', fields: { status: { statusCategory: { key } } } }], isLast: true });
       return json({ code: 401, message: 'Unauthorized; scope does not match' }, 401);
     });
+    // The search is eventually consistent, so the issue's id is reconciled for a read after the close that wrote it.
     const done = statusOf('done');
-    await new JiraClient(token, site, { fetchImpl: done.fetchImpl }).closeIssue('ABC-7');
+    await new JiraClient(token, site, { fetchImpl: done.fetchImpl }).closeIssue({ id: '10001', key: 'ABC-7' });
     expect(done.seen.map(line)).toEqual(['GET /ex/jira/cloud-1/rest/api/3/issue/ABC-7/transitions', 'POST /ex/jira/cloud-1/rest/api/3/search/jql']);
-    expect(JSON.parse(done.seen[1]?.body ?? '{}')).toEqual({ jql: 'issue = "ABC-7"', fields: ['status'], maxResults: 1 });
+    expect(JSON.parse(done.seen[1]?.body ?? '{}')).toEqual({ jql: 'issue = "ABC-7"', fields: ['status'], maxResults: 1, reconcileIssues: [10001] });
+    const byId = statusOf('done');
+    await new JiraClient(token, site, { fetchImpl: byId.fetchImpl }).closeIssue('10001');
+    expect(JSON.parse(byId.seen[1]?.body ?? '{}')).toEqual({ jql: 'issue = "10001"', fields: ['status'], maxResults: 1, reconcileIssues: [10001] });
+    const byKey = statusOf('done');
+    await new JiraClient(token, site, { fetchImpl: byKey.fetchImpl }).closeIssue('ABC-7');
+    expect(JSON.parse(byKey.seen[1]?.body ?? '{}')).toEqual({ jql: 'issue = "ABC-7"', fields: ['status'], maxResults: 1 });
     const stuck = statusOf('indeterminate');
     await expect(new JiraClient(token, site, { fetchImpl: stuck.fetchImpl }).closeIssue('ABC-7')).rejects.toSatisfy((error: unknown) => error instanceof TrackerFault && error.reason === 'refused');
     expect(stuck.seen.filter((each) => each.method === 'POST').map(line)).toEqual(['POST /ex/jira/cloud-1/rest/api/3/search/jql']);
@@ -238,6 +245,10 @@ describe('JiraClient', () => {
     expect((seconds as TrackerRateLimited).retryAt).toBeLessThanOrEqual(Date.now() + 7_000);
     const reset = standIn(() => json({}, 429, { 'x-ratelimit-reset': '2030-01-01T01:01:01Z' }));
     expect(((await outcome(new JiraClient(token, site, { fetchImpl: reset.fetchImpl }).projects())) as TrackerRateLimited).retryAt).toBe(Date.parse('2030-01-01T01:01:01Z'));
+    const long = standIn(() => json({}, 429, { 'retry-after': '10000000' }));
+    const clamped = (await outcome(new JiraClient(token, site, { fetchImpl: long.fetchImpl }).projects())) as TrackerRateLimited;
+    expect(clamped.retryAt).toBeGreaterThanOrEqual(before + 86_400_000);
+    expect(clamped.retryAt).toBeLessThanOrEqual(Date.now() + 86_400_000);
     const none = standIn(() => json({}, 429));
     const unnamed = await outcome(new JiraClient(token, site, { fetchImpl: none.fetchImpl }).projects());
     expect(unnamed).toBeInstanceOf(TrackerRateLimited);
@@ -292,6 +303,43 @@ describe('JiraClient', () => {
       throw new OAuthGrantRefused('missing');
     };
     expect(await outcome(JiraClient.sites(missing, { fetchImpl }))).toBeInstanceOf(TrackerGrantRefused);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('keeps the grant on a refresh Atlassian could not serve: a 429 is TrackerRateLimited and a 5xx refused', async () => {
+    const { fetchImpl, seen } = standIn(() => json({ isLast: true, values: [] }));
+    const refusing = (status: number, code?: string) => async (): Promise<string> => {
+      throw new OAuthGrantRefused('refresh', status, code);
+    };
+    const busy = await outcome(new JiraClient(refusing(503, 'temporarily_unavailable'), site, { fetchImpl }).projects());
+    expect(busy).toSatisfy((error: unknown) => error instanceof TrackerFault && !(error instanceof TrackerGrantRefused) && error.reason === 'refused' && error.status === 503);
+    const limited = await outcome(new JiraClient(refusing(429), site, { fetchImpl }).projects());
+    expect(limited).toSatisfy((error: unknown) => error instanceof TrackerRateLimited && error.retryAt === null);
+    expect(await outcome(new JiraClient(refusing(400, 'invalid_grant'), site, { fetchImpl }).projects())).toBeInstanceOf(TrackerGrantRefused);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('turns a refresh with no answer or past its cap into a tracker fault, never a JiraFault', async () => {
+    const renewing = async (tokenFetch: typeof fetch) => {
+      const store = new MemoryStore();
+      await store.save('person-1', { accessToken: '', expiresAt: 0, refreshToken: 'r0' });
+      const flow = new JiraOAuthFlow({ clientId: 'client-1', clientSecret: 'secret-1' }, store, { fetchImpl: tokenFetch, timeoutMs: 20 });
+      return outcome(new JiraClient(() => flow.accessToken('person-1'), site, { fetchImpl: neverAnswers }).projects());
+    };
+    expect(await renewing(neverAnswers)).toSatisfy((error: unknown) => error instanceof TrackerNoAnswer && error.cause === 'timeout');
+    const large = standIn(() => json({ access_token: 'a1', refresh_token: 'r1', expires_in: 3600, scope: 'x'.repeat(70_000) }));
+    expect(await renewing(large.fetchImpl)).toSatisfy((error: unknown) => error instanceof TrackerFault && !(error instanceof JiraFault) && error.reason === 'invalid_response');
+  });
+
+  it('bounds the wait for a token by the deadline and the signal of the caller, before any call', async () => {
+    const { fetchImpl, seen } = standIn(() => json({ isLast: true, values: [] }));
+    const stalled = (): Promise<string> => new Promise<string>(() => undefined);
+    expect(await outcome(new JiraClient(stalled, site, { fetchImpl, timeoutMs: 20 }).projects())).toSatisfy((error: unknown) => error instanceof TrackerNoAnswer && error.cause === 'timeout');
+    const controller = new AbortController();
+    const pending = outcome(new JiraClient(stalled, site, { fetchImpl, timeoutMs: 5_000 }).projects(controller.signal));
+    controller.abort();
+    expect(await pending).toSatisfy((error: unknown) => error instanceof TrackerNoAnswer && error.cause === 'cancelled');
+    expect(await outcome(JiraClient.sites(stalled, { fetchImpl, timeoutMs: 20 }))).toSatisfy((error: unknown) => error instanceof TrackerNoAnswer && error.cause === 'timeout');
     expect(seen).toHaveLength(0);
   });
 
