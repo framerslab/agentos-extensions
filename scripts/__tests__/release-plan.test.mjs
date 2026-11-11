@@ -101,7 +101,7 @@ function makeWorkspace({ root = { version: '1.0.0' }, packages = [], images, ado
   };
   const roles = root === null ? {} : { '.': 'root' };
   for (const pkg of packages) roles[pkg.dir] = pkg.role ?? 'pack';
-  write('scripts/package-roles.json', json({ roles, ...(images ? { images } : {}), ...(adopted ? { adopted } : {}) }));
+  write('scripts/package-roles.json', json({ roles, ...(images ? { images } : {}), ...(adopted !== undefined ? { adopted } : {}) }));
   write(
     'package.json',
     root === null
@@ -1533,7 +1533,7 @@ test('9b a latest with no tag whose document names this repository is not foreig
   assert.deepEqual(result.foreign, []);
 });
 
-// 9c-9h. An adopted package: a copy this repository takes over from the repository npm's versions name.
+// 9c-9m. An adopted package: a copy this repository takes over from the repository npm's versions name.
 
 const OTHER_TREE = 'git+https://github.com/example/other-tree.git';
 
@@ -1641,6 +1641,10 @@ test('9f the role map lists under adopted only the directories of publishable pa
   const notAList = makeWorkspace({ packages: [{ dir: ALPHA_DIR, name: ALPHA, version: '0.2.1' }], adopted: { [ALPHA_DIR]: true } });
   assert.throws(() => listPackages(notAList.dir), /adopted/);
 
+  // A list written as null is not a list: only a role map with no adopted key has none.
+  const nothing = makeWorkspace({ packages: [{ dir: ALPHA_DIR, name: ALPHA, version: '0.2.1' }], adopted: null });
+  assert.throws(() => listPackages(nothing.dir), /adopted/);
+
   const { ws } = handover();
   assert.deepEqual(
     listPackages(ws.dir).filter((pkg) => pkg.adopted === true).map((pkg) => pkg.dir),
@@ -1687,6 +1691,71 @@ test("9j an adopted package whose handover version npm serves but does not list 
   // the other repository's versions alone, with 0.3.3 as latest.
   table[ALPHA].versions['0.3.4'] = { gitHead: handed, hidden: true, repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` } };
   ws.commit(src(2), 'fix(alpha): the first change made here');
+
+  const result = await plan(ws, { table });
+
+  assert.deepEqual(pick(alpha(result)), { planned: '0.3.5', bump: 'patch', newest: '0.3.4', baseCommit: handed, baseSource: 'gitHead' });
+  assert.deepEqual(
+    result.repairs.filter((record) => record.name === ALPHA),
+    [{ name: ALPHA, version: '0.3.4', commit: handed, kind: 'tag' }],
+  );
+});
+
+test("9k an adopted package whose handover version npm lists, while npm's latest still names the other repository, is decided from that version, not handed over again", async () => {
+  const { ws, table } = handover();
+  const handed = ws.head();
+  // The release published 0.3.4 from this commit, and npm lists it, but npm's latest still points at 0.3.3.
+  table[ALPHA].versions['0.3.4'] = { gitHead: handed, repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` } };
+
+  const result = await plan(ws, { table });
+
+  assert.equal(alpha(result).adopted, undefined);
+  assert.deepEqual(pick(alpha(result)), { planned: null, bump: null, newest: '0.3.4', baseCommit: handed, baseSource: 'gitHead' });
+  assert.deepEqual(
+    result.repairs.filter((record) => record.name === ALPHA),
+    [{ name: ALPHA, version: '0.3.4', commit: handed, kind: 'tag' }],
+  );
+
+  // The same with 0.3.4 tagged and released here: nothing to publish and nothing to repair.
+  const tagged = handover();
+  const taggedAt = tagged.ws.head();
+  tagged.ws.tag(ALPHA, '0.3.4', taggedAt);
+  tagged.table[ALPHA].versions['0.3.4'] = { gitHead: taggedAt, repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` } };
+
+  const again = await plan(tagged.ws, { table: tagged.table, releases: [`${ALPHA}@0.3.4`] });
+
+  assert.deepEqual(pick(alpha(again)), { planned: null, bump: null, newest: '0.3.4', baseCommit: taggedAt, baseSource: 'tag' });
+  assert.deepEqual(again.repairs, []);
+});
+
+test("9l an untagged handover version is repaired although an earlier version of the other repository's names no repository at all", async () => {
+  // npm's 0.3.1 of a package published from another repository carries no repository field, no gitHead and no
+  // attestation; the other repository's newer versions name it.
+  const { ws, table } = handover();
+  table[ALPHA].versions['0.3.1'] = {};
+  const handed = ws.head();
+  table[ALPHA].latest = '0.3.4';
+  table[ALPHA].versions['0.3.4'] = { gitHead: handed, repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` } };
+  ws.commit(src(2), 'fix(alpha): the first change made here');
+
+  const result = await plan(ws, { table });
+
+  assert.deepEqual(pick(alpha(result)), { planned: '0.3.5', bump: 'patch', newest: '0.3.4', baseCommit: handed, baseSource: 'gitHead' });
+  assert.deepEqual(
+    result.repairs.filter((record) => record.name === ALPHA),
+    [{ name: ALPHA, version: '0.3.4', commit: handed, kind: 'tag' }],
+  );
+});
+
+test("9m a version of the other repository's whose gitHead this clone holds gets no tag here", async () => {
+  const { ws, table } = handover();
+  const early = ws.head();
+  // npm's 0.3.1 names the other repository, and its gitHead is a commit this clone holds.
+  table[ALPHA].versions['0.3.1'] = { gitHead: early, repository: { type: 'git', url: OTHER_TREE } };
+  const handed = ws.commit(src(2), 'fix(alpha): the handover');
+  table[ALPHA].latest = '0.3.4';
+  table[ALPHA].versions['0.3.4'] = { gitHead: handed, repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` } };
+  ws.commit(src(3), 'fix(alpha): the first change made here');
 
   const result = await plan(ws, { table });
 
