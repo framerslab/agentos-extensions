@@ -174,6 +174,36 @@ describe('LinearClient', () => {
     await expect(new LinearClient(token, { fetchImpl: refused.fetchImpl }).closeIssue('i1')).rejects.toSatisfy((error: unknown) => error instanceof TrackerFault && error.reason === 'refused');
   });
 
+  it("reads Linear's missing entity as not_found, for an issue to close and a team to open in, with none of Linear's words in the fault", async () => {
+    // Linear's answer for an id it cannot find (the SDK's end-to-end test: type "invalid input", "Entity not found",
+    // "Could not find referenced Issue"), as an answer with errors and no data, at 200 and at 400.
+    const missing = (what: string, status: number) =>
+      standIn(() => json({ errors: [{ message: 'Entity not found', path: [what.toLowerCase()], extensions: { type: 'invalid input', userError: true, userPresentableMessage: `Could not find referenced ${what}` } }], data: null }, status));
+    for (const status of [200, 400]) {
+      const issue = missing('Issue', status);
+      let thrown: unknown;
+      try {
+        await new LinearClient(token, { fetchImpl: issue.fetchImpl }).closeIssue('no-such-issue');
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(TrackerFault);
+      expect((thrown as TrackerFault).reason).toBe('not_found');
+      expect((thrown as TrackerFault).status).toBe(status);
+      expect((thrown as Error).message).not.toContain('Could not find');
+      expect(issue.seen).toHaveLength(1);
+      const team = missing('Team', status);
+      await expect(new LinearClient(token, { fetchImpl: team.fetchImpl }).createIssue({ teamId: 'no-such-team', title: 'T', description: '' })).rejects.toSatisfy(
+        (error: unknown) => error instanceof TrackerFault && error.reason === 'not_found' && error.status === status,
+      );
+    }
+    // An answer that names no issue reads the same.
+    const empty = standIn(graphql(() => ({ data: { issue: null } })));
+    await expect(new LinearClient(token, { fetchImpl: empty.fetchImpl }).closeIssue('i1')).rejects.toSatisfy(
+      (error: unknown) => error instanceof TrackerFault && error.reason === 'not_found',
+    );
+  });
+
   it('turns a 429 with Retry-After into TrackerRateLimited with the retry time, and a RATELIMITED error in a 200 the same', async () => {
     const limited = standIn(() => json({ errors: [{ message: 'rate limited', extensions: { code: 'RATELIMITED' } }] }, 429, { 'retry-after': '7' }));
     const before = Date.now();
@@ -251,10 +281,10 @@ describe('LinearClient', () => {
     await expect(new LinearClient(token, { fetchImpl: large.fetchImpl }).organization()).rejects.toSatisfy(
       (error: unknown) => error instanceof TrackerFault && error.reason === 'invalid_response',
     );
-    const refused = standIn(() => json({ errors: [{ message: 'Entity not found: Team secret-words', extensions: { type: 'invalid input', code: 'INPUT_ERROR' } }] }, 400));
+    const refused = standIn(() => json({ errors: [{ message: 'Argument Validation Error: secret-words', extensions: { type: 'invalid input', userError: true } }] }, 400));
     let thrown: unknown;
     try {
-      await new LinearClient(token, { fetchImpl: refused.fetchImpl }).createIssue({ teamId: 'nope', title: 'T', description: '' });
+      await new LinearClient(token, { fetchImpl: refused.fetchImpl }).createIssue({ teamId: 't1', title: 'T', description: '' });
     } catch (error) {
       thrown = error;
     }

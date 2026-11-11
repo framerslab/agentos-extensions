@@ -47,9 +47,24 @@ function unauthenticated(): Response {
   return json({ errors: [{ message: 'Authentication required, not authenticated', extensions: { type: 'authentication error', code: 'AUTHENTICATION_ERROR', userError: true } }] }, 400);
 }
 
-/** Linear's answer to an input it refuses. */
+/** Linear's answer to an id it cannot find (the SDK's end-to-end test: "Entity not found - Could not find referenced Issue"). */
+function notFound(what: 'Issue' | 'Team' | 'WorkflowState'): Response {
+  return json({ errors: [{ message: 'Entity not found', extensions: { type: 'invalid input', userError: true, userPresentableMessage: `Could not find referenced ${what}` } }], data: null }, 400);
+}
+
+/** Linear's answer to an input it refuses for any other reason. */
 function invalidInput(): Response {
-  return json({ errors: [{ message: 'Entity not found', extensions: { type: 'invalid input', code: 'INPUT_ERROR', userError: true } }], data: null }, 400);
+  return json({ errors: [{ message: 'Argument Validation Error', extensions: { type: 'invalid input', userError: true } }], data: null }, 400);
+}
+
+/** Linear's answer to a document it cannot run. */
+function graphqlError(): Response {
+  return json({ errors: [{ message: 'Cannot query field', extensions: { type: 'graphql error', userError: true } }] }, 400);
+}
+
+/** The plain text a Markdown description shows: CommonMark's backslash escapes undone. */
+function shown(markdown: string): string {
+  return markdown.replace(/\\([!-/:-@[-`{-~])/g, '$1');
 }
 
 /** A Linear workspace in memory behind its token, revocation and GraphQL addresses. */
@@ -127,7 +142,7 @@ function workspace() {
     // One team a page, so the checks pass only when the client follows the cursor.
     Teams: (variables) => ({ data: { teams: page(teams, 1, variables.after) } }),
     AssignedIssues: (variables, query) => {
-      if (!query.includes('viewer { assignedIssues(')) return invalidInput();
+      if (!query.includes('viewer { assignedIssues(')) return graphqlError();
       const excluded = excludedTypes(query);
       const byUpdate = /orderBy:\s*updatedAt/.test(query);
       const listed = [...issues.values()]
@@ -139,7 +154,8 @@ function workspace() {
     CreateIssue: (variables) => {
       const input = variables.input as { teamId?: unknown; title?: unknown; description?: unknown } | undefined;
       const team = teamOf(String(input?.teamId));
-      if (team === undefined || typeof input?.title !== 'string') return invalidInput();
+      if (team === undefined) return notFound('Team');
+      if (typeof input?.title !== 'string') return invalidInput();
       const number = [...issues.values()].filter((each) => each.teamId === team.id).length + 1;
       const first = states.filter((each) => each.teamId === team.id).sort((a, b) => a.position - b.position)[0]!;
       clock += 60_000;
@@ -159,7 +175,7 @@ function workspace() {
     },
     IssueDoneStates: (variables, query) => {
       const issue = find(variables.id);
-      if (issue === undefined) return invalidInput();
+      if (issue === undefined) return notFound('Issue');
       const only = /states\(filter:\s*\{\s*type:\s*\{\s*eq:\s*"([a-z]+)"/.exec(query)?.[1];
       const nodes = states
         .filter((each) => each.teamId === issue.teamId && (only === undefined || each.type === only))
@@ -169,7 +185,9 @@ function workspace() {
     CloseIssue: (variables) => {
       const issue = find(variables.id);
       const state = states.find((each) => each.id === variables.stateId);
-      if (issue === undefined || state === undefined || state.teamId !== issue.teamId) return invalidInput();
+      if (issue === undefined) return notFound('Issue');
+      if (state === undefined) return notFound('WorkflowState');
+      if (state.teamId !== issue.teamId) return invalidInput();
       clock += 60_000;
       issue.stateId = state.id;
       issue.updatedAt = new Date(clock).toISOString();
@@ -208,7 +226,7 @@ function workspace() {
         'x-ratelimit-requests-reset': String(reset),
       });
     }
-    return graphql((name, variables, query) => operations[name]?.(variables, query) ?? invalidInput())(request);
+    return graphql((name, variables, query) => operations[name]?.(variables, query) ?? graphqlError())(request);
   };
 
   return {
@@ -277,7 +295,7 @@ describe('LinearTracker', () => {
     issueDestination: async (ref) => recorded(ref)?.teamId,
     issueText: async (ref) => {
       const issue = recorded(ref);
-      return issue === undefined ? undefined : { title: issue.title, body: issue.description };
+      return issue === undefined ? undefined : { title: issue.title, body: shown(issue.description) };
     },
     grantEnded: async () => linear.grant.ended,
     rateLimitNext: () => {
@@ -334,6 +352,45 @@ describe('LinearTracker mapping', () => {
       updatedAt: '2026-11-10T12:00:00.000Z',
       destination: { id: 't1', key: 'ENG', name: 'Engineering' },
     });
+  });
+
+  it('writes the plain-text body as Markdown that shows as written, and sends the title as it is', async () => {
+    const { fetchImpl, seen } = standIn(graphql((_name, variables) => {
+      const input = variables.input as { title: string };
+      return { data: { issueCreate: { success: true, issue: { id: 'i9', identifier: 'ENG-9', title: input.title, url: 'https://linear.app/acme/issue/ENG-9', updatedAt: '2026-11-10T12:00:00.000Z', state: { name: 'Todo', type: 'unstarted' }, team: { id: 't1', key: 'ENG', name: 'Engineering' } } } } };
+    }));
+    const tracker = new LinearTracker(new LinearClient(async () => 'a1', { fetchImpl }), async () => ({ revoked: true }));
+    const body = [
+      '# Not a heading',
+      '  - not a list, indented',
+      '1. not an ordered list',
+      '2) nor this',
+      '+ plus',
+      '= equals',
+      '> not a quote',
+      'Plain *stars*, _underscores_, `ticks`, ~tildes~ and a [link](https://example.com).',
+      'Tags <b>stay</b> text, a | b, fish & chips, a back\\slash.',
+      '',
+      '    four spaces would be code',
+    ].join('\n');
+    await tracker.createIssue({ destinationId: 't1', title: 'Fix *this* now', body });
+    const { input } = JSON.parse(seen[0]?.body ?? '{}').variables as { input: { title: string; description: string } };
+    expect(input.title).toBe('Fix *this* now');
+    expect(input.description).toBe([
+      '\\# Not a heading',
+      '\\- not a list, indented',
+      '1\\. not an ordered list',
+      '2\\) nor this',
+      '\\+ plus',
+      '\\= equals',
+      '\\> not a quote',
+      'Plain \\*stars\\*, \\_underscores\\_, \\`ticks\\`, \\~tildes\\~ and a \\[link\\](https://example.com).',
+      'Tags \\<b\\>stay\\</b\\> text, a \\| b, fish \\& chips, a back\\\\slash.',
+      '',
+      'four spaces would be code',
+    ].join('\n'));
+    // Undoing the escapes gives the words back, each line without its leading spaces.
+    expect(shown(input.description)).toBe(body.split('\n').map((line) => line.trimStart()).join('\n'));
   });
 
   it('opens an issue with the draft body as the description, and refuses an issue type, which Linear has none of, before any call', async () => {
