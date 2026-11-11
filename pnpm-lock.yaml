@@ -63,7 +63,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/bluesky:
     dependencies:
@@ -82,7 +82,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/discord:
     dependencies:
@@ -101,7 +101,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/email:
     dependencies:
@@ -129,7 +129,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/facebook:
     dependencies:
@@ -148,7 +148,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/farcaster:
     dependencies:
@@ -167,7 +167,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/feishu:
     dependencies:
@@ -186,7 +186,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/google-business:
     dependencies:
@@ -205,7 +205,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/google-chat:
     dependencies:
@@ -224,7 +224,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/imessage:
     devDependencies:
@@ -239,7 +239,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/instagram:
     dependencies:
@@ -258,7 +258,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/irc:
     devDependencies:
@@ -273,7 +273,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/lemmy:
     dependencies:
@@ -292,7 +292,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/line:
     dependencies:
@@ -311,7 +311,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/linkedin:
     dependencies:
@@ -330,7 +330,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/mastodon:
     dependencies:
@@ -349,7 +349,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/matrix:
     dependencies:
@@ -368,7 +368,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/mattermost:
     dependencies:
@@ -387,7 +387,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/nextcloud:
     devDependencies:
@@ -402,7 +402,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/nostr:
     dependencies:
@@ -424,7 +424,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/pinterest:
     dependencies:
@@ -443,7 +443,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/reddit:
     dependencies:
@@ -462,7 +462,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/signal:
     devDependencies:
@@ -477,7 +477,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/slack:
     dependencies:
@@ -496,7 +496,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/sms:
     dependencies:
@@ -515,7 +515,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/teams:
     dependencies:
@@ -534,7 +534,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/telegram:
     dependencies:
@@ -553,7 +553,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/threads:
     dependencies:
@@ -572,7 +572,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/tiktok:
     dependencies:
@@ -591,7 +591,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/tlon:
     dependencies:
@@ -610,7 +610,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/twitch:
     dependencies:
@@ -632,7 +632,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/twitter:
     dependencies:
@@ -651,7 +651,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/webchat:
     devDependencies:
@@ -666,7 +666,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/whatsapp:
     dependencies:
@@ -685,7 +685,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/youtube:
     dependencies:
@@ -704,7 +704,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/zalo:
     devDependencies:
@@ -719,7 +719,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/channels/zalouser:
     devDependencies:
@@ -734,7 +734,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/cloud/aws:
     devDependencies:
@@ -752,7 +752,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/cloud/cloudflare-pages:
     devDependencies:
@@ -770,7 +770,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/cloud/digitalocean:
     devDependencies:
@@ -788,7 +788,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/cloud/flyio:
     devDependencies:
@@ -806,7 +806,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/cloud/heroku:
     devDependencies:
@@ -824,7 +824,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/cloud/linode:
     devDependencies:
@@ -842,7 +842,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/cloud/netlify:
     devDependencies:
@@ -860,7 +860,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/cloud/railway:
     devDependencies:
@@ -878,7 +878,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/cloud/vercel:
     devDependencies:
@@ -896,7 +896,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/communications/notifications:
     devDependencies:
@@ -911,7 +911,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/communications/telegram-bot:
     dependencies:
@@ -932,8 +932,8 @@ importers:
         specifier: ^0.64.0
         version: 0.64.13
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       typedoc:
         specifier: ^0.28.20
         version: 0.28.20(typescript@6.0.3)
@@ -942,7 +942,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/domains/cloudflare-registrar:
     devDependencies:
@@ -960,7 +960,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/domains/godaddy:
     devDependencies:
@@ -978,7 +978,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/domains/namecheap:
     devDependencies:
@@ -996,7 +996,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/domains/porkbun:
     devDependencies:
@@ -1014,7 +1014,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/integrations/clearbit:
     devDependencies:
@@ -1025,8 +1025,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -1035,7 +1035,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/integrations/github:
     dependencies:
@@ -1057,7 +1057,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/integrations/notion:
     devDependencies:
@@ -1072,7 +1072,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.43)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.43)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.43)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.43)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/integrations/telegram:
     dependencies:
@@ -1096,8 +1096,8 @@ importers:
         specifier: ^0.64.0
         version: 0.64.13
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       typedoc:
         specifier: ^0.28.20
         version: 0.28.20(typescript@6.0.3)
@@ -1106,7 +1106,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/media/giphy:
     devDependencies:
@@ -1117,8 +1117,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -1127,7 +1127,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/media/image-search:
     devDependencies:
@@ -1138,8 +1138,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -1148,7 +1148,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/media/letterboxd:
     devDependencies:
@@ -1159,8 +1159,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -1169,7 +1169,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/media/omdb:
     devDependencies:
@@ -1180,8 +1180,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -1190,7 +1190,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/media/voice-synthesis:
     devDependencies:
@@ -1201,8 +1201,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -1211,7 +1211,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/media/wildweave-film:
     dependencies:
@@ -1242,7 +1242,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.1)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.1)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.1)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.1)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/meetings/browser:
     dependencies:
@@ -1273,7 +1273,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.19.17)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.19.17)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/meetings/zoom-rtms:
     dependencies:
@@ -1307,7 +1307,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.19.17)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.19.17)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/memory/postgres-memory:
     dependencies:
@@ -1375,7 +1375,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/productivity/email-intelligence:
     devDependencies:
@@ -1406,7 +1406,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/productivity/gmail-source:
     devDependencies:
@@ -1420,14 +1420,14 @@ importers:
         specifier: 22.20.1
         version: 22.20.1
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       typescript:
         specifier: 6.0.3
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.1)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.1)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.1)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.1)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/productivity/google-calendar:
     dependencies:
@@ -1452,7 +1452,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/productivity/google-drive:
     dependencies:
@@ -1473,8 +1473,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -1486,7 +1486,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/productivity/slack-source:
     devDependencies:
@@ -1503,14 +1503,14 @@ importers:
         specifier: 22.20.1
         version: 22.20.1
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       typescript:
         specifier: 6.0.3
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.1)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.1)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.1)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.1)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/productivity/widget-generator:
     devDependencies:
@@ -1528,7 +1528,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/provenance/anchor-providers:
     dependencies:
@@ -1558,8 +1558,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -1571,7 +1571,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/account-sources:
     dependencies:
@@ -1589,8 +1589,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -1602,7 +1602,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/citation-check:
     dependencies:
@@ -1630,7 +1630,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/citation-verifier:
     devDependencies:
@@ -1648,7 +1648,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/content-extraction:
     dependencies:
@@ -1667,7 +1667,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/deep-research:
     dependencies:
@@ -1686,7 +1686,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/hacker-news:
     devDependencies:
@@ -1698,7 +1698,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/news-search:
     devDependencies:
@@ -1709,8 +1709,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -1719,7 +1719,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/public-sources:
     dependencies:
@@ -1734,8 +1734,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -1747,7 +1747,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/stealth-browser:
     dependencies:
@@ -1775,7 +1775,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/trulia-search:
     devDependencies:
@@ -1793,7 +1793,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/weather:
     devDependencies:
@@ -1808,7 +1808,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/web-browser:
     dependencies:
@@ -1830,7 +1830,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/web-scraper:
     dependencies:
@@ -1852,7 +1852,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/research/web-search:
     dependencies:
@@ -1867,8 +1867,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -1880,7 +1880,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/safety/content-policy-rewriter:
     devDependencies:
@@ -1892,7 +1892,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/safety/ml-classifiers:
     dependencies:
@@ -1924,7 +1924,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.43)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.43)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.43)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.43)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/safety/topicality:
     dependencies:
@@ -1960,7 +1960,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.19.17)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.19.17)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(sass@1.107.1)(yaml@2.9.1))
       ws:
         specifier: ^8.18.0
         version: 8.22.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -1998,7 +1998,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/system/credential-vault:
     devDependencies:
@@ -2013,7 +2013,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/system/operations:
     dependencies:
@@ -2032,7 +2032,7 @@ importers:
         version: 10.4.2
       '@testing-library/jest-dom':
         specifier: 7.0.1
-        version: 7.0.1(@testing-library/dom@10.4.2)(vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.5)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.5)(sass@1.107.1)(yaml@2.9.1)))
+        version: 7.0.1(@testing-library/dom@10.4.2)(vitest@5.1.0)
       '@testing-library/react':
         specifier: 16.3.3
         version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -2080,7 +2080,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.5)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.5)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.5)(sass@1.107.1)(yaml@2.9.1))
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2098,7 +2098,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.5)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.5)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.5)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/agent-delegation:
     devDependencies:
@@ -2116,7 +2116,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/bulk-scheduler:
     devDependencies:
@@ -2127,8 +2127,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -2137,7 +2137,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/document-parser:
     devDependencies:
@@ -2148,14 +2148,14 @@ importers:
         specifier: 22.20.1
         version: 22.20.1
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       typescript:
         specifier: 6.0.3
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.1)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.1)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.1)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.1)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/image-editing:
     devDependencies:
@@ -2173,7 +2173,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/image-generation:
     devDependencies:
@@ -2188,7 +2188,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/local-file-search:
     devDependencies:
@@ -2206,7 +2206,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/media-upload:
     devDependencies:
@@ -2217,8 +2217,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -2227,7 +2227,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/multi-channel-post:
     devDependencies:
@@ -2238,8 +2238,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -2248,7 +2248,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/send-file-to-channel:
     devDependencies:
@@ -2266,7 +2266,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/site-deploy:
     devDependencies:
@@ -2277,8 +2277,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -2287,7 +2287,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/social-analytics:
     devDependencies:
@@ -2298,8 +2298,8 @@ importers:
         specifier: ^20.12.12
         version: 20.19.32
       '@vitest/coverage-v8':
-        specifier: ^3.2.7
-        version: 3.2.7(vitest@5.1.0)
+        specifier: ^5.1.0
+        version: 5.1.0(vitest@5.1.0)
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -2308,7 +2308,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/vision-pipeline:
     devDependencies:
@@ -2326,7 +2326,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/wallet:
     dependencies:
@@ -2357,7 +2357,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/tools/zip-files:
     dependencies:
@@ -2379,7 +2379,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/amazon-polly:
     devDependencies:
@@ -2394,7 +2394,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/diarization:
     dependencies:
@@ -2410,7 +2410,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/endpoint-semantic:
     devDependencies:
@@ -2422,7 +2422,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/google-cloud-stt:
     devDependencies:
@@ -2437,7 +2437,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/google-cloud-tts:
     devDependencies:
@@ -2452,7 +2452,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/openwakeword:
     dependencies:
@@ -2468,7 +2468,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/piper:
     devDependencies:
@@ -2483,7 +2483,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/plivo:
     dependencies:
@@ -2502,7 +2502,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/porcupine:
     dependencies:
@@ -2518,7 +2518,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/streaming-stt-deepgram:
     dependencies:
@@ -2537,7 +2537,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/streaming-stt-whisper:
     devDependencies:
@@ -2549,7 +2549,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/streaming-tts-elevenlabs:
     dependencies:
@@ -2568,7 +2568,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/streaming-tts-openai:
     devDependencies:
@@ -2580,7 +2580,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/telnyx:
     dependencies:
@@ -2599,7 +2599,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/twilio:
     dependencies:
@@ -2618,7 +2618,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   registry/curated/voice/vosk:
     dependencies:
@@ -2634,7 +2634,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
 
   templates/basic-tool:
     devDependencies:
@@ -2649,7 +2649,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   templates/guardrail:
     devDependencies:
@@ -2664,7 +2664,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
   templates/multi-tool:
     devDependencies:
@@ -2679,7 +2679,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.1.0
-        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+        version: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
 
 packages:
 
@@ -2706,10 +2706,6 @@ packages:
 
   '@adraffy/ens-normalize@1.10.1':
     resolution: {integrity: sha512-96Z2IP3mYmF1Xg2cDm8f1gWGf/HUVedQ3FMifV4kG/PQ4yEP51xDtRAEfhVNt5f/uzpNkZHwWQuUcu6D6K+Ekw==}
-
-  '@ampproject/remapping@2.3.0':
-    resolution: {integrity: sha512-30iZtAPgz+LTIYoeivqYo853f02jBYSd5uGnGpkFV0M3xOt9aN73erkgYAmZU43x4VfqcnLxW9Kpg3R5LC4YYw==}
-    engines: {node: '>=6.0.0'}
 
   '@asamuzakjp/css-color@7.1.9':
     resolution: {integrity: sha512-vZ6JQVq8Ivgz6b/IBlAf90wZviXdluY13cQOPO+nJHbmXwGrPl2GcpqUY7a55/8ZVdfONXpCFMpRijOBCHNlcQ==}
@@ -3832,13 +3828,6 @@ packages:
   '@isaacs/fs-minipass@4.0.1':
     resolution: {integrity: sha512-wgm9Ehl2jpeqP3zw/7mo3kRHFp5MEDhqAdwy1fTGkHAwnkGOVsgpvQhL8B5n1qlb01jV3n/bI0ZfZp5lWA1k4w==}
     engines: {node: '>=18.0.0'}
-
-  '@istanbuljs/schema@0.1.6':
-    resolution: {integrity: sha512-+Sg6GCR/wy1oSmQDFq4LQDAhm3ETKnorxN+y5nbLULOR3P0c14f2Wurzj3/xqPXtasLFfHd5iRFQ7AJt4KH2cw==}
-    engines: {node: '>=8'}
-
-  '@jridgewell/gen-mapping@0.3.13':
-    resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
 
   '@jridgewell/resolve-uri@3.1.2':
     resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
@@ -5176,14 +5165,22 @@ packages:
     resolution: {integrity: sha512-2FFo/Kz2vTnOZDv59Q0s803LHf7KzuQ2EwOYYAtO0zUKJ8pV5CPsVC/IHyFb+Fsxl3R9XWFiX529yhslb4v9cQ==}
     engines: {node: '>=22.0.0'}
 
-  '@vitest/coverage-v8@3.2.7':
-    resolution: {integrity: sha512-NEGWJS2XNu2PfRLQwOO3CTKj1tTETxNBdk454vDxVBhxJYhPaA/eS0nAI0c+1El1P7a60z8+i+ZrQoGESweGKg==}
+  '@vitest/coverage-v8@5.1.0':
+    resolution: {integrity: sha512-OY9aShBQG5KOIw2zCo9fDoCHI9RHliNHJ//nM7m6jGg41Hyke9JOGWmeMlK74xYErsxMoK8mIB3gAeEyFVA7LA==}
     peerDependencies:
-      '@vitest/browser': 3.2.7
-      vitest: 3.2.7
+      '@vitest/browser': 5.1.0
+      vitest: 5.1.0
     peerDependenciesMeta:
       '@vitest/browser':
         optional: true
+
+  '@vitest/istanbul-lib-coverage@2.1.0':
+    resolution: {integrity: sha512-WOjuS+xcjSIy7ruYBQ+9BUcV7XZQ0FyVcbWbWxW9TRx/kLGx5SQaeFRIFDJxjNplb6YsT7SpKo2zuXXUo91OIQ==}
+    engines: {node: '>=22'}
+
+  '@vitest/istanbul-lib-report@2.1.0':
+    resolution: {integrity: sha512-+ZFta25nWtGCOBG9/IET8w1RO5Oawsd6H8Uf6AJ9EA/StFuKVtKAEJEJ6uRt84OH+T4YkI0ASmIHAhRA+0KVxw==}
+    engines: {node: '>=22'}
 
   '@vitest/mocker@5.1.0':
     resolution: {integrity: sha512-5umB9/jlWcqVS6fsrFmv5Gdnpu6wAUio/lEOwAmvB7v+lFo/IW2B9FhAD0p19GCULTgMzLCdUmuCDCnAzWgppQ==}
@@ -5458,8 +5455,8 @@ packages:
     resolution: {integrity: sha512-x1FCFnFifvYDDzTaLII71vG5uvDwgtmDTEVWAxrgeiR8VjMONcCXJx7E+USjDtHlwFmt9MysbqgF9b9Vjr6w+w==}
     engines: {node: '>=4'}
 
-  ast-v8-to-istanbul@0.3.12:
-    resolution: {integrity: sha512-BRRC8VRZY2R4Z4lFIL35MwNXmwVqBityvOIwETtsCSwvjl0IdgFsy9NhdaA6j74nUdtJJlIypeRhpDam19Wq3g==}
+  ast-v8-to-istanbul@1.0.8:
+    resolution: {integrity: sha512-lPdpagk13ANXV+HClJEpCZM7kUsl5XcvgqKzZhaj6Ve1ZFICcY2sGhAN1n1vT0tML6EclT7bfVgTxqL57Gkpow==}
 
   async-function@1.0.0:
     resolution: {integrity: sha512-hsU18Ae8CDTR6Kgu9DYf0EbCr/a5iGL0rytQDobUcdpYOKokk8LEjVphnXkDkgpi0wYVsqrXuP0bZxJaTqdgoA==}
@@ -7198,9 +7195,6 @@ packages:
   html-entities@2.6.0:
     resolution: {integrity: sha512-kig+rMn/QOVRvr7c86gQ8lWXq+Hkv6CbAH1hLu+RG338StTpE8Z0b44SDVaqVu7HGKf27frdmUYEs9hTUX/cLQ==}
 
-  html-escaper@2.0.2:
-    resolution: {integrity: sha512-H2iMtd0I4Mt5eYiapRdIDjp+XzelXQ0tFE4JS7YFwFevXXMmOp9myNrUvCg0D6ws8iqkRPBfKHgbwig1SmlLfg==}
-
   html-to-text@9.0.5:
     resolution: {integrity: sha512-qY60FjREgVZL03vJU6IfMV4GDjGBIoOyvuFdpBDIX9yTlDw0TjxVBQp+P8NvpdIXNJvfWBTNul7fsAQJq2FNpg==}
     engines: {node: '>=14'}
@@ -7590,22 +7584,6 @@ packages:
     resolution: {integrity: sha512-7atWPjhGEIX3JEtMrOYd8TKzboYlq+5sNbdl9POiLYOI14G5HZiQbZP0Xj5EZdrufQVXfJlpTV0hys0CuxwxZw==}
     engines: {node: ^18.17 || >=20.6.1}
 
-  istanbul-lib-coverage@3.2.2:
-    resolution: {integrity: sha512-O8dpsF+r0WV/8MNRKfnmrtCWhuKjxrq2w+jpzBL5UZKTi2LeVWnWOmWRxFlesJONmc+wLAGvKQZEOanko0LFTg==}
-    engines: {node: '>=8'}
-
-  istanbul-lib-report@3.0.1:
-    resolution: {integrity: sha512-GCfE1mtsHGOELCU8e/Z7YWzpmybrx/+dSTfLrvY8qRmaY6zXTKWn6WQIjaAFw069icm6GVMNkgu0NzI4iPZUNw==}
-    engines: {node: '>=10'}
-
-  istanbul-lib-source-maps@5.0.6:
-    resolution: {integrity: sha512-yg2d+Em4KizZC5niWhQaIomgf5WlL4vOOjZ5xGCmF8SnPE/mDWWXgvRExdcpCgh9lLRRa1/fSYp2ymmbJ1pI+A==}
-    engines: {node: '>=10'}
-
-  istanbul-reports@3.2.0:
-    resolution: {integrity: sha512-HGYWWS/ehqTV3xN10i23tkPkpH46MLCIMFNCaaKNavAXTF1RkqxawEPtnjnGZ6XKSInBKkiOA5BKS+aZiY3AvA==}
-    engines: {node: '>=8'}
-
   jackspeak@3.4.3:
     resolution: {integrity: sha512-OGlZQpz2yfahA/Rd1Y8Cd9SIEsqvXkLVoSw/cgwhnhFMDbsQFeZYoJJ7bIZBS9BcamUW96asq/npPWugM+RQBw==}
 
@@ -7931,14 +7909,11 @@ packages:
   magic-bytes.js@1.13.1:
     resolution: {integrity: sha512-x5sn4UX2k5gCWlcfmoFwG4TPie8+dctESyqOBdhB5p6MsgWXdBKGmt9nXPObj/JI50TTL928lc5Yt1WntMn1bw==}
 
-  magic-string@0.30.21:
-    resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
-
   magic-string@1.4.5:
     resolution: {integrity: sha512-oLLC2+YvQUfAa+vxoufE/yc1icb87M9iXIRqAoR/2EhE/8cb3SF/+Gi0c2By1B+5Vz2e2vQtUvHiu1+63Znh+w==}
 
-  magicast@0.3.5:
-    resolution: {integrity: sha512-L0WhttDl+2BOsybvEOLK7fW3UA0OQ0IQ2d6Zl2x/a6vVRs3bAY0ECOSHHeL5jD+SbOpOCUEi0y1DgHEn9Qn1AQ==}
+  magicast@0.5.5:
+    resolution: {integrity: sha512-UicdXN8zQ3JHlxVq+28afMXPr1z7WNY6+7EJnzTdQWkTAlMLF5fNCCKxJHBQwGaNGR11581EiQmQzx73+MvszA==}
 
   make-asynchronous@1.1.0:
     resolution: {integrity: sha512-ayF7iT+44LXdxJLTrTd3TLQpFDDvPCBxXxbv+pMUSuHA5Q8zyAfwkRP6aHHwNVFBUFWtxAHqwNJxF8vMZLAbVg==}
@@ -7947,10 +7922,6 @@ packages:
   make-dir@3.1.0:
     resolution: {integrity: sha512-g3FeP20LNwhALb/6Cz6Dd4F2ngze0jz7tbzrD2wAV+o9FeNHe4rL+yK2md0J/fiSf1sa1ADhXqi5+oVwOM/eGw==}
     engines: {node: '>=8'}
-
-  make-dir@4.0.0:
-    resolution: {integrity: sha512-hXdUTZYIVOt1Ex//jAQi+wTZZpUpwBj/0QsOzqegb3rGMMeJiSEu5xLHnYfBrRV4RH2+OCSOO95Is/7x1WJ4bw==}
-    engines: {node: '>=10'}
 
   make-fetch-happen@13.0.1:
     resolution: {integrity: sha512-cKTUFc/rbKUd/9meOvgrpJ2WrNzymt6jfRDdwg5UCnVzv9dTpEj9JS5m3wtziXVCjluIXyL8pcaukYqezIzZQA==}
@@ -9820,9 +9791,6 @@ packages:
     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
     engines: {node: '>= 0.8'}
 
-  std-env@3.10.0:
-    resolution: {integrity: sha512-5GS12FdOZNliM5mAOxFRg7Ir0pWz8MdpYm6AY6VPkGpbA7ZzmbzNcBJQ0GPvvyWgcY7QAhCgf9Uy89I03faLkg==}
-
   std-env@4.3.0:
     resolution: {integrity: sha512-OtU/EgQ1kIm5KwqQpBC6ZEMXrZRui11w8zgfTWp8cdO9B8OaPsbA8bTHO2P+HNo1VlUTGMVBwPhydu6poeXiag==}
 
@@ -10036,10 +10004,6 @@ packages:
     resolution: {integrity: sha512-d79HhZya5Djd7am0q+W4RTsSU+D/aJzM+4Y4AGJGuGlgM2L6sx5ZvOYTmZjqPhrDrV6xJTtRSm1JCLj6V6LHLQ==}
     engines: {node: '>=14.16'}
 
-  test-exclude@7.0.2:
-    resolution: {integrity: sha512-u9E6A+ZDYdp7a4WnarkXPZOx8Ilz46+kby6p1yZ8zsGTz9gYa6FIS7lj2oezzNKmtdyyJNNmmXDppga5GB7kSw==}
-    engines: {node: '>=18'}
-
   text-decoder@1.2.7:
     resolution: {integrity: sha512-vlLytXkeP4xvEq2otHeJfSQIRyWxo/oZGEbXrtEEF9Hnmrdly59sUbzZ/QgyWuLYHctCHxFF4tRQZNQ9k60ExQ==}
 
@@ -10085,8 +10049,8 @@ packages:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
 
-  tinyrainbow@2.0.0:
-    resolution: {integrity: sha512-op4nsTR47R6p0vMUUoYl/a+ljLFVtlfaXkLQmqfLR1qHma1h/ysYk4hEXZ880bf2CYgTskvTa/e196Vd5dDQXw==}
+  tinyrainbow@3.2.0:
+    resolution: {integrity: sha512-LgO3D9yZJjApUiuUfl9iFAwrtaX4+lok3wJIqttGoKCHlWUqHqbQpnxCf82L8FjgKsh4iGo78hqJwgL8F6To2A==}
     engines: {node: '>=14.0.0'}
 
   tlds@1.261.0:
@@ -10912,11 +10876,6 @@ snapshots:
   '@adobe/css-tools@4.5.0': {}
 
   '@adraffy/ens-normalize@1.10.1': {}
-
-  '@ampproject/remapping@2.3.0':
-    dependencies:
-      '@jridgewell/gen-mapping': 0.3.13
-      '@jridgewell/trace-mapping': 0.3.31
 
   '@asamuzakjp/css-color@7.1.9':
     dependencies:
@@ -12266,13 +12225,6 @@ snapshots:
       minipass: 7.1.3
     optional: true
 
-  '@istanbuljs/schema@0.1.6': {}
-
-  '@jridgewell/gen-mapping@0.3.13':
-    dependencies:
-      '@jridgewell/sourcemap-codec': 1.6.0
-      '@jridgewell/trace-mapping': 0.3.31
-
   '@jridgewell/resolve-uri@3.1.2': {}
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
@@ -13386,7 +13338,7 @@ snapshots:
       picocolors: 1.1.1
       pretty-format: 27.5.1
 
-  '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.5)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.5)(sass@1.107.1)(yaml@2.9.1)))':
+  '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@5.1.0)':
     dependencies:
       '@adobe/css-tools': 4.5.0
       '@testing-library/dom': 10.4.2
@@ -13396,7 +13348,7 @@ snapshots:
       picocolors: 1.1.1
       redent: 3.0.0
     optionalDependencies:
-      vitest: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.5)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.5)(sass@1.107.1)(yaml@2.9.1))
+      vitest: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.5)(sass@1.107.1)(yaml@2.9.1))
 
   '@testing-library/react@16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
@@ -13799,24 +13751,23 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@vitest/coverage-v8@3.2.7(vitest@5.1.0)':
+  '@vitest/coverage-v8@5.1.0(vitest@5.1.0)':
     dependencies:
-      '@ampproject/remapping': 2.3.0
       '@bcoe/v8-coverage': 1.0.2
-      ast-v8-to-istanbul: 0.3.12
-      debug: 4.4.3
-      istanbul-lib-coverage: 3.2.2
-      istanbul-lib-report: 3.0.1
-      istanbul-lib-source-maps: 5.0.6
-      istanbul-reports: 3.2.0
-      magic-string: 0.30.21
-      magicast: 0.3.5
-      std-env: 3.10.0
-      test-exclude: 7.0.2
-      tinyrainbow: 2.0.0
-      vitest: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
-    transitivePeerDependencies:
-      - supports-color
+      '@vitest/istanbul-lib-coverage': 2.1.0
+      '@vitest/istanbul-lib-report': 2.1.0
+      ast-v8-to-istanbul: 1.0.8
+      magicast: 0.5.5
+      obug: 3.0.0
+      std-env: 4.3.0
+      tinyrainbow: 3.2.0
+      vitest: 5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
+
+  '@vitest/istanbul-lib-coverage@2.1.0': {}
+
+  '@vitest/istanbul-lib-report@2.1.0':
+    dependencies:
+      '@vitest/istanbul-lib-coverage': 2.1.0
 
   '@vitest/mocker@5.1.0(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))':
     dependencies:
@@ -14164,7 +14115,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  ast-v8-to-istanbul@0.3.12:
+  ast-v8-to-istanbul@1.0.8:
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       estree-walker: 3.0.3
@@ -16350,8 +16301,6 @@ snapshots:
 
   html-entities@2.6.0: {}
 
-  html-escaper@2.0.2: {}
-
   html-to-text@9.0.5:
     dependencies:
       '@selderee/plugin-htmlparser2': 0.11.0
@@ -16747,27 +16696,6 @@ snapshots:
       lodash.isstring: 4.0.1
       lodash.uniqby: 4.7.0
 
-  istanbul-lib-coverage@3.2.2: {}
-
-  istanbul-lib-report@3.0.1:
-    dependencies:
-      istanbul-lib-coverage: 3.2.2
-      make-dir: 4.0.0
-      supports-color: 7.2.0
-
-  istanbul-lib-source-maps@5.0.6:
-    dependencies:
-      '@jridgewell/trace-mapping': 0.3.31
-      debug: 4.4.3
-      istanbul-lib-coverage: 3.2.2
-    transitivePeerDependencies:
-      - supports-color
-
-  istanbul-reports@3.2.0:
-    dependencies:
-      html-escaper: 2.0.2
-      istanbul-lib-report: 3.0.1
-
   jackspeak@3.4.3:
     dependencies:
       '@isaacs/cliui': 8.0.2
@@ -17111,15 +17039,11 @@ snapshots:
 
   magic-bytes.js@1.13.1: {}
 
-  magic-string@0.30.21:
-    dependencies:
-      '@jridgewell/sourcemap-codec': 1.6.0
-
   magic-string@1.4.5:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
 
-  magicast@0.3.5:
+  magicast@0.5.5:
     dependencies:
       '@babel/parser': 7.29.13
       '@babel/types': 7.29.11
@@ -17134,10 +17058,6 @@ snapshots:
   make-dir@3.1.0:
     dependencies:
       semver: 6.3.1
-
-  make-dir@4.0.0:
-    dependencies:
-      semver: 7.8.6
 
   make-fetch-happen@13.0.1:
     dependencies:
@@ -19540,8 +19460,6 @@ snapshots:
 
   statuses@2.0.2: {}
 
-  std-env@3.10.0: {}
-
   std-env@4.3.0: {}
 
   stealthy-require@1.1.1: {}
@@ -19826,12 +19744,6 @@ snapshots:
       type-fest: 2.19.0
       unique-string: 3.0.0
 
-  test-exclude@7.0.2:
-    dependencies:
-      '@istanbuljs/schema': 0.1.6
-      glob: 10.5.0
-      minimatch: 10.2.6
-
   text-decoder@1.2.7:
     dependencies:
       b4a: 1.9.0
@@ -19878,7 +19790,7 @@ snapshots:
       fdir: 6.5.0(picomatch@4.0.7)
       picomatch: 4.0.7
 
-  tinyrainbow@2.0.0: {}
+  tinyrainbow@3.2.0: {}
 
   tlds@1.261.0: {}
 
@@ -20344,7 +20256,7 @@ snapshots:
       sass: 1.107.1
       yaml: 2.9.1
 
-  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1)):
+  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.32)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.1.0(vite@7.3.7(@types/node@20.19.32)(sass@1.107.1)(yaml@2.9.1))
@@ -20363,12 +20275,12 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.10.0
       '@types/node': 20.19.32
-      '@vitest/coverage-v8': 3.2.7(vitest@5.1.0)
+      '@vitest/coverage-v8': 5.1.0(vitest@5.1.0)
       jsdom: 30.1.3(@noble/hashes@2.0.1)
     transitivePeerDependencies:
       - msw
 
-  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.43)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.43)(sass@1.107.1)(yaml@2.9.1)):
+  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@20.19.43)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@20.19.43)(sass@1.107.1)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.1.0(vite@7.3.7(@types/node@20.19.43)(sass@1.107.1)(yaml@2.9.1))
@@ -20387,11 +20299,12 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.10.0
       '@types/node': 20.19.43
+      '@vitest/coverage-v8': 5.1.0(vitest@5.1.0)
       jsdom: 30.1.3(@noble/hashes@2.0.1)
     transitivePeerDependencies:
       - msw
 
-  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.19.17)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(sass@1.107.1)(yaml@2.9.1)):
+  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.19.17)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.19.17)(sass@1.107.1)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.1.0(vite@7.3.7(@types/node@22.19.17)(sass@1.107.1)(yaml@2.9.1))
@@ -20410,11 +20323,12 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.10.0
       '@types/node': 22.19.17
+      '@vitest/coverage-v8': 5.1.0(vitest@5.1.0)
       jsdom: 30.1.3(@noble/hashes@2.0.1)
     transitivePeerDependencies:
       - msw
 
-  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.1)(@vitest/coverage-v8@3.2.7)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.1)(sass@1.107.1)(yaml@2.9.1)):
+  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.1)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.1)(sass@1.107.1)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.1.0(vite@7.3.7(@types/node@22.20.1)(sass@1.107.1)(yaml@2.9.1))
@@ -20433,12 +20347,12 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.10.0
       '@types/node': 22.20.1
-      '@vitest/coverage-v8': 3.2.7(vitest@5.1.0)
+      '@vitest/coverage-v8': 5.1.0(vitest@5.1.0)
       jsdom: 30.1.3(@noble/hashes@2.0.1)
     transitivePeerDependencies:
       - msw
 
-  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.5)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.5)(sass@1.107.1)(yaml@2.9.1)):
+  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@22.20.5)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@22.20.5)(sass@1.107.1)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.1.0(vite@7.3.7(@types/node@22.20.5)(sass@1.107.1)(yaml@2.9.1))
@@ -20457,11 +20371,12 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.10.0
       '@types/node': 22.20.5
+      '@vitest/coverage-v8': 5.1.0(vitest@5.1.0)
       jsdom: 30.1.3(@noble/hashes@2.0.1)
     transitivePeerDependencies:
       - msw
 
-  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1)):
+  vitest@5.1.0(@opentelemetry/api@1.10.0)(@types/node@26.6.6)(@vitest/coverage-v8@5.1.0)(jsdom@30.1.3(@noble/hashes@2.0.1))(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.1.0(vite@7.3.7(@types/node@26.6.6)(sass@1.107.1)(yaml@2.9.1))
@@ -20480,6 +20395,7 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.10.0
       '@types/node': 26.6.6
+      '@vitest/coverage-v8': 5.1.0(vitest@5.1.0)
       jsdom: 30.1.3(@noble/hashes@2.0.1)
     transitivePeerDependencies:
       - msw
