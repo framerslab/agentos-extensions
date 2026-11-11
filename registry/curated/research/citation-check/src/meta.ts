@@ -1,12 +1,14 @@
 /**
  * @file meta.ts
- * @description What a page says about itself in its markup as served: its `<title>`, its `<meta>` tags, its links and
- * anchors, and its JSON-LD. One pass over the markup, in document order, finds them: a comment is passed over whole
- * (so a tag or a JSON-LD block inside one is not the page's), the content of a script, a style, a template, a
- * `noscript`, a `textarea` and the title is not read for tags (so a comment opener or a tag written inside one is
- * theirs), and a tag runs to the first `>` outside a quoted attribute value. Each step of the pass starts where the one
- * before it ended, so the time grows with the page alone, however its tags are left open. A value a script writes
- * later is not seen. Character references are read with the `entities` package's HTML decoder.
+ * @description What a page says about itself in its markup as served: its `<title>`, its `<meta>` tags, the links and
+ * anchors a licence is read from, and its JSON-LD. One pass over the markup, in document order, finds them: a comment
+ * is passed over whole (so a tag or a JSON-LD block inside one is not the page's), the content of a script, a style, a
+ * template, a `noscript`, a `textarea` and the title is not read for tags (so a comment opener or a tag written inside
+ * one is theirs), and a tag runs to the first `>` outside a quoted attribute value. Each step of the pass starts where
+ * the one before it ended, so the time grows with the page alone, however its tags are left open. Of the links and
+ * anchors it keeps those a licence is read from, at most 1,000 of each kind, and reads the text of a `rel="license"`
+ * anchor alone, so what it holds does not grow with the page. A value a script writes later is not seen. Character
+ * references are read with the `entities` package's HTML decoder.
  *
  * @module agentos/extensions/research/citation-check/meta
  */
@@ -24,6 +26,8 @@ const ANCHOR_TEXT_MAX = 2_000;
 /** The most JSON-LD blocks read from one page, and the most nodes walked in them. */
 const LD_BLOCKS = 20;
 const LD_NODES = 500;
+/** The most `<link rel="license">`s one page keeps, and the most `<a>`s of each kind a licence is read from. */
+const LICENCE_ELEMENTS_MAX = 1_000;
 /** Elements whose content is not read for tags. */
 const OPAQUE: ReadonlySet<string> = new Set(['script', 'style', 'template', 'noscript', 'textarea', 'title']);
 
@@ -39,9 +43,13 @@ export interface MarkupScan {
   title: string | null;
   /** The first `content` of each `<meta>` by its `property`, else its `name`, else its `itemprop`, in lower case. */
   metas: Map<string, string>;
-  /** Each `<link>`'s attributes, in document order. */
+  /** Each `<link>` whose `rel` names `license`, its attributes, in document order; at most 1,000. */
   links: Attributes[];
-  /** Each `<a>`'s attributes and the start of its content as written, in document order. */
+  /**
+   * Each `<a>` a licence is read from, in document order: one whose `rel` names `license`, with the start of its
+   * content as written, and one whose address, resolved against the page's own, is on creativecommons.org, with no
+   * content; at most 1,000 of each kind.
+   */
   anchors: Array<{ attributes: Attributes; text: string }>;
   /** The content of each JSON-LD script, in document order. */
   jsonLd: string[];
@@ -109,9 +117,22 @@ function closingTag(html: string, name: string, from: number): { start: number; 
   return match === null ? null : { start: match.index, end: match.index + match[0].length };
 }
 
-/** One pass over a page's markup; see the module's description. */
-export function scanMarkup(html: string): MarkupScan {
+/** Whether an address as an attribute writes it, resolved against the page's own, is an http or https page on creativecommons.org. */
+function onCreativeCommons(href: string | undefined, base: string): boolean {
+  const url = resolveHttp(href, base);
+  return url !== null && new URL(url).hostname.toLowerCase().replace(/^www\./u, '') === 'creativecommons.org';
+}
+
+/**
+ * One pass over a page's markup; see the module's description.
+ *
+ * @param html - The page's markup as served.
+ * @param baseUrl - The page's own address, which an anchor's address is resolved against.
+ */
+export function scanMarkup(html: string, baseUrl: string): MarkupScan {
   const scan: MarkupScan = { title: null, metas: new Map(), links: [], anchors: [], jsonLd: [] };
+  let licenceAnchors = 0;
+  let deedAnchors = 0;
   let at = 0;
   while (at < html.length) {
     const open = html.indexOf('<', at);
@@ -140,12 +161,25 @@ export function scanMarkup(html: string): MarkupScan {
       const key = (attributes.get('property') ?? attributes.get('name') ?? attributes.get('itemprop'))?.trim().toLowerCase();
       const content = attributes.get('content');
       if (key !== undefined && key !== '' && content !== undefined && !scan.metas.has(key)) scan.metas.set(key, content);
-    } else if (name === 'link') {
-      scan.links.push(attributesOf(html.slice(start, end)));
-    } else if (name === 'a') {
-      const tail = html.slice(at, at + ANCHOR_TEXT_MAX);
-      const close = tail.search(/<\/a[\s>]/iu);
-      scan.anchors.push({ attributes: attributesOf(html.slice(start, end)), text: close === -1 ? tail : tail.slice(0, close) });
+    } else if (name === 'link' || name === 'a') {
+      const source = html.slice(start, end);
+      // A tag with no `=` gives no `rel` and no address, so it names no licence.
+      if (!source.includes('=')) continue;
+      const attributes = attributesOf(source);
+      const marked = relNames(attributes, 'license');
+      if (name === 'link') {
+        if (marked && scan.links.length < LICENCE_ELEMENTS_MAX) scan.links.push(attributes);
+      } else if (marked) {
+        if (licenceAnchors < LICENCE_ELEMENTS_MAX) {
+          licenceAnchors += 1;
+          const tail = html.slice(at, at + ANCHOR_TEXT_MAX);
+          const close = tail.search(/<\/a[\s>]/iu);
+          scan.anchors.push({ attributes, text: close === -1 ? tail : tail.slice(0, close) });
+        }
+      } else if (deedAnchors < LICENCE_ELEMENTS_MAX && onCreativeCommons(attributes.get('href'), baseUrl)) {
+        deedAnchors += 1;
+        scan.anchors.push({ attributes, text: '' });
+      }
     } else if (OPAQUE.has(name)) {
       const close = closingTag(html, name, at);
       const content = html.slice(at, close === null ? html.length : close.start);

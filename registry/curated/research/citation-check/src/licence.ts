@@ -6,7 +6,8 @@
  * `creativecommons.org/publicdomain/mark/<version>`), wherever it stands, a footer's included. A deed is named from its address (`CC BY-SA 4.0`, `CC BY 3.0 US`,
  * `CC0 1.0`); another address is named by the anchor's text, the link's `title` or the JSON-LD `name`, else by the
  * address itself. The address is the one the page gives, resolved against the page's own. A licence written in prose
- * with no address ("Text licensed under CC BY 4.0") is not read.
+ * with no address ("Text licensed under CC BY 4.0") is not read. The first 1,000 of each kind are read: links marked
+ * `rel="license"`, anchors marked so, and anchors to Creative Commons' site.
  *
  * @module agentos/extensions/research/citation-check/licence
  */
@@ -77,14 +78,14 @@ function jsonLdLicence(value: unknown, base: string): SourceLicence | null {
  * @param baseUrl - The page's own address, after redirects, which relative addresses resolve against.
  */
 export function readLicence(html: string, baseUrl: string): SourceLicence | null {
-  const scan = scanMarkup(html);
+  const scan = scanMarkup(html, baseUrl);
   return licenceOf(scan, jsonLdNodes(scan.jsonLd), baseUrl);
 }
 
 /**
  * {@link readLicence} over markup already read: one pass's links and anchors, and the page's JSON-LD nodes.
  *
- * @param scan - The pass over the markup, from `scanMarkup`.
+ * @param scan - The pass over the markup, from `scanMarkup` with the same address.
  * @param nodes - The page's JSON-LD nodes, from `jsonLdNodes`.
  * @param baseUrl - The page's own address.
  */

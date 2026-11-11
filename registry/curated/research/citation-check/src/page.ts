@@ -131,7 +131,8 @@ function hasRules(rules: TransportRules | undefined): rules is TransportRules {
  * Applies the rules to one address before it is requested: the host's rule first, then the origin's robots.txt,
  * read through the transport with the host's rule on its own hops.
  *
- * @throws {PageRefusal} `refused` with `host` or `robots`.
+ * @throws {PageRefusal} `refused` with `host` or `robots`, or with the egress policy's reason when the policy refuses
+ * the origin's robots.txt.
  */
 async function checkAddress(url: string, rules: TransportRules, transport: Transport, signal: AbortSignal): Promise<void> {
   if (rules.allowUrl !== undefined) {
@@ -199,8 +200,21 @@ function fetchAnswer(response: Response, finalUrl: string): TransportAnswer {
 }
 
 /**
+ * The address a redirect names, resolved against the address that answered. A target that is not http or https ends
+ * the read before any rule reads it, as `fetch` itself ends such a redirect.
+ *
+ * @throws {PageRefusal} `refused` with `scheme`, for a target such as a `data:` address.
+ */
+function redirectTarget(location: string, from: string): string {
+  const target = new URL(location, from);
+  if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new PageRefusal('refused', 'scheme');
+  return target.href;
+}
+
+/**
  * Requests through a `fetch`, the body streamed up to the cap. With no rules, `fetch` follows the redirects itself;
- * given rules, up to five redirects are followed one at a time, each target checked before its request.
+ * given rules, up to five redirects are followed one at a time, each target checked before its request and one that
+ * is not http or https refused (`scheme`).
  */
 export function fetchTransport(fetchFn: typeof globalThis.fetch, userAgent?: string): Transport {
   const transport: Transport = async (url, signal, rules) => {
@@ -216,7 +230,7 @@ export function fetchTransport(fetchFn: typeof globalThis.fetch, userAgent?: str
       if (response.status >= 300 && response.status < 400 && location !== null) {
         await response.body?.cancel().catch(() => undefined);
         if (hop >= MAX_REDIRECTS) throw new PageRefusal('redirects');
-        current = new URL(location, current).href;
+        current = redirectTarget(location, current);
         continue;
       }
       return fetchAnswer(response, current);
@@ -267,8 +281,8 @@ function egressFailure(error: unknown): PageRefusal | null {
 /**
  * Requests through AgentOS's checked egress (`@framers/agentos/safety/egress`, from 0.13.120): each address, and each
  * address a redirect names, is checked against the policy before a byte is sent, its connection pinned to the address
- * checked, and the answer bounded by the deadline and the size cap. Up to five redirects are followed; given rules,
- * each address is checked against them before its request too.
+ * checked, and the answer bounded by the deadline and the size cap. Up to five redirects are followed, a target that is
+ * not http or https refused (`scheme`); given rules, each address is checked against them before its request too.
  *
  * @throws {Error} When the installed AgentOS has no checked egress.
  */
@@ -293,7 +307,7 @@ export async function egressTransport(profile: EgressProfile, bounds: { timeoutM
       const location = headerOf(headers, 'location');
       if (answer.status >= 300 && answer.status < 400 && location !== null) {
         if (hop >= MAX_REDIRECTS) throw new PageRefusal('redirects');
-        current = new URL(location, current).href;
+        current = redirectTarget(location, current);
         continue;
       }
       const body = answer.status >= 200 && answer.status < 300 ? decodedBody(answer.body, headerOf(headers, 'content-encoding'), bounds.maxBytes) : answer.body;
@@ -426,7 +440,8 @@ export interface PageReaderOptions {
   allowUrl?: (url: string) => boolean;
   /**
    * robots.txt by RFC 9309, read before the first address and before every redirect target: a disallow ends the page as
-   * `refused` with `detail: 'robots'`, the address never requested. None is read when left out.
+   * `refused` with `detail: 'robots'`, the address never requested; a robots.txt the egress policy refuses ends it with
+   * the policy's reason, as the same read with no robots rule does. None is read when left out.
    */
   robots?: RobotsRule;
   /**
@@ -467,7 +482,7 @@ interface PageMeta {
 /** The title, the publisher's name, the page's own date and its licence, from its markup (null for plain text) and its `Last-Modified`. */
 function pageMeta(html: string | null, finalUrl: string, lastModified: string | null): PageMeta {
   if (html === null) return { title: null, publisher: null, pageDate: pageDateOf(new Map(), [], lastModified), licence: null };
-  const scan = scanMarkup(html);
+  const scan = scanMarkup(html, finalUrl);
   const nodes = jsonLdNodes(scan.jsonLd);
   return { title: pageTitle(scan), publisher: publisherOf(scan.metas, nodes), pageDate: pageDateOf(scan.metas, nodes, lastModified), licence: licenceOf(scan, nodes, finalUrl) };
 }

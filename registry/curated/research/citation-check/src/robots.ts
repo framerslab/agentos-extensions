@@ -7,8 +7,10 @@
  * matching rule decides, an `Allow` over a `Disallow` of the same length, `*` matching any run of characters and a
  * final `$` the end of the path and query. A 400-range answer allows every page (2.3.1.3); a 500-range answer, a
  * failed request or a passed deadline refuses every page (2.3.1.4); a file past five redirects is taken as
- * unavailable (2.3.1.2). An origin's answer is kept for `cacheMs` per transport and parsing limit, save one the
- * host's rule decided, since the next read may be under another rule.
+ * unavailable (2.3.1.2). A refusal of the transport's egress policy, for the file's address or a hop of it, is the
+ * policy's answer and not the site's: it is thrown, so the page ends with the policy's reason. An origin's answer is
+ * kept for `cacheMs` per transport and parsing limit, save one the host's rule decided, since the next read may be
+ * under another rule.
  *
  * @module agentos/extensions/research/citation-check/robots
  */
@@ -221,8 +223,14 @@ async function fetchRobots(robotsUrl: string, options: ReadRobotsOptions): Promi
     if (options.signal?.aborted) throw options.signal.reason;
     const refusal = refusalOf(error);
     if (refusal?.failure === 'redirects') return { file: ALLOW_ALL, keep: true };
-    // The host's rule refused a hop: the rule is the caller's, so the next read, under its own rule, asks again.
-    return { file: DISALLOW_ALL, keep: !(refusal?.failure === 'refused' && refusal.detail === 'host') };
+    if (refusal?.failure === 'refused') {
+      // The host's rule refused a hop: the rule is the caller's, so the next read, under its own rule, asks again.
+      if (refusal.detail === 'host') return { file: DISALLOW_ALL, keep: false };
+      // The egress policy refused the file's address or a hop of it before a byte was sent: the policy decided, not the
+      // site, so its refusal ends the page with its own reason, and nothing is kept for it.
+      throw error;
+    }
+    return { file: DISALLOW_ALL, keep: true };
   }
   try {
     if (answer.status >= 200 && answer.status < 300) {
@@ -249,7 +257,9 @@ async function fetchRobots(robotsUrl: string, options: ReadRobotsOptions): Promi
  *
  * @param url - Any address of the origin.
  * @param options - The transport, the rule, the host rule for the file's hops, the caller's cancellation.
- * @throws The caller's cancellation reason, when `signal` aborts; a `TypeError` for an address that does not parse.
+ * @throws The caller's cancellation reason, when `signal` aborts; a `TypeError` for an address that does not parse;
+ * the transport's `PageRefusal` (`refused`, with a detail other than `host`) when its egress policy refuses the file's
+ * address or a hop of it, which is kept for no later read.
  */
 export async function readRobots(url: string, options: ReadRobotsOptions): Promise<RobotsFile> {
   const origin = new URL(url).origin;
