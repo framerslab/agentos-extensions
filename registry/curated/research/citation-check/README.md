@@ -162,6 +162,26 @@ robots.txt is the file at the address's origin, read through the same transport 
 
 `fallback`, a `PageFallbackReader` with `read(url, { signal })` answering text blocks or null, reads a page that answered 200 with no text a reader sees, such as one a script draws. It is called once, for the page's address after its redirects, with the caller's signal, and keeps its own deadline; its blocks are held to `textBudget`, and the document keeps the page's own title, licence, publisher and date. With no fallback, or when it answers null or fails, the page is `unreadable` with `failure: 'no_text'`. A fallback that requests the page itself, such as a rendering service, does so outside the host's rule and robots.txt: the reader asks it only for an address its own request reached under them.
 
+#### Firecrawl as the fallback
+
+`FirecrawlPageReader` is a `PageFallbackReader` over [Firecrawl's scrape endpoint](https://docs.firecrawl.dev/api-reference/endpoint/scrape), with the host's key:
+
+```ts
+import { FirecrawlPageReader, readPage } from '@framers/agentos-ext-citation-check';
+
+const fallback = new FirecrawlPageReader({
+  apiKey: process.env.FIRECRAWL_API_KEY!, // sent in the Authorization header, never logged or shown
+  timeoutMs: 5_000,
+  maxBytes: 2_000_000,
+  textBudget: 300_000,
+});
+const page = await readPage('https://example.org/app', { transport, scraper: null, timeoutMs: 5_000, maxBytes: 2_000_000, textBudget: 300_000, now: Date.now, fallback });
+```
+
+Each page it reads costs one request, `POST https://api.firecrawl.dev/v2/scrape` (`FIRECRAWL_SCRAPE_URL`, or `url` when given), whose body is the page's address with the format and the deadline asked for, `{ url, formats: ['html'], onlyMainContent: false, maxAge: 0, timeout }`, and nothing else of the page or of the search that found it: no title, phrase or sentence. Firecrawl counts it as one credit ([pricing](https://www.firecrawl.dev/pricing)), so the reader runs only when the reader's own request found no text. `maxAge: 0` asks for a fresh scrape: Firecrawl answers a cached copy up to two days old when it is left out, and the page's `readAt` is the reader's clock. The key goes in the `Authorization` header to that endpoint alone: `url` is an https address, or plain http to the loopback address for a stand-in in a test, a redirect of the endpoint is not followed, and the key stays out of the reader's JSON, its inspected form and every error it throws. The page's cleaned HTML is read the way the reader reads its own fetches, the whole page with its tables and notes, and its text is held to `textBudget`.
+
+The request and its answer's body share one deadline, `timeoutMs`; Firecrawl is asked to stop its own work at the same bound, held to the 1,000 to 300,000 milliseconds it takes. An answer over `maxBytes`, by its declared length or as it streams, is refused. `read` answers null for an error status (402 for no credits, 429, 500 and the rest), an answer that is not a scrape's, a failed scrape, a page that answered an error status to Firecrawl, a page Firecrawl ended on at another origin than the address asked for (its `metadata.url`, where Firecrawl's own redirects ended), an answer with no text, and the deadline; the page is then `unreadable` with `failure: 'no_text'`. The caller's cancellation ends the request and is thrown. `fetchFn` sends the request through a `fetch` of the host's; the request and its body are raced against the deadline and the caller's signal, so a `fetch` that does not watch the signal, or a body that stalls after its headers, still ends with them, and a body is cancelled without waiting for the cancel to settle.
+
 ### The open web as a public source
 
 `WebPageSourceProvider` is a public-sources `PublicSourceProvider` over the open web. The host gives the search, so the pack calls no search service of its own:
@@ -189,7 +209,7 @@ if (found.kind === 'hits') {
 
 `search(phrase, { limit, signal, onSend })` throws a cancellation that came first, then awaits `onSend` once and runs the host's search, and answers its addresses as hits: `key` the address without its fragment, `title` the address, each page once, at most `limit` (3 when left out), an address that is not http or https passed over. It answers `limited` when `onSend` throws a limiter's refusal, and `failed` when `onSend` throws anything else or the search throws.
 
-`read(hit, { signal })` reads the page and answers `{ kind: 'document', document }`, with `site` the host without a leading "www.", `revision` null, `readAt` the clock's, and the title, licence, publisher and date as read; or `{ kind: 'skipped', status }` for a page that was not read, with its HTTP status when one came. `allowUrl(url, phrase)` is called on every address and redirect target with the phrase whose search answered the hit read, held by the hit object itself, so pass the hits as `search` answered them: a hit object this provider's search did not answer, a copy of one included, reads with the empty string. robots.txt is read with `robots`, or with `DEFAULT_ROBOTS` (the `*` group, 2,000 ms, 512,000 bytes, ten minutes kept) when left out, and not at all with `robots: null`. Pages go through AgentOS's checked egress (`egress`, `hosted` by default) unless `transport` is given, with no scraper fallback, since the scraper's requests bypass both; `fallback` reads a page with no text. The provider queues nothing: the host reads at most as many pages at once as it calls `read` for. The caller's own cancellation is thrown.
+`read(hit, { signal })` reads the page and answers `{ kind: 'document', document }`, with `site` the host without a leading "www.", `revision` null, `readAt` the clock's, and the title, licence, publisher and date as read; or `{ kind: 'skipped', status }` for a page that was not read, with its HTTP status when one came. `allowUrl(url, phrase)` is called on every address and redirect target with the phrase whose search answered the hit read, held by the hit object itself, so pass the hits as `search` answered them: a hit object this provider's search did not answer, a copy of one included, reads with the empty string. robots.txt is read with `robots`, or with `DEFAULT_ROBOTS` (the `*` group, 2,000 ms, 512,000 bytes, ten minutes kept) when left out, and not at all with `robots: null`. Pages go through AgentOS's checked egress (`egress`, `hosted` by default) unless `transport` is given, with no scraper fallback, since the scraper's requests bypass both; `fallback`, such as `FirecrawlPageReader`, reads a page with no text. The provider queues nothing: the host reads at most as many pages at once as it calls `read` for. The caller's own cancellation is thrown.
 
 ### Grading with embeddings
 
@@ -233,7 +253,8 @@ The tool reads pages through AgentOS's checked egress with the hosted policy, so
 | `readRobots(url, options)`, `robotsAllows(file, token, url)`, `parseRobots(text)`, `ROBOTS_PARSING_FLOOR` | robots.txt read through a transport, its answer for an address, its parser, RFC 9309's parsing floor |
 | `readLicence(html, baseUrl)` | The licence a page's markup states |
 | `WebPageSourceProvider`, `DEFAULT_ROBOTS` | The open web as a public source over the host's search, and its robots.txt rule when none is given |
-| `CitedClaim`, `CitationCheck`, `CitationVerdict`, `CitationPassage`, `PageStatus`, `PageFailure`, `CitationReport`, `CitationSummary`, `CitationCheckOptions`, `CitationLogger`, `EmbedFn`, `NliFn`, `PageReaderOptions`, `PageRead`, `PageFallbackReader`, `Transport`, `TransportAnswer`, `TransportRules`, `RobotsRule`, `RobotsFile`, `WebPageSourceOptions` and the rest | The types |
+| `FirecrawlPageReader`, `FIRECRAWL_SCRAPE_URL` | The reader of a page with no text through Firecrawl's scrape endpoint, and that endpoint |
+| `CitedClaim`, `CitationCheck`, `CitationVerdict`, `CitationPassage`, `PageStatus`, `PageFailure`, `CitationReport`, `CitationSummary`, `CitationCheckOptions`, `CitationLogger`, `EmbedFn`, `NliFn`, `PageReaderOptions`, `PageRead`, `PageFallbackReader`, `FirecrawlPageReaderOptions`, `Transport`, `TransportAnswer`, `TransportRules`, `RobotsRule`, `RobotsFile`, `WebPageSourceOptions` and the rest | The types |
 
 ## License
 
