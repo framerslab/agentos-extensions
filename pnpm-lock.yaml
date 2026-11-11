@@ -1059,6 +1059,24 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/debug@4.1.13)(@types/node@20.19.32)(jsdom@30.1.3(@noble/hashes@2.0.1))(sass@1.107.1)(yaml@2.9.1)
 
+  registry/curated/integrations/linear:
+    devDependencies:
+      '@framers/agentos':
+        specifier: ^0.15.81
+        version: 0.15.95(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(express@5.3.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@6.0.3)(utf-8-validate@5.0.10)
+      '@framers/agentos-ext-account-sources':
+        specifier: workspace:^
+        version: link:../../research/account-sources
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.43
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@20.19.43)(jsdom@30.1.3(@noble/hashes@2.0.1))(sass@1.107.1)(yaml@2.9.1)
+
   registry/curated/integrations/notion:
     devDependencies:
       '@framers/agentos':
@@ -1487,6 +1505,30 @@ importers:
       vitest:
         specifier: ^3.2.7
         version: 3.2.7(@types/debug@4.1.13)(@types/node@20.19.32)(jsdom@30.1.3(@noble/hashes@2.0.1))(sass@1.107.1)(yaml@2.9.1)
+
+  registry/curated/productivity/slack-source:
+    devDependencies:
+      '@framers/agentos':
+        specifier: ^0.15.81
+        version: 0.15.95(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(express@5.3.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@6.0.3)(utf-8-validate@5.0.10)
+      '@framers/agentos-ext-account-sources':
+        specifier: workspace:^
+        version: link:../../research/account-sources
+      '@framers/sql-storage-adapter':
+        specifier: ^0.9.3
+        version: 0.9.4(@aws-sdk/client-s3@3.984.0)
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^3.2.7
+        version: 3.2.7(vitest@3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(jsdom@30.1.3(@noble/hashes@2.0.1))(sass@1.107.1)(yaml@2.9.1))
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(jsdom@30.1.3(@noble/hashes@2.0.1))(sass@1.107.1)(yaml@2.9.1)
 
   registry/curated/productivity/widget-generator:
     devDependencies:
@@ -1997,6 +2039,9 @@ importers:
         specifier: ^2.0.2
         version: 2.0.2
     devDependencies:
+      '@framers/agentos-ext-triggers':
+        specifier: workspace:^
+        version: link:../triggers
       '@framers/sql-storage-adapter':
         specifier: ^0.9.3
         version: 0.9.4(@aws-sdk/client-s3@3.984.0)
@@ -2057,6 +2102,21 @@ importers:
       zod:
         specifier: 4.6.7
         version: 4.6.7
+
+  registry/curated/system/triggers:
+    devDependencies:
+      '@framers/sql-storage-adapter':
+        specifier: ^0.9.3
+        version: 0.9.4(@aws-sdk/client-s3@3.984.0)
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.20.1)(jsdom@30.1.3(@noble/hashes@2.0.1))(sass@1.107.1)(yaml@2.9.1)
 
   registry/curated/tools/agent-delegation:
     devDependencies:
@@ -4549,12 +4609,16 @@ packages:
   '@smithy/core@3.36.0':
     resolution: {integrity: sha512-3hJiwG1F5t1SoXqp/yOCmYXziyx7ZVqF63S5W6YU201e/qwVaHPex+E/3vvyY9a3ORq/b+BydeNZpP2saQ9X2g==}
     engines: {node: '>=18.0.0'}
-    deprecated: Deprecated due to a bug in custom logger data redaction. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
+    deprecated: |-
+      Deprecated due to a bug in custom logger data redaction. Upgrade to the latest version. If you used a custom logger with this
+        version, review your logs and rotate any credentials or other secrets. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
 
   '@smithy/core@3.38.0':
     resolution: {integrity: sha512-aLyyCnK2p4yvNA2TaM+5owXqb+rZGSiUKEsNP329AzeYnERtAz7NrlTbRsaxqmZ0ooxwoID8LMm959UGQQDIsg==}
     engines: {node: '>=18.0.0'}
-    deprecated: Deprecated due to a bug in custom logger data redaction. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
+    deprecated: |-
+      Deprecated due to a bug in custom logger data redaction. Upgrade to the latest version. If you used a custom logger with this
+        version, review your logs and rotate any credentials or other secrets. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
 
   '@smithy/credential-provider-imds@4.5.2':
     resolution: {integrity: sha512-A9uSdn72ozbRUSit0eib0TW7nXuNPlaeM0zcGkJ+nE6tFcSDbnmtwoxbTCFBukVQcszDAyvsd7+rTduPTXpygg==}

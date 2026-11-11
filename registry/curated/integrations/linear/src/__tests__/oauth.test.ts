@@ -140,7 +140,7 @@ describe('LinearOAuthFlow', () => {
     expect(form(seen[1]).get('refresh_token')).toBe('r1');
     expect(form(seen[1]).get('client_id')).toBe('client-1');
     expect(store.kept.get('person-1')?.refreshToken).toBe('r2');
-    // A token still fresh is answered from memory, with no call.
+    // A token with time left is answered from memory, with no call.
     expect(await flow.accessToken('person-1')).toBe('a2');
     expect(seen).toHaveLength(2);
     // The next refresh sends the rotated token, never the first.
