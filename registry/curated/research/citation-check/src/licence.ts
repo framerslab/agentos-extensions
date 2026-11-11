@@ -2,8 +2,8 @@
  * @file licence.ts
  * @description The licence a page states, read from its markup in this order: a `<link rel="license" href>`, an
  * `<a rel="license" href>`, a JSON-LD `license`, then any anchor to a Creative Commons deed
- * (`creativecommons.org/licenses/<code>/<version>`) or public domain tool (`creativecommons.org/publicdomain/`),
- * wherever it stands, a footer's included. A deed is named from its address (`CC BY-SA 4.0`, `CC BY 3.0 US`,
+ * (`creativecommons.org/licenses/<code>/<version>`) or public domain tool (`creativecommons.org/publicdomain/zero/<version>`,
+ * `creativecommons.org/publicdomain/mark/<version>`), wherever it stands, a footer's included. A deed is named from its address (`CC BY-SA 4.0`, `CC BY 3.0 US`,
  * `CC0 1.0`); another address is named by the anchor's text, the link's `title` or the JSON-LD `name`, else by the
  * address itself. The address is the one the page gives, resolved against the page's own. A licence written in prose
  * with no address ("Text licensed under CC BY 4.0") is not read.
@@ -47,14 +47,6 @@ function deedName(address: string): string | null {
   if (kind === 'publicdomain' && code === 'zero' && VERSION.test(version)) return `CC0 ${version}`;
   if (kind === 'publicdomain' && code === 'mark' && VERSION.test(version)) return `Public Domain Mark ${version}`;
   return null;
-}
-
-/** A deed or a public domain tool's address, which an anchor anywhere in a page stands for the page's licence. */
-function creativeCommonsName(address: string): string | null {
-  const named = deedName(address);
-  if (named !== null) return named;
-  const parts = creativeCommonsPath(address);
-  return parts !== null && parts[0] === 'publicdomain' && parts.length >= 2 ? 'Public domain' : null;
 }
 
 /** A licence at an address, named by its deed or by the name the page gives it, else by the address. */
@@ -114,7 +106,7 @@ export function licenceOf(scan: MarkupScan, nodes: ReadonlyArray<Record<string, 
   }
   for (const anchor of scan.anchors) {
     const url = resolveHttp(anchor.attributes.get('href'), baseUrl);
-    const name = url === null ? null : creativeCommonsName(url);
+    const name = url === null ? null : deedName(url);
     if (url !== null && name !== null) return { name, url };
   }
   return null;

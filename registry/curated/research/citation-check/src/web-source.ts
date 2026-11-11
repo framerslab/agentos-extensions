@@ -136,7 +136,8 @@ export class WebPageSourceProvider implements PublicSourceProvider {
   }
 
   /**
-   * Searches for a short phrase: `onSend` is awaited once first, then the host's search runs, and its addresses answer
+   * Searches for a short phrase: a cancellation that came first is thrown before anything runs, then `onSend` is
+   * awaited once and the host's search runs, and its addresses answer
    * as hits (`key` the address without its fragment, `title` the address), each page once, at most `limit` (3 when
    * left out), an address that is not http or https passed over. `limited` when `onSend` throws a limiter's refusal
    * (nothing was sent), `failed` when it throws anything else or the search throws. The caller's own cancellation is
@@ -144,6 +145,8 @@ export class WebPageSourceProvider implements PublicSourceProvider {
    */
   async search(phrase: string, options: CallOptions & { limit?: number } = {}): Promise<SearchOutcome> {
     const limit = options.limit ?? DEFAULT_LIMIT;
+    // A search cancelled before it starts sends nothing, so nothing is charged for it.
+    options.signal?.throwIfAborted();
     if (options.onSend !== undefined) {
       try {
         await options.onSend();

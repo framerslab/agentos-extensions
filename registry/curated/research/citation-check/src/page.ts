@@ -430,8 +430,10 @@ export interface PageReaderOptions {
    */
   robots?: RobotsRule;
   /**
-   * The reader for a page that answered 200 with no text, called once with the caller's signal, its blocks held to
-   * `textBudget`. With none, or when it answers null, the page is `unreadable` with `no_text`.
+   * The reader for a page that answered 200 with no text, called once for the address the reader's own request reached
+   * under the rules (every hop checked), with the caller's signal, its blocks held to `textBudget`. With none, or when it
+   * answers null, the page is `unreadable` with `no_text`. A fallback that requests the page itself does so outside
+   * these rules: the reader asks it only for an address they cleared.
    */
   fallback?: PageFallbackReader;
 }
