@@ -40,10 +40,12 @@ export interface TopicalityOptions {
    * user input embedding and each allowed topic embedding.  If no allowed topic
    * exceeds {@link minSimilarity}, the input is flagged as off-topic.
    *
-   * An empty array means "no topic restriction" (all inputs are on-topic by
-   * default unless they match a blocked topic).
+   * An empty array, or none, means "no topic restriction" (all inputs are
+   * on-topic by default unless they match a blocked topic). With no allowed
+   * and no blocked topic the guardrail passes every input and logs one line
+   * saying so.
    */
-  allowedTopics: string[];
+  allowedTopics?: string[];
 
   /**
    * Topics that the agent must refuse to discuss.
@@ -55,8 +57,10 @@ export interface TopicalityOptions {
    *
    * Blocked-topic checks run before allowed-topic checks, so a message that
    * matches both a blocked and an allowed topic will be blocked.
+   *
+   * An empty array, or none, blocks nothing.
    */
-  blockedTopics: string[];
+  blockedTopics?: string[];
 
   /**
    * Minimum cosine similarity (inclusive) between the input embedding and the
@@ -92,6 +96,19 @@ export interface TopicalityOptions {
    * @returns A promise resolving to the raw LLM response text.
    */
   llmInvoker?: (prompt: string) => Promise<string>;
+}
+
+// ---------------------------------------------------------------------------
+// TopicalityLogger
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the guardrail writes its one line about running with no topics, and
+ * its one line when the embedding tier cannot load: the host's logger (an
+ * AgentOS `ILogger` fits), else the console.
+ */
+export interface TopicalityLogger {
+  warn(message: string, meta?: Record<string, unknown>): void;
 }
 
 // ---------------------------------------------------------------------------
