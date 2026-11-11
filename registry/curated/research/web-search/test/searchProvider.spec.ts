@@ -468,3 +468,192 @@ describe('SearchProviderService', () => {
     });
   });
 });
+
+describe('signal and onSend on search', () => {
+  const mockFetch = global.fetch as any;
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  /** Each provider a host can pin, with the configuration that enables it and an answer of no results. */
+  const PINNED = [
+    { provider: 'serper', config: { serperApiKey: 'k' }, answer: { organic: [] } },
+    { provider: 'serpapi', config: { serpApiKey: 'k' }, answer: { organic_results: [] } },
+    { provider: 'brave', config: { braveApiKey: 'k' }, answer: { web: { results: [] } } },
+    { provider: 'tavily', config: { tavilyApiKey: 'k' }, answer: { results: [] } },
+    { provider: 'firecrawl', config: { firecrawlApiKey: 'k' }, answer: { success: true, data: [] } },
+    { provider: 'searxng', config: { searxngUrl: 'http://searxng:8080' }, answer: { results: [] } },
+  ];
+
+  it.each(PINNED)('a pinned $provider search gives fetch a signal the caller ends, after onSend ran once', async ({ provider, config, answer }) => {
+    const order: string[] = [];
+    mockFetch.mockImplementation(async () => {
+      order.push('fetch');
+      return { ok: true, status: 200, statusText: 'OK', json: async () => answer };
+    });
+    const onSend = vi.fn(() => {
+      order.push('onSend');
+    });
+    const controller = new AbortController();
+    await new SearchProviderService(config).search('q', { provider, signal: controller.signal, onSend });
+    expect(order).toEqual(['onSend', 'fetch']);
+    const signal = mockFetch.mock.calls[0][1]?.signal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+    controller.abort();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it.each(PINNED)('an onSend that throws ends a pinned $provider search with its own error and sends nothing', async ({ provider, config }) => {
+    const stop = new Error('over the hour');
+    await expect(
+      new SearchProviderService(config).search('q', {
+        provider,
+        onSend: () => {
+          throw stop;
+        },
+      }),
+    ).rejects.toBe(stop);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('an onSend that throws ends an unpinned search: no other provider and no DuckDuckGo', async () => {
+    const stop = new Error('over the hour');
+    await expect(
+      new SearchProviderService({ serperApiKey: 'k', braveApiKey: 'k' }).search('q', {
+        onSend: async () => {
+          throw stop;
+        },
+      }),
+    ).rejects.toBe(stop);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['tavily', 'firecrawl'])("a pinned %s search ends at the caller's abort, well inside its own 15 seconds", async (provider) => {
+    mockFetch.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+        }),
+    );
+    const controller = new AbortController();
+    const reason = new Error('the caller stopped');
+    const started = Date.now();
+    const pending = new SearchProviderService({ tavilyApiKey: 'k', firecrawlApiKey: 'k' }).search('q', {
+      provider,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(reason), 50);
+    await expect(pending).rejects.toBe(reason);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("an unpinned search stops at the caller's abort: no next provider and no DuckDuckGo", async () => {
+    const controller = new AbortController();
+    const reason = new Error('the caller stopped');
+    mockFetch.mockImplementation(async () => {
+      controller.abort(reason);
+      throw reason;
+    });
+    await expect(
+      new SearchProviderService({ serperApiKey: 'k', braveApiKey: 'k' }).search('q', { signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('a signal already aborted sends nothing and runs no onSend', async () => {
+    const controller = new AbortController();
+    const reason = new Error('the caller stopped');
+    controller.abort(reason);
+    const onSend = vi.fn();
+    await expect(
+      new SearchProviderService({ serperApiKey: 'k' }).search('q', { signal: controller.signal, onSend }),
+    ).rejects.toBe(reason);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("the DuckDuckGo fallback runs onSend once and sends the caller's signal with each of its requests", async () => {
+    mockFetch.mockImplementation(async () => ({ ok: true, status: 200, text: async () => '', json: async () => ({}) }));
+    const controller = new AbortController();
+    const onSend = vi.fn();
+    const response = await new SearchProviderService({}).search('q', { signal: controller.signal, onSend });
+    expect(response.provider).toBe('duckduckgo');
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    for (const call of mockFetch.mock.calls) expect(call[1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('a search with neither option sends what it sent before: no signal on the request', async () => {
+    mockFetch.mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({ organic: [] }) }));
+    await new SearchProviderService({ serperApiKey: 'k' }).search('q', { provider: 'serper' });
+    expect(mockFetch.mock.calls[0][1]).not.toHaveProperty('signal');
+  });
+});
+
+describe('the endpoint options and Tavily depth', () => {
+  const mockFetch = global.fetch as any;
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it.each([
+    ['serper', { serperApiKey: 'k' }, 'serperUrl', 'https://google.serper.dev/search', { organic: [] }],
+    ['tavily', { tavilyApiKey: 'k' }, 'tavilyUrl', 'https://api.tavily.com/search', { results: [] }],
+    ['firecrawl', { firecrawlApiKey: 'k' }, 'firecrawlUrl', 'https://api.firecrawl.dev/v1/search', { success: true, data: [] }],
+  ])('the %s endpoint option reaches fetch, and the fixed address is the default', async (provider, keys, option, fixed, answer) => {
+    mockFetch.mockImplementation(async () => ({ ok: true, status: 200, json: async () => answer }));
+    const standIn = `http://127.0.0.1:9/${provider}`;
+    await new SearchProviderService({ ...keys, [option]: standIn }).search('q', { provider });
+    await new SearchProviderService(keys).search('q', { provider });
+    expect(mockFetch.mock.calls.map((call: unknown[]) => call[0])).toEqual([standIn, fixed]);
+  });
+
+  it('Tavily sends the depth asked for, advanced when left out, and never asks for an answer or raw content', async () => {
+    mockFetch.mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({ results: [] }) }));
+    await new SearchProviderService({ tavilyApiKey: 'k', tavily: { searchDepth: 'basic' } }).search('q', { provider: 'tavily' });
+    await new SearchProviderService({ tavilyApiKey: 'k', tavily: { searchDepth: 'advanced' } }).search('q', { provider: 'tavily' });
+    await new SearchProviderService({ tavilyApiKey: 'k' }).search('q', { provider: 'tavily' });
+    const bodies = mockFetch.mock.calls.map((call: [string, RequestInit]) => JSON.parse(String(call[1].body)));
+    expect(bodies.map((body: { search_depth: string }) => body.search_depth)).toEqual(['basic', 'advanced', 'advanced']);
+    for (const body of bodies) {
+      expect(body.include_answer).toBe(false);
+      expect(body.include_raw_content).toBe(false);
+    }
+  });
+});
+
+describe('the wikipedia provider in the service', () => {
+  const mockFetch = global.fetch as any;
+  const CLIENT = { name: 'TestClient', version: '1.0', contact: 'https://example.org/contact' };
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('a pinned wikipedia search on a service that did not enable it throws and sends nothing, to DuckDuckGo or anywhere', async () => {
+    await expect(new SearchProviderService({ serperApiKey: 'k' }).search('q', { provider: 'wikipedia' })).rejects.toThrow(
+      'wikipedia',
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('multiSearch asks the wikipedia provider when it is enabled', async () => {
+    mockFetch.mockImplementation(async (url: string) =>
+      url.includes('/w/rest.php/v1/search/page')
+        ? new Response(JSON.stringify({ pages: [{ id: 1, key: 'Treaty_of_Versailles', title: 'Treaty of Versailles' }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        : { ok: true, status: 200, text: async () => '', json: async () => ({}) },
+    );
+    const response = await new SearchProviderService({
+      wikipedia: { enabled: true, client: CLIENT, origin: 'https://wiki.example' },
+    }).multiSearch('Treaty of Versailles');
+    expect(response.metadata.providersQueried).toEqual(['wikipedia', 'duckduckgo']);
+    expect(response.metadata.providersSucceeded).toEqual(['wikipedia']);
+    expect(response.results.map((result) => result.url)).toEqual(['https://wiki.example/wiki/Treaty_of_Versailles']);
+  });
+});

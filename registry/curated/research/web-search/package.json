@@ -58,6 +58,7 @@
     "@framers/agentos": ">=0.10.40"
   },
   "dependencies": {
+    "@framers/agentos-ext-public-sources": "^0.2.2",
     "axios": "^1.7.7"
   },
   "devDependencies": {
