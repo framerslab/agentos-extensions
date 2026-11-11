@@ -90,6 +90,7 @@ describe('readLicence', () => {
   it('finds none in a page that states none, links Creative Commons’ home, marks another rel, or names no web address', () => {
     expect(readLicence(page('<title>Harbour</title>', '<p>All rights reserved.</p>'), BASE)).toBeNull();
     expect(readLicence(page('', '<a href="https://creativecommons.org/">Creative Commons</a>'), BASE)).toBeNull();
+    expect(readLicence(page('', '<a href="https://creativecommons.org/publicdomain/faq">About the public domain</a>'), BASE)).toBeNull();
     expect(readLicence(page('', '<a rel="licensee" href="https://pages.example.test/about">About</a>'), BASE)).toBeNull();
     expect(readLicence(page('<link rel="license" href="javascript:void(0)">', ''), BASE)).toBeNull();
     expect(readLicence(page('<script type="application/ld+json">{ not json</script>', ''), BASE)).toBeNull();

@@ -78,6 +78,16 @@ describe('WebPageSourceProvider.search', () => {
     expect(await failing.search('a phrase')).toEqual({ kind: 'failed', status: null });
   });
 
+  it('throws a cancellation that came first before onSend runs, so nothing is charged for a search that never runs', async () => {
+    let sent = 0;
+    let searched = 0;
+    const web = provider({ transport: stubTransport(() => undefined).transport, search: async () => ((searched += 1), []) });
+    const controller = new AbortController();
+    controller.abort(new Error('caller stopped'));
+    await expect(web.search('a phrase', { signal: controller.signal, onSend: () => void (sent += 1) })).rejects.toThrow('caller stopped');
+    expect([sent, searched]).toEqual([0, 0]);
+  });
+
   it('throws the caller’s own cancellation', async () => {
     const controller = new AbortController();
     const web = provider({
