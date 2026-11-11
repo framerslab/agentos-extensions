@@ -62,6 +62,19 @@ describe('BrowserMeetingProvider: a scheduler that never answers', () => {
     expect(ms).toBeLessThan(2_000);
   });
 
+  it('ends a call whose answer sends its headers and then stalls', async () => {
+    server.removeAllListeners('request');
+    server.on('request', (req, res) => {
+      seen.push(`${req.method} ${req.url}`);
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': '1000' });
+      res.write('[{"runId":"r1"'); // and never the rest
+    });
+    const { ms, error } = await settle(() => provider().usage({}));
+    expect(seen).toEqual(['GET /runs']);
+    expect((error as Error).message).toBe('scheduler did not answer within 150 ms');
+    expect(ms).toBeLessThan(2_000);
+  });
+
   it('lets a host purge runs one after another without each waiting for the scheduler', async () => {
     const p = provider();
     const start = Date.now();
