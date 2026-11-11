@@ -986,12 +986,16 @@ export async function planRelease({
      * version npm holds or a tag here names (a tag whose publish never reached npm counts, so the version never
      * names a tag at another commit); a version package.json names above that publishes as written. When npm already
      * serves that version (a handover published while npm's package document still lists the other repository's
-     * versions alone, or whose tag push failed), the decision is made again from it, as a shipped change's patch npm
-     * holds is. Otherwise no commit here was published, so there is no base: nothing is diffed, the ranges are
-     * master's text, no subject is listed, and the other repository's versions get no tag or release here. Once
-     * this version is tagged here, latest has a tag and the package is decided as any other, from that tag.
+     * versions alone, or whose tag push failed), or serves the version a tag here names above them, the decision is
+     * made again from it, as a shipped change's patch npm holds is. Otherwise no commit here was published, so there
+     * is no base: nothing is diffed, the ranges are master's text, no subject is listed, and the other repository's
+     * versions get no tag or release here. Once this version is tagged here, latest has a tag and the package is
+     * decided as any other, from that tag.
      */
     const handover = async (npmLatest) => {
+      // A tag here above every version npm lists, whose own document npm serves: the handover reached npm before npm's
+      // package document listed it, and the decision is made from it as from any version npm holds.
+      if (taggedVersions.has(newest) && (await registry.versionDocument(pkg.name, newest)) !== null) return decideFrom(newest, 1);
       const onNpm = highest([npmLatest, ...held].filter((version) => typeof version === 'string' && VERSION.test(version)));
       const name = named !== null && compareVersions(named, newest) > 0 ? named : null;
       const planned = name ?? raisePatch(newest);
