@@ -1635,6 +1635,23 @@ test("9i an adopted package whose handover version reached npm without its tag i
   );
 });
 
+test("9j an adopted package whose handover version npm serves but does not list yet is decided again from that version, not planned twice", async () => {
+  const { ws, table } = handover();
+  const handed = ws.head();
+  // The release published 0.3.4 from this repository: npm serves its document, but the package document still lists
+  // the other repository's versions alone, with 0.3.3 as latest.
+  table[ALPHA].versions['0.3.4'] = { gitHead: handed, hidden: true, repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` } };
+  ws.commit(src(2), 'fix(alpha): the first change made here');
+
+  const result = await plan(ws, { table });
+
+  assert.deepEqual(pick(alpha(result)), { planned: '0.3.5', bump: 'patch', newest: '0.3.4', baseCommit: handed, baseSource: 'gitHead' });
+  assert.deepEqual(
+    result.repairs.filter((record) => record.name === ALPHA),
+    [{ name: ALPHA, version: '0.3.4', commit: handed, kind: 'tag' }],
+  );
+});
+
 test("9h apply writes the adopted package's version, its release notes say where its earlier versions came from, and the summary names it", async () => {
   const { ws, table } = handover();
 
