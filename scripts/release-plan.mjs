@@ -958,16 +958,19 @@ export async function planRelease({
    * own document. A version known from its tag alone may have no document on npm yet, in the minutes after its
    * publish: it is read again, as the publish step waits for a version before its dependents, and the plan fails
    * naming it when npm still serves none, since master's text in its place would raise again a range an earlier run
-   * raised and plan a patch nothing needs.
+   * raised and plan a patch nothing needs. Every such wait of the plan draws on one budget of `documentWait.upTo`,
+   * counted from the first read again, as the publish step's waits share theirs, so the job's time limit holds one
+   * plan wait however many unserved documents the plan reads; a document read once the budget is spent gets one read.
    */
+  let documentDeadline = null;
   const publishedManifest = async ({ pkg, entry, document }) => {
     const listed = document?.versions?.[entry.newest];
     if (listed) return listed;
-    const deadline = Date.now() + documentWait.upTo * 1000;
     for (let fresh = false; ; fresh = true) {
       const held = await registry.versionDocument(pkg.name, entry.newest, { fresh });
       if (held !== null) return held;
-      if (Date.now() >= deadline) {
+      documentDeadline ??= Date.now() + documentWait.upTo * 1000;
+      if (Date.now() >= documentDeadline) {
         throw new Error(
           `npm serves no document for ${pkg.name}@${entry.newest}, its newest version, after ${documentWait.upTo} seconds of reading again; ` +
             "its ranges on its siblings are read from what consumers hold, so it is not planned from master's text: re-run once npm " +
