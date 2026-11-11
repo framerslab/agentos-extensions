@@ -502,7 +502,7 @@ export function isBreaking(message) {
  */
 export function listPackages(root) {
   const roleMap = JSON.parse(fs.readFileSync(path.join(root, 'scripts', 'package-roles.json'), 'utf8'));
-  const adopted = roleMap.adopted ?? [];
+  const adopted = Object.hasOwn(roleMap, 'adopted') ? roleMap.adopted : [];
   if (!Array.isArray(adopted) || adopted.some((dir) => typeof dir !== 'string')) {
     throw new Error("scripts/package-roles.json's adopted is not a list of package directories");
   }
@@ -933,21 +933,43 @@ export async function planRelease({
     // newest version, so a version whose tag push failed would stay untagged for good once a later run had published
     // past it and its own tag push had failed too. A tag above the newest one a release records gets its release the
     // same way. The versions at or below those are history and are left as they are.
-    // An adopted package whose latest is still the other repository's has no version of its own to repair but the
-    // handover version, which the handover below decides again from, and repairs, when npm serves it.
+    // An adopted package whose latest is still the other repository's, and whose handover npm does not list yet, has
+    // no version of its own to repair but the handover version, which the handover below decides again from, and
+    // repairs, when npm serves it.
     const taggedVersions = new Set(tagged.map((tag) => tag.version));
     const highest = (versions) => versions.reduce((top, version) => (top === null || compareVersions(version, top) > 0 ? version : top), null);
     const newestTagged = highest([...taggedVersions]);
     const newestReleased = highest([...taggedVersions].filter((version) => released.has(`${pkg.name}@${version}`)));
-    for (const version of adoptedLatest !== null ? [] : [...new Set(held)].filter((candidate) => VERSION.test(candidate)).sort(compareVersions)) {
+    const heldVersions = [...new Set(held)].filter((candidate) => VERSION.test(candidate)).sort(compareVersions);
+
+    // An adopted package's boundary: the newest version npm holds, with no tag here, whose document names another
+    // repository. It and every version below it are the other repository's, whatever their own documents say (an
+    // early one may name no repository, or a gitHead this clone also holds), and get no tag or release here; a
+    // version above it is this repository's, anchored and repaired as any package's is. The versions are read from
+    // the newest down, so only this repository's untagged versions and the boundary itself are read.
+    let otherNewest = null;
+    if (pkg.adopted === true) {
+      for (const version of [...heldVersions].reverse()) {
+        if (taggedVersions.has(version)) continue;
+        if (await namesAnotherRepository(version)) {
+          otherNewest = version;
+          break;
+        }
+      }
+    }
+    // npm holds a version above the other repository's newest: the handover reached npm, and npm's latest still
+    // names the other repository only until its dist-tag moves. The package is decided from its newest version, as
+    // any package is, and not handed over again.
+    if (adoptedLatest !== null && otherNewest !== null && heldVersions.some((version) => compareVersions(version, otherNewest) > 0)) {
+      adoptedLatest = null;
+    }
+
+    for (const version of adoptedLatest !== null ? [] : heldVersions) {
       if (version === newest || taggedVersions.has(version)) continue;
       if (newestTagged !== null && compareVersions(version, newestTagged) <= 0) continue;
+      if (otherNewest !== null && compareVersions(version, otherNewest) <= 0) continue;
       const found = await commitOf(version);
       if (found === null) {
-        // An adopted package's versions from the other repository have no commit here to tag, and are left as they
-        // are. The loop reaches them while the handover version has no tag (its push failed after the publish),
-        // until this run's repair tags it.
-        if (pkg.adopted === true && (await namesAnotherRepository(version))) continue;
         throw new Error(`npm holds ${pkg.name}@${version}, but no tag, gitHead or provenance attestation names a commit of this repository for it`);
       }
       repair({ name: pkg.name, version, commit: found.commit, kind: 'tag' });
