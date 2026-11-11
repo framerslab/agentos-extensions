@@ -102,7 +102,7 @@ try {
 
 `search(query, { maxResults, provider, category, signal, onSend })`:
 
-- `provider` pins one provider: no other is tried and nothing falls back to DuckDuckGo. A pinned keyed provider that answers an error status throws its own `Error`. A pinned `wikipedia` search the limiter refuses throws public-sources' `LimiterRefused`, which this pack re-exports, and one that fails throws `SearchFailed`. A search pinned to `wikipedia` on a service that did not enable it throws and sends nothing.
+- `provider` pins one provider: no other is tried and nothing falls back to DuckDuckGo. A pinned keyed provider that answers an error status throws its own `Error`. A pinned `wikipedia` search the limiter refuses throws public-sources' `LimiterRefused`, which this pack re-exports, and one that fails throws `SearchFailed`. The refusal is the one the host's limiter threw, reason and all, even from a limiter of another copy of public-sources. A search pinned to `wikipedia` on a service that did not enable it throws and sends nothing.
 - `signal` ends every provider request of the search, and the search rejects with the signal's reason. Tavily's and Firecrawl's own 15-second timers run beside it, and their own timeout answers no results. Without `provider`, an abort ends the search there: no next provider is asked, and DuckDuckGo is not.
 - `onSend` is awaited once before each provider is asked, before its request is sent. When it throws, nothing is sent, no other provider is asked, and the search rejects with what it threw. For `wikipedia` it runs once the limiter has granted the request, so a search the limiter refuses never runs it. A search can end refused after `onSend` has run, with nothing sent, when a 429 or a 503 blocked the limiter meanwhile or the spacing would wait past the limiter's `waitMs`.
 
@@ -112,7 +112,7 @@ A search with neither `signal` nor `onSend` sends the requests it sent before th
 
 ### `web_search`
 
-Search the web. `provider` pins one of `serper`, `serpapi`, `brave`, `tavily`, `firecrawl`, `searxng`, `wikipedia` (on a service that enables it) or `duckduckgo`.
+Search the web. `provider` pins one of `serper`, `serpapi`, `brave`, `tavily`, `firecrawl`, `searxng` or `duckduckgo`, and `wikipedia` on a service that enables it. The tool reads the service's providers when it is built: on a service without `wikipedia`, its schema's `provider` enum and its description leave Wikipedia out, and `validateArgs` refuses `provider: 'wikipedia'` as an invalid provider.
 
 ### `research_aggregate`
 

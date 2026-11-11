@@ -357,10 +357,11 @@ export class SearchProviderService {
           };
     const outcome = await this.wikipedia.search(query, { limit: maxResults, signal: callSignal, onSend });
     if (thrown !== null) throw new CallerStop(thrown.error);
-    if (outcome.kind === 'limited') {
-      // Every refusal passes through the keeper, so the fallback below is for a copy of the limiter it cannot read.
-      throw this.wikipediaLimiter.refusal(callSignal) ?? new LimiterRefused('wait');
-    }
+    // The keeper is read before the outcome: public-sources answers `failed` for a refusal from a limiter of another
+    // copy of it (its check is by class), and the keeper has that refusal by name.
+    const refusal = this.wikipediaLimiter.refusal(callSignal);
+    if (refusal !== undefined) throw refusal;
+    if (outcome.kind === 'limited') throw new LimiterRefused('wait');
     if (outcome.kind === 'failed') throw new SearchFailed('wikipedia', outcome.status);
     return outcome.hits.map((hit, index) => ({
       title: hit.title,
