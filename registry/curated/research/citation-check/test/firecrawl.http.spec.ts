@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { inspect } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { FIRECRAWL_SCRAPE_URL, FirecrawlPageReader, WebPageSourceProvider, type FirecrawlPageReaderOptions } from '../src/index';
+import { readCapped } from '../src/page';
 import { guardNetwork, outsideAttempts } from './support';
 import { htmlPage, stubTransport, type StubAnswer } from './stub-transport';
 
@@ -107,9 +108,9 @@ describe('FirecrawlPageReader', () => {
     expect(scrape.path).toBe('/v2/scrape');
     expect(scrape.headers.authorization).toBe(`Bearer ${KEY}`);
     expect(scrape.headers['content-type']).toBe('application/json');
-    // The address, the format asked for, the whole page rather than Firecrawl's main-content cut, and Firecrawl's own
-    // deadline at the reader's: nothing of the page or of a search.
-    expect(JSON.parse(scrape.body)).toEqual({ url: 'https://harbour.example.test/app', formats: ['html'], onlyMainContent: false, timeout: 2_000 });
+    // The address, the format asked for, the whole page rather than Firecrawl's main-content cut, a fresh scrape rather
+    // than a cached copy up to two days old, and Firecrawl's own deadline at the reader's: nothing of the page or of a search.
+    expect(JSON.parse(scrape.body)).toEqual({ url: 'https://harbour.example.test/app', formats: ['html'], onlyMainContent: false, maxAge: 0, timeout: 2_000 });
   });
 
   it('sends to Firecrawl’s own endpoint through the fetch it is given when no endpoint is named', async () => {
@@ -155,6 +156,9 @@ describe('FirecrawlPageReader', () => {
       ['no text', json(200, scraped('<div id="root"></div>'))],
       ['no html', json(200, { success: true, data: { metadata: { statusCode: 200 } } })],
       ['html not a string', json(200, { success: true, data: { html: 42 } })],
+      // Firecrawl follows redirects itself and names where it ended; a page at another origin is not the page cited.
+      ['another origin', json(200, { success: true, data: { html: '<p>Sign in to continue.</p>', metadata: { url: 'https://accounts.example.test/login', statusCode: 200 } } })],
+      ['a final address that is not one', json(200, { success: true, data: { html: '<p>Sign in to continue.</p>', metadata: { url: 'not an address', statusCode: 200 } } })],
     ];
     for (const [name, given] of cases) {
       answer = given;
@@ -162,6 +166,11 @@ describe('FirecrawlPageReader', () => {
       expect([name, await reader().read('https://harbour.example.test/app', open())]).toEqual([name, null]);
       expect([name, scrapes.length]).toEqual([name, 1]);
     }
+  });
+
+  it('reads a page Firecrawl ended on at the cited page’s own origin', async () => {
+    answer = json(200, { success: true, data: { html: '<p>The harbour opened in 1887.</p>', metadata: { url: 'https://harbour.example.test/app/', statusCode: 200 } } });
+    expect(await reader().read('https://harbour.example.test/app', open())).toEqual(['The harbour opened in 1887.']);
   });
 
   it('refuses an answer over maxBytes, whether its length is declared or it streams past the cap', async () => {
@@ -198,11 +207,16 @@ describe('FirecrawlPageReader', () => {
   });
 
   it('sends nothing for a read whose signal fired before it started', async () => {
-    answer = json(200, scraped('<p>The harbour opened in 1887.</p>'));
+    // A host's fetch that does not watch the signal sends whatever it is handed, so only the reader's own check stops it.
+    let calls = 0;
+    const fetchFn = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify(scraped('<p>The harbour opened in 1887.</p>')), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
     const controller = new AbortController();
     controller.abort(new Error('caller stopped'));
-    await expect(reader().read('https://harbour.example.test/app', { signal: controller.signal })).rejects.toThrow('caller stopped');
-    expect(scrapes).toHaveLength(0);
+    await expect(reader({ fetchFn }).read('https://harbour.example.test/app', { signal: controller.signal })).rejects.toThrow('caller stopped');
+    expect(calls).toBe(0);
   });
 
   it('ends at its own deadline and at the caller’s abort when the fetch it is given ignores the signal and its body stalls after the headers', async () => {
@@ -339,5 +353,20 @@ describe('FirecrawlPageReader through the open web source', () => {
     const web = new WebPageSourceProvider({ transport: pages.transport, search: async () => [], fallback: reader(), timeoutMs: 2_000, now: () => NOW });
     expect(await web.read({ key: 'https://harbour.example.test/app', title: 'x' })).toEqual({ kind: 'skipped', status: 200 });
     expect(scrapes).toHaveLength(1);
+  });
+});
+
+describe('readCapped', () => {
+  it('throws the signal’s reason when it fires during a read of a body nothing errors, rather than answering the bytes so far as the whole body', async () => {
+    const controller = new AbortController();
+    // One chunk, then a body that neither ends nor errors: a cancel is the only thing that settles its pending read.
+    const body = new ReadableStream<Uint8Array>({
+      start(queue) {
+        queue.enqueue(new TextEncoder().encode('<p>The harb'));
+      },
+    });
+    const reading = readCapped(new Response(body), 1_000, controller.signal);
+    setTimeout(() => controller.abort(new Error('caller stopped')), 10);
+    await expect(reading).rejects.toThrow('caller stopped');
   });
 });
