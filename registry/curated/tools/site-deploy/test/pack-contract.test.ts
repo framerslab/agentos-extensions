@@ -76,17 +76,41 @@ function typeOf(value: unknown): string {
   return typeof value;
 }
 
+/** Keywords validate() enforces, and keywords that only annotate. */
+const CHECKED_KEYWORDS = new Set(['type', 'enum', 'required', 'properties', 'items']);
+const ANNOTATION_KEYWORDS = new Set(['description', 'default', 'title', 'examples']);
+
+/**
+ * Every keyword in a schema that validate() neither enforces nor may ignore
+ * (oneOf, pattern, additionalProperties, minimum, ...). A schema with one of
+ * these would be checked only in part, so the contract test fails on it.
+ */
+function uncheckedKeywords(schema: any, path: string, out: string[]): void {
+  if (!schema || typeof schema !== 'object') return;
+  for (const key of Object.keys(schema)) {
+    if (!CHECKED_KEYWORDS.has(key) && !ANNOTATION_KEYWORDS.has(key)) {
+      out.push(`${path}: schema keyword "${key}" is not checked by this test`);
+    }
+  }
+  for (const [name, child] of Object.entries(schema.properties ?? {})) {
+    uncheckedKeywords(child, `${path}.${name}`, out);
+  }
+  if (schema.items) uncheckedKeywords(schema.items, `${path}[]`, out);
+}
+
 /** Check a value against the subset of JSON Schema the curated tools use. */
 function validate(schema: any, value: unknown, path: string, out: string[]): void {
   if (!schema) return;
-  if (schema.type && schema.type !== typeOf(value)) {
-    out.push(`${path}: expected ${schema.type}, got ${typeOf(value)}`);
+  uncheckedKeywords({ ...schema, properties: undefined, items: undefined }, path, out);
+  const types: string[] | undefined = schema.type === undefined ? undefined : [].concat(schema.type);
+  if (types && !types.includes(typeOf(value))) {
+    out.push(`${path}: expected ${types.join(' or ')}, got ${typeOf(value)}`);
     return;
   }
   if (schema.enum && !schema.enum.includes(value)) {
     out.push(`${path}: ${JSON.stringify(value)} is not one of ${schema.enum.join(', ')}`);
   }
-  if (schema.type === 'object' && value && typeof value === 'object') {
+  if (types?.includes('object') && typeOf(value) === 'object') {
     for (const key of schema.required ?? []) {
       if ((value as any)[key] === undefined) out.push(`${path}.${key}: required`);
     }
@@ -101,7 +125,7 @@ function validate(schema: any, value: unknown, path: string, out: string[]): voi
       }
     }
   }
-  if (schema.type === 'array' && Array.isArray(value)) {
+  if (types?.includes('array') && Array.isArray(value)) {
     value.forEach((item, i) => validate(schema.items, item, `${path}[${i}]`, out));
   }
 }
@@ -138,6 +162,14 @@ const REGISTRANT = {
   postalCode: '62701',
   country: 'US',
 };
+
+describe('the contract check covers every keyword the curated schemas use', () => {
+  it.each(Object.keys(REGISTERED))('%s uses only keywords validate() checks', (name) => {
+    const unchecked: string[] = [];
+    uncheckedKeywords(REGISTERED[name], name, unchecked);
+    expect(unchecked).toEqual([]);
+  });
+});
 
 describe('siteDeploy calls the tools the curated cloud packs register', () => {
   const cases: Array<[string, Record<string, unknown>, string]> = [
@@ -182,13 +214,13 @@ describe('siteDeploy calls the tools the curated cloud packs register', () => {
   });
 
   it.each([
-    ['vercel', '/srv/shop'],
-    ['netlify', './shop'],
-    ['railway', 'https://gitlab.com/acme/shop'],
-    ['heroku', GIT],
-    ['linode', GIT],
-    ['flyio', GIT],
-  ])('refuses %s for source %s without calling a tool the pack cannot serve', async (provider, source) => {
+    ['vercel', '/srv/shop', /vercelDeploy deploys from a Git repository URL; "\/srv\/shop" is not one/],
+    ['netlify', './shop', /netlifyDeploySite deploys from a Git repository URL; "\.\/shop" is not one/],
+    ['railway', 'https://gitlab.com/acme/shop', /railwayDeployService deploys a GitHub repository .* is not a GitHub URL/],
+    ['heroku', GIT, /herokuDeployApp builds from a source tarball URL/],
+    ['linode', GIT, /linodeDeployStackScript .* which siteDeploy does not take/],
+    ['flyio', GIT, /flyDeployApp runs a Docker image/],
+  ])('refuses %s for source %s without calling a tool the pack cannot serve', async (provider, source, reason) => {
     const { executor, calls } = contractExecutor();
     const tool = new SiteDeployTool();
     tool.setToolExecutor(executor);
@@ -197,7 +229,7 @@ describe('siteDeploy calls the tools the curated cloud packs register', () => {
 
     expect(calls).toEqual([]);
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(new RegExp(provider === 'flyio' ? 'Fly' : provider, 'i'));
+    expect(result.error).toMatch(reason);
   });
 });
 
