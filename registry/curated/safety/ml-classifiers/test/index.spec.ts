@@ -38,7 +38,7 @@ import type { ExtensionPackContext } from '@framers/agentos';
 vi.mock(
   '../src/classifiers/ToxicityClassifier',
   () => ({
-    ToxicityClassifier: vi.fn().mockImplementation(() => ({
+    ToxicityClassifier: vi.fn().mockImplementation(function () { return ({
       id: 'agentos:ml-classifiers:toxicity-pipeline',
       displayName: 'Toxicity Classifier (mock)',
       description: 'Mock toxicity classifier.',
@@ -46,7 +46,7 @@ vi.mock(
       isLoaded: false,
       classify: vi.fn().mockResolvedValue({ bestClass: 'benign', confidence: 0, allScores: [] }),
       dispose: vi.fn().mockResolvedValue(undefined),
-    })),
+    }); }),
   }),
 );
 
@@ -56,7 +56,7 @@ vi.mock(
 vi.mock(
   '../src/classifiers/InjectionClassifier',
   () => ({
-    InjectionClassifier: vi.fn().mockImplementation(() => ({
+    InjectionClassifier: vi.fn().mockImplementation(function () { return ({
       id: 'agentos:ml-classifiers:injection-pipeline',
       displayName: 'Injection Classifier (mock)',
       description: 'Mock injection classifier.',
@@ -64,7 +64,7 @@ vi.mock(
       isLoaded: false,
       classify: vi.fn().mockResolvedValue({ bestClass: 'SAFE', confidence: 0.1, allScores: [] }),
       dispose: vi.fn().mockResolvedValue(undefined),
-    })),
+    }); }),
   }),
 );
 
@@ -74,7 +74,7 @@ vi.mock(
 vi.mock(
   '../src/classifiers/JailbreakClassifier',
   () => ({
-    JailbreakClassifier: vi.fn().mockImplementation(() => ({
+    JailbreakClassifier: vi.fn().mockImplementation(function () { return ({
       id: 'agentos:ml-classifiers:jailbreak-pipeline',
       displayName: 'Jailbreak Classifier (mock)',
       description: 'Mock jailbreak classifier.',
@@ -82,7 +82,7 @@ vi.mock(
       isLoaded: false,
       classify: vi.fn().mockResolvedValue({ bestClass: 'benign', confidence: 0, allScores: [] }),
       dispose: vi.fn().mockResolvedValue(undefined),
-    })),
+    }); }),
   }),
 );
 

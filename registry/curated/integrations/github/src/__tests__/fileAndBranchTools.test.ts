@@ -22,7 +22,7 @@ const mockCreateRef = vi.fn();
 const mockListCommits = vi.fn();
 
 vi.mock('@octokit/rest', () => ({
-  Octokit: vi.fn().mockImplementation(() => ({
+  Octokit: vi.fn().mockImplementation(function () { return ({
     rest: {
       users: { getAuthenticated: mockGetAuthenticated },
       repos: {
@@ -36,7 +36,7 @@ vi.mock('@octokit/rest', () => ({
         createRef: mockCreateRef,
       },
     },
-  })),
+  }); }),
 }));
 
 /* ---------- Helpers ---------- */

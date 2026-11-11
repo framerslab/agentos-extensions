@@ -26,7 +26,7 @@ vi.mock('twilio', () => {
 // Mock @framers/agentos — provide the minimal surface area the extension needs
 vi.mock('@framers/agentos', () => ({
   escapeXml: (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
-  CallManager: vi.fn().mockImplementation(() => ({
+  CallManager: vi.fn().mockImplementation(function () { return ({
     registerProvider: vi.fn(),
     initiateCall: vi.fn(),
     speakText: vi.fn(),
@@ -34,7 +34,7 @@ vi.mock('@framers/agentos', () => ({
     getCall: vi.fn(),
     getActiveCalls: vi.fn(() => []),
     dispose: vi.fn(),
-  })),
+  }); }),
 }));
 
 // ---------------------------------------------------------------------------
