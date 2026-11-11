@@ -515,6 +515,90 @@ describe("GitHub's secondary rate limit on a person's call", () => {
   });
 });
 
+describe("a rate limit the headers name, whose message never arrives", () => {
+  /*
+   * "If you exceed your primary rate limit, you will receive a 403 or 429 response, and the x-ratelimit-remaining
+   * header will be 0. You should not retry your request until after the time specified by the x-ratelimit-reset
+   * header."
+   *   https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit
+   * The headers alone say the call was refused for a rate limit and when it may be made again; the message would only
+   * have told a secondary limit from the primary one. So a message that stalls or breaks while it is read leaves the
+   * refusal told by its headers, never an answer that GitHub gave none. The bodies below are streams a loopback server
+   * cannot send on demand (one that never ends, one that breaks after a few bytes), so these calls are handed a fetch.
+   */
+  it('answers a 403 or a 429 with `x-ratelimit-remaining: 0` as a rate limit with the reset time when its body stalls or breaks', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-10T20:00:00Z'));
+    const reset = Math.floor(Date.now() / 1000) + 1800;
+    const stalled = (): ReadableStream<Uint8Array> => new ReadableStream<Uint8Array>({ pull: () => new Promise<void>(() => undefined) });
+    const broken = (): ReadableStream<Uint8Array> =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"message":"API rate'));
+          controller.error(new Error('connection reset'));
+        },
+      });
+    for (const status of [403, 429]) {
+      for (const [kind, body] of [['stalled', stalled], ['broken', broken]] as const) {
+        const fetchImpl = (async () =>
+          new Response(body(), { status, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset), 'content-type': 'application/json' } })) as typeof fetch;
+        const at = { apiBase: 'https://api.github.com', fetchImpl, timeoutMs: 80 };
+        const calls: [string, () => Promise<unknown>][] = [
+          ['listAssignedIssues', () => listAssignedIssues(TOKEN, { repositories: ['acme-team/planner'] }, at)],
+          ['issueTargets', () => issueTargets(TOKEN, at)],
+          ['createIssueAsUser', () => createIssueAsUser(TOKEN, { repository: 'acme-team/planner', title: 'A title', body: 'A body' }, at)],
+          ['closeIssueAsUser', () => closeIssueAsUser(TOKEN, { repository: 'acme-team/planner', number: 91 }, at)],
+        ];
+        for (const [name, call] of calls) {
+          const limited: unknown = await call().catch((error: unknown) => error);
+          const what = `${name}, ${status}, ${kind}`;
+          expect(limited, what).not.toBeInstanceOf(GitHubNoAnswer);
+          expect(limited, what).toBeInstanceOf(GitHubApiError);
+          expect(limited, what).not.toBeInstanceOf(GitHubSecondaryLimitError);
+          expect(limited, what).toMatchObject({ status, rateLimited: true, retryAt: reset * 1000 });
+        }
+      }
+    }
+  });
+
+  it('still ends with GitHubNoAnswer when a 403 whose headers name no rate limit stalls before its message', async () => {
+    const fetchImpl = (async () => new Response(new ReadableStream<Uint8Array>({ pull: () => new Promise<void>(() => undefined) }), { status: 403 })) as typeof fetch;
+    const refused: unknown = await createIssueAsUser(TOKEN, { repository: 'acme-team/planner', title: 'A title', body: 'A body' }, { fetchImpl, timeoutMs: 80 }).catch(
+      (error: unknown) => error,
+    );
+    // Without its message such a 403 could be a rate limit or a refused permission, so no refusal is guessed.
+    expect(refused).toBeInstanceOf(GitHubNoAnswer);
+    expect(refused).toMatchObject({ reason: 'timeout' });
+  });
+});
+
+describe('a call without a token', () => {
+  /*
+   * GitHub answers a request whose bearer is empty with 401, which these calls read as a grant gone. A missing token is
+   * the caller's own fault, never the person's revocation, so it is refused before any request, as `revokeGrant` and
+   * `refreshUserToken` refuse an empty token.
+   */
+  it('throws a TypeError before any request for an empty or blank token, never GitHubGrantGoneError', async () => {
+    github = await startGitHub(() => ({ status: 401, body: { message: 'Bad credentials' } }));
+    const at = { apiBase: github.base };
+    for (const token of ['', '   ', undefined as unknown as string]) {
+      const calls: [string, () => Promise<unknown>][] = [
+        ['listAssignedIssues', () => listAssignedIssues(token, { repositories: ['acme-team/planner'] }, at)],
+        ['listAssignedIssues of no repository', () => listAssignedIssues(token, { repositories: [] }, at)],
+        ['issueTargets', () => issueTargets(token, at)],
+        ['createIssueAsUser', () => createIssueAsUser(token, { repository: 'acme-team/planner', title: 'A title', body: 'A body' }, at)],
+        ['closeIssueAsUser', () => closeIssueAsUser(token, { repository: 'acme-team/planner', number: 91 }, at)],
+      ];
+      for (const [name, call] of calls) {
+        const refused: unknown = await call().catch((error: unknown) => error);
+        expect(refused, `${name} ${JSON.stringify(token)}`).toBeInstanceOf(TypeError);
+        expect(refused, `${name} ${JSON.stringify(token)}`).not.toBeInstanceOf(GitHubGrantGoneError);
+      }
+    }
+    expect(github.received).toHaveLength(0);
+  });
+});
+
 describe("a token GitHub no longer takes", () => {
   /*
    * "If a user revokes their authorization of a GitHub App ... If your app continues to use a revoked access token,
