@@ -2,7 +2,7 @@
 
 Professional web search, research aggregation, and fact-checking for AgentOS agents.
 
-Supports Serper.dev, Tavily, Brave, SerpAPI, Firecrawl and SearXNG, and English Wikipedia with no key once a host enables it (see [Options](#options)). A search asks the configured providers in that order and answers with the first one that returns without an error, even when it returns no results (a Tavily or Firecrawl request that times out returns no results). It moves to the next provider only when one throws an error or is past its rate limit, and falls back to DuckDuckGo, which needs no API key, when every configured provider did.
+Supports Serper.dev, Tavily, Brave, SerpAPI, Firecrawl and SearXNG. A search asks the configured providers in that order and answers with the first one that returns without an error, even when it returns no results (a Tavily or Firecrawl request that times out returns no results). It moves to the next provider only when one throws an error or is past its rate limit, and falls back to DuckDuckGo, which needs no API key, when every configured provider did. English Wikipedia, which needs no key, answers a search pinned to it and `multiSearch` once a host enables it (see [Options](#options)).
 
 ## Installation
 
@@ -58,7 +58,7 @@ Beside the keys above, the pack options and `SearchProviderService`'s configurat
 | `firecrawlUrl` | Firecrawl's search endpoint. | `https://api.firecrawl.dev/v1/search` |
 | `tavily` | `{ searchDepth: 'basic' \| 'advanced' }`, the `search_depth` Tavily is sent. `include_answer` and `include_raw_content` are false at either depth. | `advanced` |
 
-The `wikipedia` provider is listed after every other configured provider, so a host that enables it keeps the order of the providers it had. It answers each hit as `{ title, url, snippet: '', position }`, the `url` built by public-sources' `articleUrl`, so `decodeURIComponent` of the path after `/wiki/` gives the article's key back for a read through `WikipediaSourceProvider.read`.
+The `wikipedia` provider is listed after every other configured provider. A `search` with no `provider` never asks it: it answers article titles alone, so a general query goes to the keyed providers and then to DuckDuckGo. Pin it with `provider: 'wikipedia'`, or use `multiSearch`, which asks it beside the others. It answers each hit as `{ title, url, snippet: '', position }`, the `url` built by public-sources' `articleUrl`, so `decodeURIComponent` of the path after `/wiki/` gives the article's key back for a read through `WikipediaSourceProvider.read`.
 
 ## Searching from code
 
@@ -112,7 +112,7 @@ A search with neither `signal` nor `onSend` sends the requests it sent before th
 
 ### `web_search`
 
-Search the web.
+Search the web. `provider` pins one of `serper`, `serpapi`, `brave`, `tavily`, `firecrawl`, `searxng`, `wikipedia` (on a service that enables it) or `duckduckgo`.
 
 ### `research_aggregate`
 

@@ -11,10 +11,13 @@ import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult
 import type { ProviderResponse, MultiSearchResponse } from '../services/searchProvider.js';
 import { SearchProviderService } from '../services/searchProvider.js';
 
+/** The providers a call may pin; `wikipedia` answers only on a service that enables it. */
+export const WEB_SEARCH_PROVIDERS = ['serper', 'serpapi', 'brave', 'tavily', 'firecrawl', 'searxng', 'wikipedia', 'duckduckgo'] as const;
+
 export interface WebSearchInput {
   query: string;
   maxResults?: number;
-  provider?: 'serper' | 'serpapi' | 'brave' | 'searxng' | 'duckduckgo';
+  provider?: (typeof WEB_SEARCH_PROVIDERS)[number];
   multiSearch?: boolean;
   category?: string;
 }
@@ -27,7 +30,7 @@ export class WebSearchTool implements ITool<WebSearchInput, WebSearchOutput> {
   public readonly name = 'web_search';
   public readonly displayName = 'Web Search';
   public readonly description =
-    'Search the web using multiple providers (Serper, SerpAPI, Brave, SearXNG, DuckDuckGo fallback). Set multiSearch=true to query ALL providers in parallel for higher-confidence, deduplicated results.';
+    'Search the web using multiple providers (Serper, SerpAPI, Brave, Tavily, Firecrawl, SearXNG, DuckDuckGo fallback), or English Wikipedia by provider=wikipedia when the host enables it. Set multiSearch=true to query ALL providers in parallel for higher-confidence, deduplicated results.';
   public readonly category = 'research';
   public readonly hasSideEffects = false;
 
@@ -49,7 +52,7 @@ export class WebSearchTool implements ITool<WebSearchInput, WebSearchOutput> {
       provider: {
         type: 'string',
         description: 'Specific search provider to use (ignored when multiSearch is true)',
-        enum: ['serper', 'serpapi', 'brave', 'searxng', 'duckduckgo'],
+        enum: [...WEB_SEARCH_PROVIDERS],
       },
       multiSearch: {
         type: 'boolean',
@@ -117,8 +120,7 @@ export class WebSearchTool implements ITool<WebSearchInput, WebSearchOutput> {
     }
 
     if (input.provider !== undefined) {
-      const validProviders = ['serper', 'serpapi', 'brave', 'searxng', 'duckduckgo'];
-      if (!validProviders.includes(input.provider)) {
+      if (!(WEB_SEARCH_PROVIDERS as readonly string[]).includes(input.provider)) {
         errors.push('Invalid provider');
       }
     }

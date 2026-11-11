@@ -88,6 +88,30 @@ function joined(own: AbortSignal, signal: AbortSignal | undefined): AbortSignal 
   return signal === undefined ? own : AbortSignal.any([own, signal]);
 }
 
+/** `work`'s outcome, or a rejection with the signal's reason the moment the signal aborts first. */
+function untilAbort<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) return work;
+  if (signal.aborted) {
+    // Nobody waits for `work` now, so its own rejection is handled here.
+    work.catch(() => undefined);
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /** A `LimiterRefused`, whichever copy of public-sources threw it. */
 function isRefusal(error: unknown): boolean {
   return error instanceof LimiterRefused || (error as { name?: unknown } | null)?.name === 'LimiterRefused';
@@ -266,8 +290,9 @@ export class SearchProviderService {
         return await this.searchWithProvider(query, options.provider, maxResults, startTime, options.category, options);
       }
 
-      // Try providers in order of preference
-      const providers = this.getAvailableProviders();
+      // Try providers in order of preference. The wikipedia provider answers article titles alone, so a general query
+      // never ends there: it is asked when pinned or by multiSearch, and DuckDuckGo stays the fallback.
+      const providers = this.getAvailableProviders().filter((provider) => provider !== 'wikipedia');
 
       for (const provider of providers) {
         try {
@@ -286,20 +311,24 @@ export class SearchProviderService {
       signal?.throwIfAborted();
       return await this.searchDuckDuckGo(query, maxResults, startTime, options);
     } catch (error) {
-      if (error instanceof CallerStop) throw error.error;
+      // An abort wins over what `onSend` threw, so the search rejects with the signal's reason whenever it aborted.
+      if (error instanceof CallerStop) throw signal?.aborted ? signal.reason : error.error;
       throw error;
     }
   }
 
-  /** Awaits the caller's `onSend` before a provider is asked; what it throws ends the search, carried as a `CallerStop`. */
+  /**
+   * Awaits the caller's `onSend` before a provider is asked; what it throws ends the search, carried as a
+   * `CallerStop`. The caller's abort ends the wait at once, with the signal's reason, whether or not the hook settles.
+   */
   private async beforeSend(call: SearchOptions): Promise<void> {
     call.signal?.throwIfAborted();
-    if (call.onSend === undefined) return;
-    try {
-      await call.onSend();
-    } catch (error) {
+    const hook = call.onSend;
+    if (hook === undefined) return;
+    const sent = (async () => hook())().catch((error: unknown) => {
       throw new CallerStop(error);
-    }
+    });
+    await untilAbort(sent, call.signal);
   }
 
   /**
@@ -314,16 +343,17 @@ export class SearchProviderService {
     // A signal of this call's own keys the limiter's refusal to it, and follows the caller's abort with its reason.
     const callSignal = call.signal === undefined ? new AbortController().signal : AbortSignal.any([call.signal]);
     let thrown: { error: unknown } | null = null;
+    const hook = call.onSend;
     const onSend =
-      call.onSend === undefined
+      hook === undefined
         ? undefined
         : async (): Promise<void> => {
-            try {
-              await call.onSend!();
-            } catch (error) {
+            const sent = (async () => hook())().catch((error: unknown) => {
               thrown = { error };
               throw error;
-            }
+            });
+            // The caller's abort ends the wait at once; public-sources then rejects with the signal's reason.
+            await untilAbort(sent, callSignal);
           };
     const outcome = await this.wikipedia.search(query, { limit: maxResults, signal: callSignal, onSend });
     if (thrown !== null) throw new CallerStop(thrown.error);
