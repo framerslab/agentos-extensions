@@ -1,4 +1,7 @@
 // @ts-nocheck
+import { LimiterRefused, SourceLimiter, WikipediaSourceProvider, articleUrl } from '@framers/agentos-ext-public-sources';
+import type { WikipediaClient } from '@framers/agentos-ext-public-sources';
+
 /**
  * Configuration for search providers
  */
@@ -14,6 +17,135 @@ export interface SearchProviderConfig {
     maxRequests: number;
     windowMs: number;
   };
+  /**
+   * English Wikipedia (or the wiki at `origin`) through public-sources' `WikipediaSourceProvider`: no key; off until
+   * `enabled` is true. `client` names the host in the User-Agent Wikimedia's policy asks for. `limiter` is the
+   * process's one limiter for the wiki, shared with every other request the host makes to it (a new one when left
+   * out, which only a process with one service should do). `origin` is `https://en.wikipedia.org` and `timeoutMs`,
+   * each request's deadline, 3,000 when left out.
+   */
+  wikipedia?: { enabled: boolean; client: WikipediaClient; limiter?: SourceLimiter; origin?: string; timeoutMs?: number };
+  /** Serper's search endpoint; `https://google.serper.dev/search` when left out. */
+  serperUrl?: string;
+  /** Tavily's search endpoint; `https://api.tavily.com/search` when left out. */
+  tavilyUrl?: string;
+  /** Firecrawl's search endpoint; `https://api.firecrawl.dev/v1/search` when left out. */
+  firecrawlUrl?: string;
+  /** Tavily's search depth; `advanced` when left out. */
+  tavily?: { searchDepth?: 'basic' | 'advanced' };
+}
+
+/**
+ * What one call of `search` may carry.
+ */
+export interface SearchOptions {
+  /** The most results answered; 10 when left out. */
+  maxResults?: number;
+  /** One provider to ask, with no other tried and no fallback. */
+  provider?: string;
+  /** SearXNG's category. */
+  category?: string;
+  /** Ends every provider request of this search; the search rejects with the signal's reason. */
+  signal?: AbortSignal;
+  /**
+   * Awaited once before each provider is asked, before its request is sent; a throw sends nothing, ends the search
+   * and is rethrown as thrown. For the `wikipedia` provider it runs once the limiter has granted the request, so a
+   * search the limiter refuses never runs it.
+   */
+  onSend?: () => void | Promise<void>;
+}
+
+/** A search the `wikipedia` provider could not answer, with the HTTP status when one came: nothing is retried and no other provider is tried. */
+export class SearchFailed extends Error {
+  constructor(
+    readonly provider: string,
+    readonly status: number | null,
+  ) {
+    super(`search failed: ${provider}`);
+    this.name = 'SearchFailed';
+  }
+}
+
+/** The fixed endpoints, each the default of its option. */
+const SERPER_URL = 'https://google.serper.dev/search';
+const TAVILY_URL = 'https://api.tavily.com/search';
+const FIRECRAWL_URL = 'https://api.firecrawl.dev/v1/search';
+const WIKIPEDIA_ORIGIN = 'https://en.wikipedia.org';
+
+/** What `onSend` threw, carried past the provider loop's own catch so the search ends with it as thrown. */
+class CallerStop {
+  constructor(readonly error: unknown) {}
+}
+
+/** `fetch` with the caller's signal added to `init`; with no signal, the call as it was made before the option existed. */
+function send(url: string, init: RequestInit | undefined, signal: AbortSignal | undefined): Promise<Response> {
+  if (signal === undefined) return init === undefined ? fetch(url) : fetch(url, init);
+  return fetch(url, { ...(init ?? {}), signal });
+}
+
+/** A provider's own timer joined with the caller's signal, when there is one. */
+function joined(own: AbortSignal, signal: AbortSignal | undefined): AbortSignal {
+  return signal === undefined ? own : AbortSignal.any([own, signal]);
+}
+
+/** `work`'s outcome, or a rejection with the signal's reason the moment the signal aborts first. */
+function untilAbort<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) return work;
+  if (signal.aborted) {
+    // Nobody waits for `work` now, so its own rejection is handled here.
+    work.catch(() => undefined);
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/** A `LimiterRefused`, whichever copy of public-sources threw it. */
+function isRefusal(error: unknown): boolean {
+  return error instanceof LimiterRefused || (error as { name?: unknown } | null)?.name === 'LimiterRefused';
+}
+
+/**
+ * The host's limiter, keeping each refusal it throws for the call it refused (keyed by that call's own signal), so a
+ * search the limiter refused throws the limiter's own `LimiterRefused`, reason and all. Every request runs under the
+ * host's limiter, and a block lands there.
+ */
+class RefusalKeeper extends SourceLimiter {
+  private readonly refusals = new WeakMap<AbortSignal, unknown>();
+
+  constructor(private readonly inner: SourceLimiter) {
+    super();
+  }
+
+  block(retryAfter: string | null): void {
+    this.inner.block(retryAfter);
+  }
+
+  async run<T>(task: () => Promise<T>, signal?: AbortSignal, beforeStart?: () => void | Promise<void>): Promise<T> {
+    try {
+      return await this.inner.run(task, signal, beforeStart);
+    } catch (error) {
+      if (signal !== undefined && isRefusal(error)) this.refusals.set(signal, error);
+      throw error;
+    }
+  }
+
+  /** The refusal thrown for the call with this signal, if any. */
+  refusal(signal: AbortSignal): unknown {
+    return this.refusals.get(signal);
+  }
 }
 
 /**
@@ -89,10 +221,14 @@ export interface MultiSearchResponse {
 export class SearchProviderService {
   private config: SearchProviderConfig;
   private rateLimitState: Map<string, { count: number; resetTime: number }>;
-  
+  /** The `wikipedia` provider, built once when the config enables it. */
+  private wikipedia: WikipediaSourceProvider | null = null;
+  private wikipediaLimiter: RefusalKeeper | null = null;
+  private wikipediaOrigin = WIKIPEDIA_ORIGIN;
+
   /**
    * Creates an instance of SearchProviderService
-   * 
+   *
    * @param {SearchProviderConfig} config - Configuration for the service
    */
   constructor(config: SearchProviderConfig) {
@@ -108,53 +244,131 @@ export class SearchProviderService {
         maxRequests: 10,
         windowMs: 60000,
       },
+      wikipedia: config.wikipedia,
+      serperUrl: config.serperUrl ?? SERPER_URL,
+      tavilyUrl: config.tavilyUrl ?? TAVILY_URL,
+      firecrawlUrl: config.firecrawlUrl ?? FIRECRAWL_URL,
+      tavily: { searchDepth: config.tavily?.searchDepth ?? 'advanced' },
     };
     this.rateLimitState = new Map();
+    const wikipedia = config.wikipedia;
+    if (wikipedia?.enabled === true) {
+      this.wikipediaOrigin = (wikipedia.origin ?? WIKIPEDIA_ORIGIN).replace(/\/+$/u, '');
+      this.wikipediaLimiter = new RefusalKeeper(wikipedia.limiter ?? new SourceLimiter());
+      this.wikipedia = new WikipediaSourceProvider({
+        client: wikipedia.client,
+        limiter: this.wikipediaLimiter,
+        origin: this.wikipediaOrigin,
+        timeoutMs: wikipedia.timeoutMs,
+      });
+    }
   }
-  
+
   /**
    * Performs a search across available providers with automatic fallback
-   * 
+   *
    * @param {string} query - The search query
-   * @param {Object} options - Search options
+   * @param {SearchOptions} options - Search options
    * @param {number} [options.maxResults=10] - Maximum results to return
-   * @param {string} [options.provider] - Specific provider to use
+   * @param {string} [options.provider] - Specific provider to use, with no other tried
+   * @param {AbortSignal} [options.signal] - Ends every provider request of the search
+   * @param {Function} [options.onSend] - Awaited once before each provider is asked; a throw sends nothing and is rethrown
    * @returns {Promise<ProviderResponse>} Search results with metadata
-   * 
-   * @throws {Error} If all providers fail and no fallback is available
+   *
+   * @throws {Error} When a pinned provider fails, when `onSend` throws, or with the signal's reason on an abort
    */
-  async search(
-    query: string,
-    options: {
-      maxResults?: number;
-      provider?: string;
-      category?: string;
-    } = {}
-  ): Promise<ProviderResponse> {
+  async search(query: string, options: SearchOptions = {}): Promise<ProviderResponse> {
     const startTime = Date.now();
     const maxResults = options.maxResults || 10;
-    
-    // If specific provider requested, try only that one
-    if (options.provider) {
-      return this.searchWithProvider(query, options.provider, maxResults, startTime, options.category);
-    }
+    const { signal } = options;
 
-    // Try providers in order of preference
-    const providers = this.getAvailableProviders();
+    try {
+      signal?.throwIfAborted();
 
-    for (const provider of providers) {
-      try {
-        if (await this.checkRateLimit(provider)) {
-          return await this.searchWithProvider(query, provider, maxResults, startTime, options.category);
-        }
-      } catch (error) {
-        console.warn(`Provider ${provider} failed:`, error);
-        continue;
+      // If specific provider requested, try only that one
+      if (options.provider) {
+        return await this.searchWithProvider(query, options.provider, maxResults, startTime, options.category, options);
       }
-    }
 
-    // Final fallback to DuckDuckGo (no API key required)
-    return this.searchDuckDuckGo(query, maxResults, startTime);
+      // Try providers in order of preference. The wikipedia provider answers article titles alone, so a general query
+      // never ends there: it is asked when pinned or by multiSearch, and DuckDuckGo stays the fallback.
+      const providers = this.getAvailableProviders().filter((provider) => provider !== 'wikipedia');
+
+      for (const provider of providers) {
+        try {
+          if (await this.checkRateLimit(provider)) {
+            return await this.searchWithProvider(query, provider, maxResults, startTime, options.category, options);
+          }
+        } catch (error) {
+          if (error instanceof CallerStop) throw error;
+          if (signal?.aborted) throw signal.reason;
+          console.warn(`Provider ${provider} failed:`, error);
+          continue;
+        }
+      }
+
+      // Final fallback to DuckDuckGo (no API key required)
+      signal?.throwIfAborted();
+      return await this.searchDuckDuckGo(query, maxResults, startTime, options);
+    } catch (error) {
+      // An abort wins over what `onSend` threw, so the search rejects with the signal's reason whenever it aborted.
+      if (error instanceof CallerStop) throw signal?.aborted ? signal.reason : error.error;
+      throw error;
+    }
+  }
+
+  /**
+   * Awaits the caller's `onSend` before a provider is asked; what it throws ends the search, carried as a
+   * `CallerStop`. The caller's abort ends the wait at once, with the signal's reason, whether or not the hook settles.
+   */
+  private async beforeSend(call: SearchOptions): Promise<void> {
+    call.signal?.throwIfAborted();
+    const hook = call.onSend;
+    if (hook === undefined) return;
+    const sent = (async () => hook())().catch((error: unknown) => {
+      throw new CallerStop(error);
+    });
+    await untilAbort(sent, call.signal);
+  }
+
+  /**
+   * Searches the wiki through public-sources' provider, under the host's limiter: hits as results with their article
+   * addresses, the limiter's `LimiterRefused` when it refused, `SearchFailed` when the search failed, and what
+   * `onSend` threw as a `CallerStop`. The caller's abort rejects with the signal's reason.
+   */
+  private async searchWikipedia(query: string, maxResults: number, call: SearchOptions): Promise<SearchResult[]> {
+    if (this.wikipedia === null || this.wikipediaLimiter === null) {
+      throw new Error('The wikipedia provider is not enabled: pass wikipedia: { enabled: true, client } to the service.');
+    }
+    // A signal of this call's own keys the limiter's refusal to it, and follows the caller's abort with its reason.
+    const callSignal = call.signal === undefined ? new AbortController().signal : AbortSignal.any([call.signal]);
+    let thrown: { error: unknown } | null = null;
+    const hook = call.onSend;
+    const onSend =
+      hook === undefined
+        ? undefined
+        : async (): Promise<void> => {
+            const sent = (async () => hook())().catch((error: unknown) => {
+              thrown = { error };
+              throw error;
+            });
+            // The caller's abort ends the wait at once; public-sources then rejects with the signal's reason.
+            await untilAbort(sent, callSignal);
+          };
+    const outcome = await this.wikipedia.search(query, { limit: maxResults, signal: callSignal, onSend });
+    if (thrown !== null) throw new CallerStop(thrown.error);
+    // The keeper is read before the outcome: public-sources answers `failed` for a refusal from a limiter of another
+    // copy of it (its check is by class), and the keeper has that refusal by name.
+    const refusal = this.wikipediaLimiter.refusal(callSignal);
+    if (refusal !== undefined) throw refusal;
+    if (outcome.kind === 'limited') throw new LimiterRefused('wait');
+    if (outcome.kind === 'failed') throw new SearchFailed('wikipedia', outcome.status);
+    return outcome.hits.map((hit, index) => ({
+      title: hit.title,
+      url: articleUrl(this.wikipediaOrigin, hit.key),
+      snippet: '',
+      position: index + 1,
+    }));
   }
   
   /**
@@ -172,32 +386,40 @@ export class SearchProviderService {
     provider: string,
     maxResults: number,
     startTime: number,
-    category?: string
+    category?: string,
+    call: SearchOptions = {}
   ): Promise<ProviderResponse> {
     let results: SearchResult[];
+    const { signal } = call;
+
+    // The wikipedia provider runs `onSend` inside its limiter; every other provider runs it here, before its request.
+    if (provider !== 'wikipedia') await this.beforeSend(call);
 
     switch (provider) {
+      case 'wikipedia':
+        results = await this.searchWikipedia(query, maxResults, call);
+        break;
       case 'serper':
-        results = await this.searchSerper(query, maxResults);
+        results = await this.searchSerper(query, maxResults, signal);
         break;
       case 'serpapi':
-        results = await this.searchSerpApi(query, maxResults);
+        results = await this.searchSerpApi(query, maxResults, signal);
         break;
       case 'brave':
-        results = await this.searchBrave(query, maxResults);
+        results = await this.searchBrave(query, maxResults, signal);
         break;
       case 'tavily':
-        results = await this.searchTavily(query, maxResults);
+        results = await this.searchTavily(query, maxResults, signal);
         break;
       case 'firecrawl':
-        results = await this.searchFirecrawl(query, maxResults);
+        results = await this.searchFirecrawl(query, maxResults, signal);
         break;
       case 'searxng':
-        results = await this.searchSearXNG(query, maxResults, { categories: category });
+        results = await this.searchSearXNG(query, maxResults, { categories: category }, signal);
         break;
       case 'duckduckgo':
       default:
-        results = await this.searchDuckDuckGoAPI(query, maxResults);
+        results = await this.searchDuckDuckGoAPI(query, maxResults, signal);
         break;
     }
     
@@ -226,6 +448,8 @@ export class SearchProviderService {
     if (this.config.serpApiKey) providers.push('serpapi');
     if (this.config.firecrawlApiKey) providers.push('firecrawl');
     if (this.config.searxngUrl) providers.push('searxng');
+    // Last, so a host that enables it keeps the order of the providers it had.
+    if (this.wikipedia !== null) providers.push('wikipedia');
 
     return providers;
   }
@@ -265,15 +489,15 @@ export class SearchProviderService {
    * @param {number} maxResults - Maximum results
    * @returns {Promise<SearchResult[]>} Search results
    */
-  private async searchSerper(query: string, maxResults: number): Promise<SearchResult[]> {
-    const response = await fetch('https://google.serper.dev/search', {
+  private async searchSerper(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+    const response = await send(this.config.serperUrl!, {
       method: 'POST',
       headers: {
         'X-API-KEY': this.config.serperApiKey!,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ q: query, num: maxResults })
-    });
+    }, signal);
     
     if (!response.ok) throw new Error(`Serper API error: ${response.statusText}`);
     
@@ -294,14 +518,14 @@ export class SearchProviderService {
    * @param {number} maxResults - Maximum results
    * @returns {Promise<SearchResult[]>} Search results
    */
-  private async searchSerpApi(query: string, maxResults: number): Promise<SearchResult[]> {
+  private async searchSerpApi(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
     const params = new URLSearchParams({
       q: query,
       api_key: this.config.serpApiKey!,
       num: maxResults.toString()
     });
     
-    const response = await fetch(`https://serpapi.com/search?${params}`);
+    const response = await send(`https://serpapi.com/search?${params}`, undefined, signal);
     if (!response.ok) throw new Error(`SerpAPI error: ${response.statusText}`);
     
     const data = (await response.json()) as any;
@@ -321,17 +545,17 @@ export class SearchProviderService {
    * @param {number} maxResults - Maximum results
    * @returns {Promise<SearchResult[]>} Search results
    */
-  private async searchBrave(query: string, maxResults: number): Promise<SearchResult[]> {
+  private async searchBrave(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
     const params = new URLSearchParams({
       q: query,
       count: maxResults.toString()
     });
     
-    const response = await fetch(`https://api.search.brave.com/res/v1/web/search?${params}`, {
+    const response = await send(`https://api.search.brave.com/res/v1/web/search?${params}`, {
       headers: {
         'X-Subscription-Token': this.config.braveApiKey!
       }
-    });
+    }, signal);
     
     if (!response.ok) throw new Error(`Brave API error: ${response.statusText}`);
     
@@ -356,10 +580,12 @@ export class SearchProviderService {
   private async searchDuckDuckGo(
     query: string, 
     maxResults: number,
-    startTime: number
+    startTime: number,
+    call: SearchOptions = {}
   ): Promise<ProviderResponse> {
+    await this.beforeSend(call);
     try {
-      const results = await this.searchDuckDuckGoAPI(query, maxResults);
+      const results = await this.searchDuckDuckGoAPI(query, maxResults, call.signal);
       return {
         provider: 'duckduckgo',
         results,
@@ -371,7 +597,8 @@ export class SearchProviderService {
         }
       };
     } catch (error) {
-      // Return empty results rather than throwing
+      // The caller's abort ends the search; any other failure answers empty results rather than throwing
+      if (call.signal?.aborted) throw call.signal.reason;
       return {
         provider: 'duckduckgo',
         results: [],
@@ -402,16 +629,17 @@ export class SearchProviderService {
    * @param {number} maxResults - Maximum results
    * @returns {Promise<SearchResult[]>} Search results
    */
-  private async searchDuckDuckGoAPI(query: string, maxResults: number): Promise<SearchResult[]> {
+  private async searchDuckDuckGoAPI(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
     try {
-      const htmlResults = await this.scrapeDuckDuckGoHTML(query, maxResults);
+      const htmlResults = await this.scrapeDuckDuckGoHTML(query, maxResults, signal);
       if (htmlResults.length > 0) return htmlResults;
     } catch {
       // Fall through to instant answer API
     }
 
-    // Fallback: DuckDuckGo instant answer API (limited but free)
-    return this.searchDuckDuckGoInstantAnswer(query, maxResults);
+    // Fallback: DuckDuckGo instant answer API (limited but free), unless the caller has stopped the search
+    signal?.throwIfAborted();
+    return this.searchDuckDuckGoInstantAnswer(query, maxResults, signal);
   }
 
   /**
@@ -419,16 +647,16 @@ export class SearchProviderService {
    *
    * @private
    */
-  private async scrapeDuckDuckGoHTML(query: string, maxResults: number): Promise<SearchResult[]> {
+  private async scrapeDuckDuckGoHTML(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
     const body = new URLSearchParams({ q: query, b: '' });
-    const response = await fetch('https://html.duckduckgo.com/html/', {
+    const response = await send('https://html.duckduckgo.com/html/', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': 'Mozilla/5.0 (compatible; WunderlandBot/1.0; +https://wunderland.sh)',
       },
       body: body.toString(),
-    });
+    }, signal);
 
     if (!response.ok) return [];
 
@@ -478,7 +706,7 @@ export class SearchProviderService {
    *
    * @private
    */
-  private async searchDuckDuckGoInstantAnswer(query: string, maxResults: number): Promise<SearchResult[]> {
+  private async searchDuckDuckGoInstantAnswer(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
     const params = new URLSearchParams({
       q: query,
       format: 'json',
@@ -486,7 +714,7 @@ export class SearchProviderService {
       skip_disambig: '1',
     });
 
-    const response = await fetch(`https://api.duckduckgo.com/?${params}`);
+    const response = await send(`https://api.duckduckgo.com/?${params}`, undefined, signal);
     const data = (await response.json()) as any;
 
     const results: SearchResult[] = [];
@@ -527,7 +755,8 @@ export class SearchProviderService {
   private async searchSearXNG(
     query: string,
     maxResults: number,
-    options?: { categories?: string }
+    options?: { categories?: string },
+    signal?: AbortSignal
   ): Promise<SearchResult[]> {
     const params = new URLSearchParams({
       q: query,
@@ -536,7 +765,7 @@ export class SearchProviderService {
     });
 
     const baseUrl = this.config.searxngUrl!.replace(/\/+$/, '');
-    const response = await fetch(`${baseUrl}/search?${params}`);
+    const response = await send(`${baseUrl}/search?${params}`, undefined, signal);
 
     if (!response.ok) throw new Error(`SearXNG API error: ${response.statusText}`);
 
@@ -573,23 +802,23 @@ export class SearchProviderService {
    * Search using the Tavily API (AI-optimized search).
    * @see https://docs.tavily.com/docs/tavily-api/rest-api
    */
-  private async searchTavily(query: string, maxResults: number): Promise<SearchResult[]> {
+  private async searchTavily(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
 
     try {
-      const res = await fetch('https://api.tavily.com/search', {
+      const res = await fetch(this.config.tavilyUrl!, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           api_key: this.config.tavilyApiKey,
           query,
-          search_depth: 'advanced',
+          search_depth: this.config.tavily!.searchDepth,
           include_answer: false,
           include_raw_content: false,
           max_results: Math.min(maxResults, 20),
         }),
-        signal: controller.signal,
+        signal: joined(controller.signal, signal),
       });
 
       if (!res.ok) throw new Error(`Tavily API error: ${res.status} ${res.statusText}`);
@@ -605,6 +834,8 @@ export class SearchProviderService {
         position: i + 1,
       }));
     } catch (err) {
+      // The caller's abort ends the search; the provider's own timeout answers no results
+      if (signal?.aborted) throw signal.reason;
       if ((err as Error).name === 'AbortError') return [];
       throw err;
     } finally {
@@ -616,12 +847,12 @@ export class SearchProviderService {
    * Search using the Firecrawl /search endpoint.
    * @see https://docs.firecrawl.dev/api-reference/endpoint/search
    */
-  private async searchFirecrawl(query: string, maxResults: number): Promise<SearchResult[]> {
+  private async searchFirecrawl(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
 
     try {
-      const res = await fetch('https://api.firecrawl.dev/v1/search', {
+      const res = await fetch(this.config.firecrawlUrl!, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -631,7 +862,7 @@ export class SearchProviderService {
           query,
           limit: Math.min(maxResults, 20),
         }),
-        signal: controller.signal,
+        signal: joined(controller.signal, signal),
       });
 
       if (!res.ok) throw new Error(`Firecrawl API error: ${res.status} ${res.statusText}`);
@@ -648,6 +879,8 @@ export class SearchProviderService {
         position: i + 1,
       }));
     } catch (err) {
+      // The caller's abort ends the search; the provider's own timeout answers no results
+      if (signal?.aborted) throw signal.reason;
       if ((err as Error).name === 'AbortError') return [];
       throw err;
     } finally {

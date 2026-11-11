@@ -11,10 +11,13 @@ import type { ITool, JSONSchemaObject, ToolExecutionContext, ToolExecutionResult
 import type { ProviderResponse, MultiSearchResponse } from '../services/searchProvider.js';
 import { SearchProviderService } from '../services/searchProvider.js';
 
+/** Every provider a call may pin; the tool offers `wikipedia` only on a service that enables it. */
+export const WEB_SEARCH_PROVIDERS = ['serper', 'serpapi', 'brave', 'tavily', 'firecrawl', 'searxng', 'wikipedia', 'duckduckgo'] as const;
+
 export interface WebSearchInput {
   query: string;
   maxResults?: number;
-  provider?: 'serper' | 'serpapi' | 'brave' | 'searxng' | 'duckduckgo';
+  provider?: (typeof WEB_SEARCH_PROVIDERS)[number];
   multiSearch?: boolean;
   category?: string;
 }
@@ -26,52 +29,64 @@ export class WebSearchTool implements ITool<WebSearchInput, WebSearchOutput> {
   /** Tool call name used by the LLM / ToolExecutor. */
   public readonly name = 'web_search';
   public readonly displayName = 'Web Search';
-  public readonly description =
-    'Search the web using multiple providers (Serper, SerpAPI, Brave, SearXNG, DuckDuckGo fallback). Set multiSearch=true to query ALL providers in parallel for higher-confidence, deduplicated results.';
+  /** Names Wikipedia only when the service enables it. */
+  public readonly description: string;
   public readonly category = 'research';
   public readonly hasSideEffects = false;
 
-  public readonly inputSchema: JSONSchemaObject = {
-    type: 'object',
-    required: ['query'],
-    properties: {
-      query: {
-        type: 'string',
-        description: 'The search query',
-      },
-      maxResults: {
-        type: 'integer',
-        description: 'Maximum number of results to return',
-        default: 10,
-        minimum: 1,
-        maximum: 50,
-      },
-      provider: {
-        type: 'string',
-        description: 'Specific search provider to use (ignored when multiSearch is true)',
-        enum: ['serper', 'serpapi', 'brave', 'searxng', 'duckduckgo'],
-      },
-      multiSearch: {
-        type: 'boolean',
-        description:
-          'When true, searches ALL available providers in parallel and returns merged, deduplicated results ranked by cross-provider agreement. Useful for deep research or fact verification.',
-        default: false,
-      },
-      category: {
-        type: 'string',
-        description: 'Search category (SearXNG only). Options: general, news, images, videos, it, science, files, social_media',
-        enum: ['general', 'news', 'images', 'videos', 'it', 'science', 'files', 'social_media'],
-      },
-    },
-    additionalProperties: false,
-  };
+  /** Offers `wikipedia` in the provider enum only when the service enables it. */
+  public readonly inputSchema: JSONSchemaObject;
 
   public readonly requiredCapabilities = ['capability:web_search'];
+
+  /** The providers a call may pin on this tool's service: every one, `wikipedia` only when the service enables it. */
+  private readonly providers: readonly string[];
 
   constructor(
     private readonly searchService: SearchProviderService,
     private readonly defaultMultiSearch: boolean = false,
-  ) {}
+  ) {
+    // Read once: the service builds its wikipedia provider in its constructor and never adds or drops it.
+    const enabled = this.searchService?.getAvailableProviders?.() ?? [];
+    this.providers = WEB_SEARCH_PROVIDERS.filter((provider) => provider !== 'wikipedia' || enabled.includes('wikipedia'));
+    this.description = this.providers.includes('wikipedia')
+      ? 'Search the web using multiple providers (Serper, SerpAPI, Brave, Tavily, Firecrawl, SearXNG, DuckDuckGo fallback), or Wikipedia by provider=wikipedia. Set multiSearch=true to query ALL providers in parallel for higher-confidence, deduplicated results.'
+      : 'Search the web using multiple providers (Serper, SerpAPI, Brave, Tavily, Firecrawl, SearXNG, DuckDuckGo fallback). Set multiSearch=true to query ALL providers in parallel for higher-confidence, deduplicated results.';
+    this.inputSchema = {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query: {
+          type: 'string',
+          description: 'The search query',
+        },
+        maxResults: {
+          type: 'integer',
+          description: 'Maximum number of results to return',
+          default: 10,
+          minimum: 1,
+          maximum: 50,
+        },
+        provider: {
+          type: 'string',
+          description: 'Specific search provider to use (ignored when multiSearch is true)',
+          enum: [...this.providers],
+        },
+        multiSearch: {
+          type: 'boolean',
+          description:
+            'When true, searches ALL available providers in parallel and returns merged, deduplicated results ranked by cross-provider agreement. Useful for deep research or fact verification.',
+          default: false,
+        },
+        category: {
+          type: 'string',
+          description: 'Search category (SearXNG only). Options: general, news, images, videos, it, science, files, social_media',
+          enum: ['general', 'news', 'images', 'videos', 'it', 'science', 'files', 'social_media'],
+        },
+      },
+      additionalProperties: false,
+    };
+  }
 
   async execute(input: WebSearchInput, _context: ToolExecutionContext): Promise<ToolExecutionResult<WebSearchOutput>> {
     if (!this.searchService) {
@@ -117,8 +132,7 @@ export class WebSearchTool implements ITool<WebSearchInput, WebSearchOutput> {
     }
 
     if (input.provider !== undefined) {
-      const validProviders = ['serper', 'serpapi', 'brave', 'searxng', 'duckduckgo'];
-      if (!validProviders.includes(input.provider)) {
+      if (!this.providers.includes(input.provider)) {
         errors.push('Invalid provider');
       }
     }
