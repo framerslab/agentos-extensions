@@ -5,7 +5,8 @@
  * 2026)`), in a markdown link, between angle brackets or bare, on the same line or a later line of the paragraph;
  * several quotations waiting in a sentence share the address that follows them. A quotation of four words or more that
  * no address follows before its sentence ends is uncited; a shorter one is a term or a title and is passed over.
- * Fenced code, code spans and escaped quotation marks hold no claim. JSON: an array of `{ claim, url, exact }`.
+ * Fenced code, code spans, escaped quotation marks and a link's title hold no claim; a quotation's emphasis marks are
+ * removed from its words. JSON: an array of `{ claim, url, exact }`.
  *
  * @module agentos/extensions/research/citation-check/parse
  */
@@ -45,6 +46,15 @@ const QUOTE_MARKER = /^ {0,3}>/u;
 const ADDRESS_END = /[\s<>"“”„`]/u;
 /** Punctuation that ends a sentence or a markdown span after an address, not the address itself. */
 const TRAILING = /[.,;:!?'*_~]/u;
+/** What stands before a markdown link's address: `](`, or `](<` for an address in angle brackets. */
+const LINK_OPEN = /\]\(<?$/u;
+/** A markdown link's title after its address and before the closing parenthesis: `"…"`, `'…'` or `(…)`. */
+const LINK_TITLE = /^>?\s+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\))(?=\s*\))/u;
+/**
+ * Emphasis marks: a run of `*` against a word on either side, or a run of `_` at a word's edge (an `_` inside a word,
+ * as in `snake_case`, is no emphasis); an escaped mark is none.
+ */
+const EMPHASIS = /(?<!\\)(?:\*+(?=\S)|(?<=\S)\*+|(?<![\p{L}\p{N}\\])_+(?=\S)|(?<=\S)_+(?![\p{L}\p{N}]))/gu;
 
 /** Whether a string is an absolute http or https address with a host. */
 export function isHttpUrl(value: string): boolean {
@@ -116,9 +126,9 @@ function closingMark(text: string, from: number, closers: string): number {
   return -1;
 }
 
-/** A quotation's words: escapes and the markdown marks for bold and code removed, white space collapsed. */
+/** A quotation's words: the markdown marks for emphasis and code removed, then escapes, white space collapsed. */
 function cleanQuotation(raw: string): string {
-  return collapse(raw.replace(/\\(.)/gu, '$1').replace(/\*\*|__|`/gu, ''));
+  return collapse(raw.replace(EMPHASIS, '').replace(/\\(.)/gu, '$1').replace(/`/gu, ''));
 }
 
 /** How many times a character stands in a string. */
@@ -197,7 +207,10 @@ function scanUnit(unit: UnitLine[], out: CitedClaim[]): void {
         for (const quote of waiting) out.push({ line: quote.line, claim: quote.claim, url, exact: true });
         waiting = [];
       }
+      const inLink = LINK_OPEN.test(text.slice(Math.max(0, index - 3), index));
       index += Math.max(url.length, 1);
+      // A link's title, `[text](address "Title")`, is no quotation: the scan goes on at the closing parenthesis.
+      if (inLink) index += LINK_TITLE.exec(text.slice(index))?.[0].length ?? 0;
       continue;
     }
     if (char === '(' || char === '[') {

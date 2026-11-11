@@ -3,7 +3,14 @@ import { lexicalNearest, locateQuote, normalizeForMatch, quoteFragments } from '
 
 describe('normalizeForMatch', () => {
   it('folds typographic quotes and dashes, case, white space, soft hyphens and compatibility forms', () => {
-    expect(normalizeForMatch('The KEEPER’S “Log” — 1902–1903\u00A0\uFB01ne\u00ADtuned  «here»')).toBe(`the keeper's "log"-1902-1903 finetuned "here"`);
+    expect(normalizeForMatch('The KEEPER’S “Log”—1902–1903\u00A0\uFB01ne\u00ADtuned  «here» – a note')).toBe(`the keeper's "log"-1902-1903 finetuned "here"-a note`);
+  });
+
+  it('keeps one space after a spaced dash before a digit, so the number after it reads with no sign', () => {
+    expect(normalizeForMatch('opened in 1887 — 4,200 ships came')).toBe('opened in 1887- 4,200 ships came');
+    expect(normalizeForMatch('opened in 1887 - 4,200 ships came')).toBe('opened in 1887- 4,200 ships came');
+    // A minus against its number stays its sign, and an unspaced range stays one token.
+    expect(normalizeForMatch('fell to −4 degrees in 1902–1903')).toBe('fell to-4 degrees in 1902-1903');
   });
 });
 
