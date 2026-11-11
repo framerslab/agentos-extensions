@@ -10,9 +10,14 @@
  * @module ml-classifiers
  */
 
-import type { ExtensionPack, ExtensionPackContext } from '@framers/agentos';
+import type {
+  ExtensionDescriptor,
+  ExtensionLifecycleContext,
+  ExtensionPack,
+  ExtensionPackContext,
+} from '@framers/agentos';
 import { EXTENSION_KIND_GUARDRAIL, EXTENSION_KIND_TOOL } from '@framers/agentos';
-import type { MLClassifierOptions } from './types.js';
+import type { MLClassifierLogger, MLClassifierOptions } from './types.js';
 import { MLClassifierGuardrail } from './MLClassifierGuardrail.js';
 import { ClassifyContentTool } from './tools/ClassifyContentTool.js';
 import { PACKAGE_VERSION } from './packageVersion.js';
@@ -31,31 +36,50 @@ export * from './types.js';
  * Create an ExtensionPack that bundles the ML classifier guardrail with
  * the `classify_content` tool.
  *
+ * When the ONNX tier cannot load, the guardrail writes one line saying so
+ * through `logger`, else the activation context's logger, else the console.
+ *
  * @param options - Optional pack-level configuration.  All properties have
  *                  sensible defaults; see {@link MLClassifierOptions}.
+ * @param logger - The host's logger.
  * @returns A fully-configured {@link ExtensionPack}.
  */
-export function createMLClassifierGuardrail(options?: MLClassifierOptions): ExtensionPack {
-  const guardrail = new MLClassifierGuardrail(options);
-  const tool = new ClassifyContentTool(guardrail);
+export function createMLClassifierGuardrail(
+  options?: MLClassifierOptions,
+  logger?: MLClassifierLogger
+): ExtensionPack {
+  let guardrail = new MLClassifierGuardrail(options, logger);
+  let tool = new ClassifyContentTool(guardrail);
 
   return {
     name: 'ml-classifiers',
     version: PACKAGE_VERSION,
-    descriptors: [
-      {
-        id: 'ml-classifier-guardrail',
-        kind: EXTENSION_KIND_GUARDRAIL,
-        priority: 5,
-        payload: guardrail,
-      },
-      {
-        id: 'classify_content',
-        kind: EXTENSION_KIND_TOOL,
-        priority: 0,
-        payload: tool,
-      },
-    ],
+    get descriptors(): ExtensionDescriptor[] {
+      return [
+        {
+          id: 'ml-classifier-guardrail',
+          kind: EXTENSION_KIND_GUARDRAIL,
+          priority: 5,
+          payload: guardrail,
+        },
+        {
+          id: 'classify_content',
+          kind: EXTENSION_KIND_TOOL,
+          priority: 0,
+          payload: tool,
+        },
+      ];
+    },
+    /**
+     * Picks up the activation context's logger when the pack was created
+     * without one.  Nothing has loaded before activation, so the rebuilt
+     * guardrail loses no state.
+     */
+    onActivate: (context?: ExtensionLifecycleContext): void => {
+      if (logger || !context?.logger) return;
+      guardrail = new MLClassifierGuardrail(options, context.logger);
+      tool = new ClassifyContentTool(guardrail);
+    },
   };
 }
 
@@ -74,7 +98,7 @@ export function createMLClassifierGuardrail(options?: MLClassifierOptions): Exte
  * @returns A fully-configured {@link ExtensionPack}.
  */
 export function createExtensionPack(context: ExtensionPackContext): ExtensionPack {
-  return createMLClassifierGuardrail(context.options as MLClassifierOptions);
+  return createMLClassifierGuardrail(context.options as MLClassifierOptions, context.logger);
 }
 
 /** @deprecated Use createMLClassifierGuardrail instead */

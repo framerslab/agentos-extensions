@@ -151,6 +151,28 @@ describe('Tier fallthrough', () => {
   });
 
   // -----------------------------------------------------------------------
+  // The warning when the ONNX tier is unavailable
+  // -----------------------------------------------------------------------
+
+  describe('ONNX import fails', () => {
+    it('writes one warning naming the ONNX tier and the keyword tier, then classifies by keyword', async () => {
+      const warn = vi.fn();
+      const guardrail = new MLClassifierGuardrail(undefined, { warn });
+
+      const first = await guardrail.classify('kill yourself you stupid ass idiot');
+      const second = await guardrail.classify('What is the weather like today?');
+
+      expect(first.source).toBe('keyword');
+      expect(first.flagged).toBe(true);
+      expect(second.source).toBe('keyword');
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0][0]);
+      expect(line).toContain('ONNX tier is unavailable');
+      expect(line).toContain('keyword tier');
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // evaluateInput integration — full fallthrough path
   // -----------------------------------------------------------------------
 
