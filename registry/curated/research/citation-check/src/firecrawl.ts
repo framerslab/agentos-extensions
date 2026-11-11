@@ -18,7 +18,7 @@
  * @module agentos/extensions/research/citation-check/firecrawl
  */
 
-import { pageBlocks, readCapped, type PageFallbackReader } from './page.js';
+import { pageBlocks, readCapped, whenAborted, type PageFallbackReader } from './page.js';
 
 /** Firecrawl's scrape endpoint, where the reader sends when the host names no other. */
 export const FIRECRAWL_SCRAPE_URL = 'https://api.firecrawl.dev/v2/scrape';
@@ -31,7 +31,10 @@ const FIRECRAWL_TIMEOUT_CEILING = 300_000;
 export interface FirecrawlPageReaderOptions {
   /** The host's Firecrawl key: sent in the `Authorization` header to the endpoint alone, never logged or shown. */
   apiKey: string;
-  /** The scrape endpoint; {@link FIRECRAWL_SCRAPE_URL} when left out. A host's test points it at a stand-in. */
+  /**
+   * The scrape endpoint; {@link FIRECRAWL_SCRAPE_URL} when left out. An https address, or plain http to the loopback
+   * address, where a host's test runs a stand-in.
+   */
   url?: string;
   /**
    * The deadline of the request, its answer's body included, in milliseconds. Firecrawl is asked to stop its own work
@@ -42,7 +45,10 @@ export interface FirecrawlPageReaderOptions {
   maxBytes: number;
   /** The most characters of the page's text kept. */
   textBudget: number;
-  /** The `fetch` the request goes through; the global one when left out. */
+  /**
+   * The `fetch` the request goes through; the global one when left out. The reader ends with its deadline and the
+   * caller's signal whether or not this `fetch` watches the signal.
+   */
   fetchFn?: typeof globalThis.fetch;
 }
 
@@ -52,16 +58,30 @@ function whole(name: string, value: unknown): number {
   return value;
 }
 
-/** An http or https address, or a refusal that names the option alone. */
+/** Whether a host name is the loopback address: `localhost`, 127.0.0.0/8 or `[::1]`. */
+function isLoopback(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/u.test(hostname);
+}
+
+/**
+ * The endpoint the key may go to: an https address, or plain http to the loopback address (a stand-in in a test), so
+ * the key never crosses a network in the clear. A refusal names the option alone.
+ */
 function endpointOf(value: unknown): string {
   if (value === undefined) return FIRECRAWL_SCRAPE_URL;
   try {
-    const { protocol } = new URL(String(value));
-    if (protocol === 'http:' || protocol === 'https:') return String(value);
+    const { protocol, hostname } = new URL(String(value));
+    if (protocol === 'https:' || (protocol === 'http:' && isLoopback(hostname))) return String(value);
   } catch {
     // Refused below.
   }
-  throw new TypeError('the Firecrawl scrape endpoint must be an http or https address');
+  throw new TypeError('the Firecrawl scrape endpoint must be an https address, or an http address on the loopback address');
+}
+
+/** Cancels a body without waiting: a stream whose cancel never settles must not hold the answer. */
+function discard(response: Response): null {
+  if (response.body !== null && !response.body.locked) void response.body.cancel().catch(() => undefined);
+  return null;
 }
 
 /** The page's HTML from a scrape's answer, or null for a failed scrape, an error page or an answer with none. */
@@ -94,8 +114,8 @@ export class FirecrawlPageReader implements PageFallbackReader {
 
   /**
    * @param options - The key, the endpoint and the bounds.
-   * @throws {TypeError} For an empty key, an endpoint that is not an http or https address, or a bound that is not a
-   * whole number of at least 1; the message never holds the key.
+   * @throws {TypeError} For an empty key, an endpoint that is neither an https address nor an http address on the
+   * loopback address, or a bound that is not a whole number of at least 1; the message never holds the key.
    */
   constructor(options: FirecrawlPageReaderOptions) {
     if (typeof options.apiKey !== 'string' || options.apiKey.trim() === '') throw new TypeError('a Firecrawl reader needs an API key');
@@ -108,58 +128,64 @@ export class FirecrawlPageReader implements PageFallbackReader {
   }
 
   /**
-   * Reads a page's text through Firecrawl.
+   * Reads a page's text through Firecrawl. The request and its body are raced against the deadline and the caller's
+   * signal, so a `fetch` of the host's that does not watch the signal still ends with them; a body is cancelled without
+   * waiting for the cancel to settle.
    *
    * @param url - The page's address, the one request's only page-borne field.
    * @param options - The caller's signal, which ends the request.
-   * @throws The caller's cancellation reason.
+   * @throws The caller's cancellation reason, whenever it fired before the answer.
    */
   async read(url: string, options: { signal: AbortSignal }): Promise<string[] | null> {
     const caller = options.signal;
     // A signal that has already fired sends nothing.
     caller.throwIfAborted();
     const signal = AbortSignal.any([caller, AbortSignal.timeout(this.#timeoutMs)]);
+    const ended = whenAborted(signal);
+    let blocks: string[] | null = null;
+    try {
+      const sent = this.#send(url, signal);
+      // A response that comes after the read ended is cancelled, so its connection is not left open.
+      void ended.promise.catch(() => sent.then(discard, () => undefined));
+      blocks = await this.#blocksOf(await Promise.race([sent, ended.promise]), signal);
+    } catch {
+      // Every failure answers null; the caller's cancellation is thrown below.
+    } finally {
+      ended.release();
+    }
+    caller.throwIfAborted();
+    return blocks;
+  }
+
+  /** The one request: the page's address, the format and the deadline, with the key in the `Authorization` header. */
+  #send(url: string, signal: AbortSignal): Promise<Response> {
     const fetchFn = this.#fetchFn ?? globalThis.fetch;
-    let response: Response;
-    try {
-      response = await fetchFn(this.#url, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${this.#apiKey}`, 'content-type': 'application/json', accept: 'application/json' },
-        // The whole page, as the reader reads its own fetches, rather than Firecrawl's main-content cut.
-        body: JSON.stringify({
-          url,
-          formats: ['html'],
-          onlyMainContent: false,
-          timeout: Math.min(FIRECRAWL_TIMEOUT_CEILING, Math.max(FIRECRAWL_TIMEOUT_FLOOR, this.#timeoutMs)),
-        }),
-        // The key goes to the endpoint alone, never to an address a redirect names.
-        redirect: 'error',
-        signal,
-      });
-    } catch {
-      if (caller.aborted) throw caller.reason;
-      return null;
-    }
-    try {
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
-        return null;
-      }
-      const declared = Number(response.headers.get('content-length') ?? '');
-      if (Number.isFinite(declared) && declared > this.#maxBytes) {
-        await response.body?.cancel().catch(() => undefined);
-        return null;
-      }
-      const bytes = await readCapped(response, this.#maxBytes);
-      if (bytes === null) return null;
-      const html = htmlOf(JSON.parse(new TextDecoder('utf-8').decode(bytes)));
-      if (html === null) return null;
-      const blocks = pageBlocks('html', html, this.#textBudget);
-      return blocks.length === 0 ? null : blocks;
-    } catch {
-      await response.body?.cancel().catch(() => undefined);
-      if (caller.aborted) throw caller.reason;
-      return null;
-    }
+    return fetchFn(this.#url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.#apiKey}`, 'content-type': 'application/json', accept: 'application/json' },
+      // The whole page, as the reader reads its own fetches, rather than Firecrawl's main-content cut.
+      body: JSON.stringify({
+        url,
+        formats: ['html'],
+        onlyMainContent: false,
+        timeout: Math.min(FIRECRAWL_TIMEOUT_CEILING, Math.max(FIRECRAWL_TIMEOUT_FLOOR, this.#timeoutMs)),
+      }),
+      // The key goes to the endpoint alone, never to an address a redirect names.
+      redirect: 'error',
+      signal,
+    });
+  }
+
+  /** The page's text from Firecrawl's answer, or null. */
+  async #blocksOf(response: Response, signal: AbortSignal): Promise<string[] | null> {
+    if (!response.ok) return discard(response);
+    const declared = Number(response.headers.get('content-length') ?? '');
+    if (Number.isFinite(declared) && declared > this.#maxBytes) return discard(response);
+    const bytes = await readCapped(response, this.#maxBytes, signal);
+    if (bytes === null) return null;
+    const html = htmlOf(JSON.parse(new TextDecoder('utf-8').decode(bytes)));
+    if (html === null) return null;
+    const blocks = pageBlocks('html', html, this.#textBudget);
+    return blocks.length === 0 ? null : blocks;
   }
 }

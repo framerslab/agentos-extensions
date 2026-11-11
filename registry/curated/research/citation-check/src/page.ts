@@ -150,23 +150,51 @@ async function checkAddress(url: string, rules: TransportRules, transport: Trans
   }
 }
 
-/** A body read up to `cap` bytes: its bytes, or null past the cap with the rest of the stream cancelled. */
-export async function readCapped(response: Response, cap: number): Promise<Uint8Array | null> {
+/**
+ * A promise that rejects with the signal's reason once it fires, after `onAbort` runs; `release` stops listening. It
+ * never counts as an unhandled rejection.
+ */
+export function whenAborted(signal: AbortSignal, onAbort: () => void = () => undefined): { promise: Promise<never>; release: () => void } {
+  let listener = (): void => undefined;
+  const promise = new Promise<never>((_resolve, reject) => {
+    listener = () => {
+      onAbort();
+      reject(signal.reason);
+    };
+    if (signal.aborted) listener();
+    else signal.addEventListener('abort', listener, { once: true });
+  });
+  promise.catch(() => undefined);
+  return { promise, release: () => signal.removeEventListener('abort', listener) };
+}
+
+/**
+ * A body read up to `cap` bytes: its bytes, or null past the cap with the rest of the stream cancelled. Given a signal,
+ * its abort cancels the stream and throws the signal's reason at once, also for a stream that answers neither.
+ */
+export async function readCapped(response: Response, cap: number, signal?: AbortSignal): Promise<Uint8Array | null> {
   if (response.body === null) return new Uint8Array(0);
+  signal?.throwIfAborted();
   const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > cap) {
-      await reader.cancel().catch(() => undefined);
-      return null;
+  const ended = signal === undefined ? null : whenAborted(signal, () => void reader.cancel(signal.reason).catch(() => undefined));
+  try {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await (ended === null ? reader.read() : Promise.race([reader.read(), ended.promise]));
+      if (done) break;
+      total += value.byteLength;
+      if (total > cap) {
+        // Not awaited: a stream whose cancel never settles must not hold the answer.
+        void reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+    return Buffer.concat(chunks);
+  } finally {
+    ended?.release();
   }
-  return Buffer.concat(chunks);
 }
 
 /** A body's first `cap` bytes, the rest of the stream cancelled. */
