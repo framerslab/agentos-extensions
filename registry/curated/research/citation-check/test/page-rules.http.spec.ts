@@ -150,11 +150,13 @@ const TRANSPORTS: Array<[string, () => Promise<Transport>]> = [
 ];
 
 describe.each(TRANSPORTS)('every redirect hop through %s', (_name, make) => {
-  it('follows a redirect the rules allow and reads the page it lands on', async () => {
+  it('follows a redirect the rules allow and reads the page it lands on, asking the host rule once an address', async () => {
     const transport = await make();
-    const page = await readPage(`${first.origin}/moved`, options(transport, { robots: RULE, allowUrl: (url) => url.startsWith(first.origin) }));
+    const asked: string[] = [];
+    const page = await readPage(`${first.origin}/moved`, options(transport, { robots: RULE, allowUrl: (url) => (asked.push(url.slice(first.origin.length)), url.startsWith(first.origin)) }));
     expect(page.status).toMatchObject({ outcome: 'read', finalUrl: `${first.origin}/page` });
     expect(first.paths).toEqual(['/robots.txt', '/moved', '/page']);
+    expect(asked).toEqual(['/moved', '/robots.txt', '/page']);
   });
 
   it('ends a redirect to a host the rule refuses as refused, with the target never requested', async () => {
@@ -184,6 +186,26 @@ describe.each(TRANSPORTS)('every redirect hop through %s', (_name, make) => {
     const icon = await transport(`${second.origin}/icon.png`, AbortSignal.timeout(2_000), { robots: RULE, allowUrl: () => true });
     expect(icon.status).toBe(200);
     expect(Buffer.from((await icon.read(1_000)) ?? new Uint8Array(0))).toEqual(PNG);
+  });
+});
+
+describe('the scraper under rules', () => {
+  it('never retries through the scraper when rules are given, since its requests do not go through them', async () => {
+    const scraped: string[] = [];
+    const scraper = {
+      scrape: async (input: { url: string }) => {
+        scraped.push(input.url);
+        return { success: true, url: 'https://refused.example.test/elsewhere', tier: 4 as const, statusCode: 200, html: '<p>Read from elsewhere.</p>' };
+      },
+    };
+    const stub = stubTransport((url) => (url.endsWith('/robots.txt') ? { status: 404 } : new TypeError('connection reset')));
+    const page = await readPage(`${ORIGIN}/article`, options(stub.transport, { scraper, robots: RULE, allowUrl: (url) => !url.includes('refused') }));
+    expect(scraped).toEqual([]);
+    expect(page.status).toMatchObject({ outcome: 'unreachable', failure: 'network', via: null });
+
+    const unruled = await readPage(`${ORIGIN}/article`, options(stubTransport(() => new TypeError('connection reset')).transport, { scraper }));
+    expect(scraped).toEqual([`${ORIGIN}/article`]);
+    expect(unruled.status).toMatchObject({ outcome: 'read', via: 'fallback' });
   });
 });
 
@@ -246,6 +268,11 @@ describe('what a read page carries', () => {
     expect(none.document).not.toHaveProperty('publisher');
   });
 
+  it('reads every named character reference in a title and a publisher’s name', async () => {
+    const page = await read(htmlPage('<title>Fran&ccedil;ois &eacute;crit</title><meta property="og:site_name" content="Caf&eacute; &amp; Gazette">', '<p>The harbour opened in 1887.</p>'));
+    expect(page.document).toMatchObject({ title: 'François écrit', publisher: 'Café & Gazette' });
+  });
+
   it('takes no publisher or date from JSON-LD a comment holds', async () => {
     const page = await read(
       htmlPage('<!-- <script type="application/ld+json">{"publisher":{"name":"Old Name"},"dateModified":"2020-01-01T00:00:00Z"}</script> -->', '<p>The harbour opened in 1887.</p>'),
@@ -293,6 +320,21 @@ describe('the reader for a page that came with no text', () => {
       expect(page.status).toMatchObject({ outcome: 'unreadable', failure: 'no_text', status: 200 });
       expect(page.document).toBeNull();
     }
+  });
+
+  it('asks the fallback for the address the page answered from after its redirects, the one the document names', async () => {
+    const asked: string[] = [];
+    const redirected: Transport = async (url) => ({
+      status: 200,
+      finalUrl: `${ORIGIN}/final`,
+      header: (name) => (name === 'content-type' ? 'text/html' : null),
+      read: async () => Buffer.from(`<html><head><title>Final</title></head><body><script>draw()</script></body></html>`),
+      discard: async () => undefined,
+    });
+    const page = await readPage(`${ORIGIN}/start`, options(redirected, { fallback: { read: async (url) => (asked.push(url), ['Drawn by script.']) } }));
+    expect(asked).toEqual([`${ORIGIN}/final`]);
+    expect(page.status).toMatchObject({ url: `${ORIGIN}/start`, finalUrl: `${ORIGIN}/final`, via: 'fallback' });
+    expect(page.document).toMatchObject({ url: `${ORIGIN}/final`, title: 'Final', blocks: ['Drawn by script.'] });
   });
 
   it('never calls the fallback for a page with text or for a page that answered an error', async () => {

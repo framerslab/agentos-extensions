@@ -173,6 +173,26 @@ describe('readRobots through a transport', () => {
     expect(stub.urls()).toHaveLength(3);
   });
 
+  it('keeps an answer for the parsing limit it was read under, so a larger limit reads the file again', async () => {
+    const text = `User-agent: *\nDisallow: /early\n${'# filler line\n'.repeat(10)}Disallow: /late\n`;
+    const stub = stubTransport(() => ({ status: 200, body: text, headers: { 'content-type': 'text/plain' } }));
+    const short = await readRobots(`${ORIGIN}/a`, { transport: stub.transport, robots: { ...RULE, maxBytes: 40 } });
+    expect(robotsAllows(short, RULE.token, `${ORIGIN}/late`)).toBe(true);
+    const whole = await readRobots(`${ORIGIN}/a`, { transport: stub.transport, robots: RULE });
+    expect(robotsAllows(whole, RULE.token, `${ORIGIN}/late`)).toBe(false);
+    expect(stub.urls()).toHaveLength(2);
+  });
+
+  it('keeps no answer the host’s rule decided, since the next read may be under another rule', async () => {
+    let refuse = true;
+    const stub = stubTransport(() => (refuse ? new PageRefusal('refused', 'host') : { status: 200, body: 'User-agent: *\nDisallow: /private\n', headers: { 'content-type': 'text/plain' } }));
+    expect(await readRobots(`${ORIGIN}/a`, { transport: stub.transport, robots: RULE, allowUrl: () => false })).toEqual({ kind: 'disallow-all' });
+    refuse = false;
+    const file = await readRobots(`${ORIGIN}/a`, { transport: stub.transport, robots: RULE, allowUrl: () => true });
+    expect(robotsAllows(file, RULE.token, `${ORIGIN}/public`)).toBe(true);
+    expect(stub.urls()).toHaveLength(2);
+  });
+
   it('throws the caller’s own cancellation and keeps nothing for it', async () => {
     const stalled: Transport = (_url, signal) =>
       new Promise((_resolve, reject) => {

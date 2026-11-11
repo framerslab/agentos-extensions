@@ -191,6 +191,23 @@ describe('WebPageSourceProvider.read', () => {
     expect(asked).toContainEqual(['https://harbour.example.test/c', '']);
   });
 
+  it('asks the host rule with the phrase of the very hit read, whatever later searches found the same page', async () => {
+    const asked: string[] = [];
+    const stub = stubTransport((url) => NO_ROBOTS(url) ?? htmlPage('', '<p>The harbour opened in 1887.</p>'));
+    const web = provider({
+      transport: stub.transport,
+      search: async () => ['https://harbour.example.test/a'],
+      allowUrl: (url, phrase) => (url.endsWith('/a') && asked.push(phrase), true),
+    });
+    const earlier = await web.search('harbour opening year');
+    const later = await web.search('lighthouse height');
+    if (earlier.kind !== 'hits' || later.kind !== 'hits') throw new Error('expected hits');
+    await web.read(earlier.hits[0] as { key: string; title: string });
+    await web.read(later.hits[0] as { key: string; title: string });
+    await web.read({ ...(earlier.hits[0] as { key: string; title: string }) });
+    expect(asked).toEqual(['harbour opening year', 'lighthouse height', '']);
+  });
+
   it('reads a 200 page with no text once through the fallback, and skips it when there is no fallback or the fallback finds none', async () => {
     const empty = htmlPage('<title>Rendered by script</title>', '<div id="root"></div><script>render()</script>');
     const withText = htmlPage('<title>Plain</title>', '<p>The harbour opened in 1887.</p>');

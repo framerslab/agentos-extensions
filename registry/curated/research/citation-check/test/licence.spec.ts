@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { readLicence } from '../src/index';
 
@@ -65,6 +66,25 @@ describe('readLicence', () => {
     expect(readLicence(wrapped, BASE)).toEqual({ name: 'CC BY-SA 4.0', url: 'https://creativecommons.org/licenses/by-sa/4.0/' });
     const opener = page('<script>var marker = "<!--";</script><link rel="license" href="https://creativecommons.org/licenses/by/4.0/">', '<p>Text.</p>');
     expect(readLicence(opener, BASE)).toEqual({ name: 'CC BY 4.0', url: 'https://creativecommons.org/licenses/by/4.0/' });
+  });
+
+  it('reads every named character reference in a licence’s name', () => {
+    const html = page('', '<a rel="license" href="/terms">Conditions d&rsquo;utilisation de Fran&ccedil;ois &amp; Cie</a>');
+    expect(readLicence(html, BASE)).toEqual({ name: 'Conditions d’utilisation de François & Cie', url: 'https://pages.example.test/terms' });
+  });
+
+  it('reads a page of a hundred thousand unclosed tags at once, in the built package', () => {
+    // A scan that searched to the end of the page for each unclosed tag would take time that grows with the square of
+    // the page, past any test timeout, so the built package runs in a child process under a deadline.
+    const dist = new URL('../dist/index.js', import.meta.url).href;
+    const script = [
+      `import { readLicence } from ${JSON.stringify(dist)};`,
+      `const html = '<p>Text.</p>' + '<a x'.repeat(100000) + '<meta content="'.repeat(50000) + '<script type="application/ld+json">'.repeat(20000);`,
+      `process.stdout.write(JSON.stringify(readLicence(html, ${JSON.stringify(BASE)})));`,
+    ].join('\n');
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 5_000 });
+    expect(run.signal).toBeNull();
+    expect(JSON.parse(run.stdout)).toBeNull();
   });
 
   it('finds none in a page that states none, links Creative Commons’ home, marks another rel, or names no web address', () => {
