@@ -150,6 +150,8 @@ describe('parseCitedClaims on emphasis across lines, code spans and spaced link 
       'The manual says "The glob `*cat*` matches files" (https://example.org/glob).',
       '',
       'See [log]( https://example.org/log "Title of four words") then https://example.org/other.',
+      '',
+      `See [log](${' '.repeat(45)}<https://example.org/log> "Another title of words") then https://example.org/other.`,
     ].join('\n');
     expect(parseCitedClaims(text)).toEqual([
       { line: 1, claim: 'the only survivor returned home', url: 'https://example.org/wreck', exact: true },

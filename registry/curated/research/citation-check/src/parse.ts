@@ -46,8 +46,6 @@ const QUOTE_MARKER = /^ {0,3}>/u;
 const ADDRESS_END = /[\s<>"“”„`]/u;
 /** Punctuation that ends a sentence or a markdown span after an address, not the address itself. */
 const TRAILING = /[.,;:!?'*_~]/u;
-/** What stands before a markdown link's address: `](`, or `](<` for an address in angle brackets, with any white space after `(`. */
-const LINK_OPEN = /\]\(\s*<?$/u;
 /** A markdown link's title after its address and before the closing parenthesis: `"…"`, `'…'` or `(…)`. */
 const LINK_TITLE = /^>?\s+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\((?:[^()\\]|\\.)*\))(?=\s*\))/u;
 /**
@@ -182,6 +180,17 @@ function addressAt(text: string, start: number): string {
   }
 }
 
+/**
+ * Whether the address at `start` is a markdown link's destination: `](` before it, then any white space, then `<` for
+ * an address in angle brackets.
+ */
+function linkDestination(text: string, start: number): boolean {
+  let at = start;
+  if (text[at - 1] === '<') at -= 1;
+  while (at > 0 && /\s/u.test(text[at - 1] ?? '')) at -= 1;
+  return text[at - 1] === '(' && text[at - 2] === ']';
+}
+
 /** The claims of one unit, appended to `out` in the order they stand. */
 function scanUnit(unit: UnitLine[], out: CitedClaim[]): void {
   let text = '';
@@ -235,7 +244,7 @@ function scanUnit(unit: UnitLine[], out: CitedClaim[]): void {
         for (const quote of waiting) out.push({ line: quote.line, claim: quote.claim, url, exact: true });
         waiting = [];
       }
-      const inLink = LINK_OPEN.test(text.slice(Math.max(0, index - 40), index));
+      const inLink = linkDestination(text, index);
       index += Math.max(url.length, 1);
       // A link's title, `[text](address "Title")`, is no quotation: the scan goes on at the closing parenthesis.
       if (inLink) index += LINK_TITLE.exec(text.slice(index))?.[0].length ?? 0;
