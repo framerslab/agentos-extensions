@@ -1062,8 +1062,8 @@ importers:
   registry/curated/integrations/jira:
     devDependencies:
       '@framers/agentos':
-        specifier: ^0.15.81
-        version: 0.15.95(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(express@5.3.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@6.0.3)(utf-8-validate@5.0.10)
+        specifier: ^0.16.0
+        version: 0.16.0(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(express@5.3.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@6.0.3)(utf-8-validate@5.0.10)
       '@framers/agentos-ext-account-sources':
         specifier: workspace:^
         version: link:../../research/account-sources
