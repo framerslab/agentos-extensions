@@ -730,22 +730,26 @@ export async function planRelease({
     /**
      * Step 8's other side, an adopted package: the role map lists its directory under `adopted`, and npm's latest
      * still names another repository. This repository takes it over with the patch above the highest version npm
-     * holds (a version package.json names above that publishes as written). No commit here was published, so there
-     * is no base: nothing is diffed, the ranges are master's text, no subject is listed, and the other repository's
-     * versions get no tag or release here. Once this version is tagged here, latest has a tag and the package is
-     * decided as any other, from that tag.
+     * holds or a tag here names (a tag whose publish never reached npm counts, so the version never names a tag at
+     * another commit); a version package.json names above that publishes as written. No commit here was published,
+     * so there is no base: nothing is diffed, the ranges are master's text, no subject is listed, and the other
+     * repository's versions get no tag or release here. Once this version is tagged here, latest has a tag and the
+     * package is decided as any other, from that tag.
      */
     const adopt = (npmLatest, npmHeld) => {
-      const highest = [npmLatest, ...npmHeld]
-        .filter((version) => typeof version === 'string' && VERSION.test(version))
-        .reduce((top, version) => (top === null || compareVersions(version, top) > 0 ? version : top), null);
+      const top = (versions) =>
+        versions
+          .filter((version) => typeof version === 'string' && VERSION.test(version))
+          .reduce((best, version) => (best === null || compareVersions(version, best) > 0 ? version : best), null);
+      const onNpm = top([npmLatest, ...npmHeld]);
+      const highest = top([onNpm, ...tagged.map((tag) => tag.version)]);
       const named = VERSION.test(pkg.version ?? '') && compareVersions(pkg.version, highest) > 0 ? pkg.version : null;
       const planned = named ?? raisePatch(highest);
       const reason =
         `npm's ${pkg.name}@${npmLatest} names another repository, and the role map lists ${pkg.dir} under adopted, ` +
         `so this repository publishes ${planned}` +
-        (named === null ? `, the patch above ${highest}, the highest version npm holds` : `, the version package.json names above ${highest}`);
-      let entry = entryOf(pkg, { adopted: true, newest: highest, planned, bump: named === null ? 'patch' : 'named', named, reason, subjects: [] });
+        (named === null ? `, the patch above ${highest}, the highest version npm holds or a tag here names` : `, the version package.json names above ${highest}`);
+      let entry = entryOf(pkg, { adopted: true, adoptedAfter: onNpm, newest: highest, planned, bump: named === null ? 'patch' : 'named', named, reason, subjects: [] });
       if (onlySet !== null && !onlySet.has(pkg.dir)) {
         entry = { ...entry, planned: null, bump: null, named: null, reason: `outside --only: it would publish ${planned} (${reason})` };
       }
@@ -819,6 +823,15 @@ export async function planRelease({
     };
 
     const subjectsOf = (history) => history.map(({ sha, subject }) => ({ sha, subject, pullRequest: pullRequestOf(subject) }));
+
+    /** Whether npm's document for a version of the package names a repository other than this one. */
+    const namesAnotherRepository = async (version) => {
+      if (repository === null) return false;
+      const versionDocument = await registry.versionDocument(pkg.name, version);
+      const address = typeof versionDocument?.repository === 'string' ? versionDocument.repository : versionDocument?.repository?.url;
+      const owner = repositoryNamed(address);
+      return owner !== null && owner.toLowerCase() !== repository.toLowerCase();
+    };
 
     /** Whether package.json's only difference since `commit` lies in devDependencies, which no consumer installs. */
     const onlyDevDependenciesChanged = (commit) => onlyDevDependenciesDiffer(git, commit, head, manifest);
@@ -954,6 +967,10 @@ export async function planRelease({
       if (newestTagged !== null && compareVersions(version, newestTagged) <= 0) continue;
       const found = await commitOf(version);
       if (found === null) {
+        // An adopted package's versions from the other repository have no commit here to tag, and are left as they
+        // are. The loop reaches them while the handover version has no tag (its push failed after the publish),
+        // until this run's repair tags it.
+        if (pkg.adopted === true && (await namesAnotherRepository(version))) continue;
         throw new Error(`npm holds ${pkg.name}@${version}, but no tag, gitHead or provenance attestation names a commit of this repository for it`);
       }
       repair({ name: pkg.name, version, commit: found.commit, kind: 'tag' });
@@ -2482,14 +2499,16 @@ export async function publishPlan({
 export function releaseNotes(plan, entry) {
   if (entry?.event !== 'published') return `${entry.name}@${entry.version} as npm holds it, published from ${entry.commit}.\n`;
   const planned = [...(plan.packages ?? []), ...(plan.root ? [plan.root] : [])].find((candidate) => candidate.name === entry.name);
-  if (planned && planned.adopted === true) {
-    return `The first release of ${entry.name} from this repository; npm's versions up to ${planned.newest} were published from another repository.\n`;
-  }
-  if (planned && planned.baseCommit === null) return `The first release of ${entry.name}.\n`;
-  const lines = (planned?.subjects ?? []).map(({ subject, pullRequest }) => {
-    const number = Number.isInteger(pullRequest) ? pullRequest : pullRequestOf(subject);
-    return number === null ? `- ${subject}` : `- ${subject.replace(/\s*\(#\d+\)\s*$/, '')} (#${number})`;
-  });
+  const adopted = planned?.adopted === true;
+  if (planned && planned.baseCommit === null && !adopted) return `The first release of ${entry.name}.\n`;
+  // An adopted package's first release here has no base and no subjects: one line says where its earlier versions
+  // came from, and the ranges the release raised follow it.
+  const lines = adopted
+    ? [`The first release of ${entry.name} from this repository; npm's versions up to ${planned.adoptedAfter ?? planned.newest} were published from another repository.`]
+    : (planned?.subjects ?? []).map(({ subject, pullRequest }) => {
+        const number = Number.isInteger(pullRequest) ? pullRequest : pullRequestOf(subject);
+        return number === null ? `- ${subject}` : `- ${subject.replace(/\s*\(#\d+\)\s*$/, '')} (#${number})`;
+      });
   const siblingVersion = (name) => {
     const sibling = (plan.packages ?? []).find((candidate) => candidate.name === name);
     return sibling ? (sibling.planned ?? sibling.newest ?? null) : null;
