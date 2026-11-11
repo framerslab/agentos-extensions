@@ -12,6 +12,7 @@
 import type { ContentPolicyRewriterConfig, LlmInvoker } from './types.js';
 import { ContentPolicyRewriterGuardrail } from './ContentPolicyRewriterGuardrail.js';
 import { resolvePreset } from './presets.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export * from './types.js';
 export { ContentPolicyRewriterGuardrail } from './ContentPolicyRewriterGuardrail.js';
@@ -38,7 +39,7 @@ export function createContentPolicyRewriter(
 
   return {
     name: 'content-policy-rewriter',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: 'content-policy-rewriter-guardrail',

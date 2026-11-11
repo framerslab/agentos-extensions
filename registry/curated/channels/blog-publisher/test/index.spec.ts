@@ -23,6 +23,7 @@ const { mockAxios } = vi.hoisted(() => {
 vi.mock('axios', () => ({ default: mockAxios }));
 
 import { createExtensionPack } from '../src/index';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -56,7 +57,7 @@ describe('createExtensionPack (Blog Publisher)', () => {
     const pack = createExtensionPack({
       options: { devto: { apiKey: 'test-key' } },
     } as any);
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   // ========================================================================

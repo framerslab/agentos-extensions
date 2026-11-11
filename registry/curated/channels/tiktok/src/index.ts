@@ -18,6 +18,7 @@ import { TikTokSearchTool } from './tools/search';
 import { TikTokAnalyticsTool } from './tools/analytics';
 import { TikTokEngageTool } from './tools/engage';
 import { TikTokDiscoverTool } from './tools/discover';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface TikTokChannelOptions {
   accessToken?: string;
@@ -71,7 +72,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-tiktok',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'tiktokUpload', kind: 'tool', priority, payload: uploadTool },
       { id: 'tiktokTrending', kind: 'tool', priority, payload: trendingTool },

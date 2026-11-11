@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createExtensionPack } from '../src';
 import { ExtensionContext } from '@framers/agentos';
+import { createRequire as createPackageRequire } from 'node:module';
 
 describe('Web Search Extension Integration', () => {
   let extensionPack: any;
@@ -38,7 +39,7 @@ describe('Web Search Extension Integration', () => {
   describe('Extension Pack Creation', () => {
     it('should create extension pack with correct metadata', () => {
       expect(extensionPack.name).toBe('@framers/agentos-ext-web-search');
-      expect(extensionPack.version).toBe('1.1.0');
+      expect(extensionPack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
       expect(extensionPack.descriptors).toHaveLength(3);
     });
     

@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createExtensionPack } from '../src/index';
 import type { ExtensionContext, ExtensionPack } from '../src/index';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Mock axios to prevent real HTTP requests during factory tests
@@ -42,7 +43,7 @@ describe('Deep Research – createExtensionPack', () => {
   });
 
   it('should have version 0.2.0', () => {
-    expect(pack.version).toBe('0.2.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   // ── Descriptor count and IDs ──

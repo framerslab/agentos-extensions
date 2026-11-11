@@ -46,6 +46,7 @@ vi.mock('@framers/agentos', () => ({
 
 import { createExtensionPack } from '../src/index';
 import type { ExtensionContext } from '@framers/agentos';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -91,7 +92,7 @@ describe('Telnyx Voice Extension — createExtensionPack', () => {
 
     expect(pack).toBeDefined();
     expect(pack.name).toBe('@framers/agentos-ext-voice-telnyx');
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
     expect(pack.descriptors).toBeDefined();
     expect(Array.isArray(pack.descriptors)).toBe(true);
     expect(pack.descriptors.length).toBeGreaterThanOrEqual(2);

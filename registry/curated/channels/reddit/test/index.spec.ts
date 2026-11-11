@@ -16,6 +16,7 @@ vi.mock('snoowrap', () => ({
 }));
 
 import { createExtensionPack } from '../src/index';
+import { createRequire as createPackageRequire } from 'node:module';
 
 const VALID_OPTIONS = {
   clientId: 'test-client-id',
@@ -58,7 +59,7 @@ describe('createExtensionPack', () => {
 
   it('should have version 0.1.0', () => {
     const pack = createExtensionPack({ options: { ...VALID_OPTIONS } } as any);
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   // ── Descriptor count and IDs ──

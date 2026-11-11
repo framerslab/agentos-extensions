@@ -20,6 +20,7 @@ import { SlidesGenerator } from './generators/SlidesGenerator.js';
 import { ExportFileManager } from './delivery/ExportFileManager.js';
 import { DocumentExportTool } from './tools/documentExport.js';
 import { DocumentSuggestTool } from './tools/documentSuggest.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /**
  * Options accepted by the Document Export extension pack factory.
@@ -87,7 +88,7 @@ export function createExtensionPack(context: any) {
 
   return {
     name: '@framers/agentos-ext-document-export',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: exportTool.name,

@@ -6,8 +6,10 @@
  * name resolves the way it does for a consumer.
  *
  * Argument: one JSON object
- *   { module, role, secrets, options, exports, entries }
- * `module` is a package name or a file URL. `entries` lists the package's
+ *   { module, role, secrets, options, exports, entries, version }
+ * `module` is a package name or a file URL. `version`, when given, is the
+ * package's version: a pack that reports a version must report that one.
+ * `entries` lists the package's
  * other entries the role map names, `{ specifier, exports }` each: every one
  * is imported after the role's check and must export those functions.
  *
@@ -80,6 +82,11 @@ if (input.role === 'pack' || input.role === 'template') {
   }
   if (!pack || !Array.isArray(pack.descriptors) || pack.descriptors.length === 0) {
     fail('createExtensionPack returned no descriptors');
+  }
+  // AgentOS records `pack.version` in its loaded-pack records and `pack:loaded` events, so a pack that reports a
+  // version reports its package's own; a number written into the source goes stale on the next release.
+  if (typeof input.version === 'string' && pack.version !== undefined && pack.version !== input.version) {
+    fail(`createExtensionPack reports the version ${JSON.stringify(pack.version)}, not its package version ${input.version}`);
   }
   report.descriptors = pack.descriptors.map((descriptor) => descriptor?.id);
 } else if (input.role === 'library') {

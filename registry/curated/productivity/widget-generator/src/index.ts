@@ -15,6 +15,7 @@
 import { WidgetWrapper } from './WidgetWrapper.js';
 import { WidgetFileManager } from './WidgetFileManager.js';
 import { GenerateWidgetTool } from './tools/generateWidget.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /**
  * Options accepted by the Widget Generator extension pack factory.
@@ -66,7 +67,7 @@ export function createExtensionPack(context: any) {
 
   return {
     name: '@framers/agentos-ext-widget-generator',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         // IMPORTANT: ToolExecutor uses descriptor id as the lookup key for tool calls.
