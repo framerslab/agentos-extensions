@@ -111,3 +111,27 @@ describe('parseCitedClaims on JSON', () => {
     expect(() => parseCitedClaims('[1]')).toThrow(CitationInputError);
   });
 });
+
+describe('parseCitedClaims on markdown links and emphasis', () => {
+  it("never reads a markdown link's title as a quotation, whether or not another address follows in the sentence", () => {
+    const text = [
+      'The keeper wrote "the brightest light on the coast" [the log](https://example.org/log "Title of four words").',
+      '',
+      'See [the log](https://example.org/log "Another title of words") and [the map](<https://example.org/map> "A third title here"), then https://example.org/other.',
+    ].join('\n');
+    expect(parseCitedClaims(text)).toEqual([
+      { line: 1, claim: 'the brightest light on the coast', url: 'https://example.org/log', exact: true },
+    ]);
+  });
+
+  it('removes single-mark emphasis from a quotation and keeps an underscore inside a word and a spaced asterisk', () => {
+    const text = [
+      'They wrote "she was the *only* survivor of the _first_ wreck" (https://example.org/wreck).',
+      'The manual says "set the snake_case name to 2 * 3 rows" (https://example.org/manual).',
+    ].join('\n');
+    expect(parseCitedClaims(text)).toEqual([
+      { line: 1, claim: 'she was the only survivor of the first wreck', url: 'https://example.org/wreck', exact: true },
+      { line: 2, claim: 'set the snake_case name to 2 * 3 rows', url: 'https://example.org/manual', exact: true },
+    ]);
+  });
+});
