@@ -4,6 +4,7 @@
  * Format, an issue closed through its done transition, and each refusal as the tracker fault it is.
  */
 
+import { OAuthGrantRefused } from '@framers/agentos/auth';
 import { TrackerFault, TrackerGrantRefused, TrackerNoAnswer, TrackerRateLimited } from '@framers/agentos-ext-account-sources';
 import { describe, expect, it } from 'vitest';
 import { adfParagraphs, JIRA_ENDPOINTS, JiraClient, JiraFault } from '../index.js';
@@ -263,6 +264,19 @@ describe('JiraClient', () => {
       throw new TypeError('fetch failed');
     });
     expect(await outcome(new JiraClient(token, site, { fetchImpl: failing.fetchImpl }).projects())).toSatisfy((caught: unknown) => caught instanceof TrackerNoAnswer && caught.cause === 'network');
+  });
+
+  it('turns a grant the flow could not renew into TrackerGrantRefused, before any call', async () => {
+    const { fetchImpl, seen } = standIn(() => json({ isLast: true, values: [] }));
+    const lost = async (): Promise<string> => {
+      throw new OAuthGrantRefused('refresh', 403, 'invalid_grant');
+    };
+    expect(await outcome(new JiraClient(lost, site, { fetchImpl }).projects())).toSatisfy((error: unknown) => error instanceof TrackerGrantRefused && error.status === 403);
+    const missing = async (): Promise<string> => {
+      throw new OAuthGrantRefused('missing');
+    };
+    expect(await outcome(JiraClient.sites(missing, { fetchImpl }))).toBeInstanceOf(TrackerGrantRefused);
+    expect(seen).toHaveLength(0);
   });
 
   it('refuses a site that is not an https address or a cloud id that is not one path segment', () => {
