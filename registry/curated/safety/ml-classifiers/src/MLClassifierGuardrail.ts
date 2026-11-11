@@ -28,11 +28,13 @@ import type {
   GuardrailInputPayload,
   GuardrailOutputPayload,
   GuardrailEvaluationResult,
+  AgentOSFinalResponseChunk,
 } from '@framers/agentos';
 import { GuardrailAction } from '@framers/agentos';
 import { AgentOSResponseChunkType } from '@framers/agentos';
 import type {
   MLClassifierOptions,
+  MLClassifierLogger,
   ClassifierCategory,
   ClassifierResult,
   CategoryScore,
@@ -40,6 +42,27 @@ import type {
 import { ALL_CATEGORIES } from './types.js';
 import { classifyByKeywords } from './keyword-classifier.js';
 import { classifyByLlm } from './llm-classifier.js';
+
+// ---------------------------------------------------------------------------
+// HuggingFace / ONNX pipeline types
+// ---------------------------------------------------------------------------
+
+/**
+ * A single label + score pair returned by a HuggingFace text-classification
+ * pipeline.  The `label` is the model's class name (e.g. `"toxic"`,
+ * `"obscene"`) and `score` is the softmax probability in [0, 1].
+ */
+interface OnnxClassificationLabel {
+  label: string;
+  score: number;
+}
+
+/**
+ * Callable returned by `pipeline('text-classification', ...)` from the
+ * `@huggingface/transformers` package.  Returns all label scores for the
+ * given text.
+ */
+type OnnxTextClassificationPipeline = (text: string) => Promise<OnnxClassificationLabel[]>;
 
 // ---------------------------------------------------------------------------
 // MLClassifierGuardrail
@@ -92,7 +115,10 @@ export class MLClassifierGuardrail implements IGuardrailService {
    * `null` means we already tried and failed to load the module.
    * `undefined` means we have not tried yet.
    */
-  private onnxPipeline: any | null | undefined = undefined;
+  private onnxPipeline: OnnxTextClassificationPipeline | null | undefined = undefined;
+
+  /** The host's logger, for the one line about an unavailable ONNX tier. */
+  private readonly logger: MLClassifierLogger | undefined;
 
   // -----------------------------------------------------------------------
   // Constructor
@@ -103,9 +129,11 @@ export class MLClassifierGuardrail implements IGuardrailService {
    *
    * @param options - Pack-level configuration.  All properties have sensible
    *                  defaults for zero-config operation.
+   * @param logger - The host's logger; the console when left out.
    */
-  constructor(options?: MLClassifierOptions) {
+  constructor(options?: MLClassifierOptions, logger?: MLClassifierLogger) {
     const opts = options ?? {};
+    this.logger = logger;
 
     this.categories = opts.categories ?? [...ALL_CATEGORIES];
     this.llmInvoker = opts.llmInvoker;
@@ -160,7 +188,8 @@ export class MLClassifierGuardrail implements IGuardrailService {
       return null;
     }
 
-    const text = (chunk as any).text ?? (chunk as any).content ?? '';
+    const finalChunk = chunk as AgentOSFinalResponseChunk;
+    const text = finalChunk.finalResponseText ?? '';
     if (typeof text !== 'string' || text.length === 0) return null;
 
     const result = await this.classify(text);
@@ -223,20 +252,32 @@ export class MLClassifierGuardrail implements IGuardrailService {
       try {
         // Dynamic import so the optional dependency does not fail at boot.
         const transformers = await import('@huggingface/transformers');
-        this.onnxPipeline = await transformers.pipeline(
+        const pipelineInstance = await transformers.pipeline(
           'text-classification',
           'Xenova/toxic-bert',
           { device: 'cpu' }
         );
-      } catch {
-        // Module not installed or model load failed — mark as unavailable.
+        // The HuggingFace pipeline is callable as a function. We always
+        // request all labels (top_k higher than any model's label count
+        // causes HF to return every label, matching `top_k: null`).
+        // Cast through unknown because the Pipeline union type is too
+        // wide for the inferred call signature here.
+        const callable = pipelineInstance as unknown as (
+          text: string,
+          opts: { top_k: number },
+        ) => Promise<OnnxClassificationLabel[]>;
+        this.onnxPipeline = (text: string) => callable(text, { top_k: 9999 });
+      } catch (error) {
+        // Module not installed or model load failed — mark as unavailable,
+        // and say so once for this guardrail.
         this.onnxPipeline = null;
+        this.logOnnxUnavailable(error);
         return null;
       }
     }
 
     try {
-      const raw = await this.onnxPipeline(text, { topk: null });
+      const raw = await this.onnxPipeline(text);
 
       // Map ONNX labels to our categories.
       const scores = this.mapOnnxScores(raw);
@@ -252,6 +293,24 @@ export class MLClassifierGuardrail implements IGuardrailService {
   }
 
   /**
+   * Writes, once for this guardrail (the load is tried once), that the ONNX
+   * tier is unavailable, why, and which tier classifies instead.
+   *
+   * @param error - What the import or the model load threw.
+   *
+   * @internal
+   */
+  private logOnnxUnavailable(error: unknown): void {
+    const reason = error instanceof Error ? error.message : String(error);
+    const next = this.llmInvoker
+      ? 'the LLM tier (llmInvoker), then the keyword tier'
+      : 'the keyword tier';
+    const line = `ml-classifiers: the ONNX tier is unavailable (Xenova/toxic-bert could not load: ${reason}); classifying with ${next}`;
+    if (this.logger) this.logger.warn(line);
+    else console.warn(line);
+  }
+
+  /**
    * Map raw ONNX text-classification output labels to our standard categories.
    *
    * ONNX models (e.g. toxic-bert) produce labels like `"toxic"`, `"obscene"`,
@@ -264,7 +323,7 @@ export class MLClassifierGuardrail implements IGuardrailService {
    *
    * @internal
    */
-  private mapOnnxScores(raw: any[]): CategoryScore[] {
+  private mapOnnxScores(raw: OnnxClassificationLabel[]): CategoryScore[] {
     /** Map of ONNX label -> our category. */
     const labelMap: Record<string, ClassifierCategory> = {
       toxic: 'toxic',

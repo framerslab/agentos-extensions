@@ -143,3 +143,15 @@ export interface MLClassifierOptions {
    */
   llmInvoker?: LlmInvoker;
 }
+
+// ---------------------------------------------------------------------------
+// MLClassifierLogger
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the guardrail writes its one line when the ONNX tier cannot load: the
+ * host's logger (an AgentOS `ILogger` fits), else the console.
+ */
+export interface MLClassifierLogger {
+  warn(message: string, meta?: Record<string, unknown>): void;
+}

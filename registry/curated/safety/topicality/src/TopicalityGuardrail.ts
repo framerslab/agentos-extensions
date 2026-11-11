@@ -33,7 +33,7 @@ import type {
 } from '@framers/agentos';
 import { GuardrailAction } from '@framers/agentos';
 
-import type { TopicalityOptions, TopicMatchResult } from './types.js';
+import type { TopicalityLogger, TopicalityOptions, TopicMatchResult } from './types.js';
 import { cosineSimilarity, topicEmbeddingCache, clearEmbeddingCache } from './embeddings.js';
 
 // ---------------------------------------------------------------------------
@@ -42,6 +42,9 @@ import { cosineSimilarity, topicEmbeddingCache, clearEmbeddingCache } from './em
 
 /** Cached pipeline function (or null if the package is unavailable). */
 let _pipelineFn: ((task: string, model?: string) => Promise<unknown>) | null | undefined;
+
+/** What the import or the model load threw, kept for each guardrail's warning. */
+let _loadError: unknown;
 
 /** Cached extractor instance. */
 let _extractor: {
@@ -68,8 +71,9 @@ async function getExtractor(): Promise<typeof _extractor> {
       'Xenova/all-MiniLM-L6-v2'
     )) as typeof _extractor;
     return _extractor;
-  } catch {
+  } catch (error) {
     _pipelineFn = null;
+    _loadError = error;
     return null;
   }
 }
@@ -120,17 +124,30 @@ export class TopicalityGuardrail implements IGuardrailService {
   > &
     Pick<TopicalityOptions, 'llmInvoker'>;
 
+  /** The host's logger, for the lines about no topics and an unavailable embedding tier. */
+  private readonly logger: TopicalityLogger | undefined;
+
+  /** Whether that line has been written. */
+  private noTopicsLogged = false;
+
+  /** Whether the line about an unavailable embedding tier has been written. */
+  private embeddingsUnavailableLogged = false;
+
   /**
    * @param options - Topicality configuration provided by the pack factory.
+   *   Left out, or with neither list, the guardrail passes every input.
+   * @param logger - The host's logger; the console when left out.
    */
-  constructor(options: TopicalityOptions) {
+  constructor(options?: Partial<TopicalityOptions> | null, logger?: TopicalityLogger) {
+    const given: Partial<TopicalityOptions> = options ?? {};
     this.opts = {
-      allowedTopics: options.allowedTopics,
-      blockedTopics: options.blockedTopics,
-      minSimilarity: options.minSimilarity ?? 0.3,
-      maxBlockedSimilarity: options.maxBlockedSimilarity ?? 0.5,
-      llmInvoker: options.llmInvoker,
+      allowedTopics: topicList(given.allowedTopics),
+      blockedTopics: topicList(given.blockedTopics),
+      minSimilarity: given.minSimilarity ?? 0.3,
+      maxBlockedSimilarity: given.maxBlockedSimilarity ?? 0.5,
+      llmInvoker: given.llmInvoker,
     };
+    this.logger = logger;
   }
 
   // -------------------------------------------------------------------------
@@ -149,13 +166,14 @@ export class TopicalityGuardrail implements IGuardrailService {
    * @returns A guardrail result (FLAG/BLOCK) or `null` to allow.
    */
   async evaluateInput(payload: GuardrailInputPayload): Promise<GuardrailEvaluationResult | null> {
-    const text = payload.input.textInput;
-    if (!text || text.trim().length === 0) return null;
-
-    // If no topics configured at all, allow everything
+    // No topic either way: nothing to enforce, so every input passes, and the first says why.
     if (this.opts.allowedTopics.length === 0 && this.opts.blockedTopics.length === 0) {
+      this.logNoTopics();
       return null;
     }
+
+    const text = payload.input.textInput;
+    if (!text || text.trim().length === 0) return null;
 
     // Try the three methods in order
     const result =
@@ -199,7 +217,10 @@ export class TopicalityGuardrail implements IGuardrailService {
    */
   private async evaluateViaEmbeddings(text: string): Promise<TopicMatchResult | null> {
     const inputVec = await embed(text);
-    if (!inputVec) return null;
+    if (!inputVec) {
+      this.logEmbeddingsUnavailable();
+      return null;
+    }
 
     // --- Check blocked topics first ---
     for (const blockedTopic of this.opts.blockedTopics) {
@@ -382,4 +403,42 @@ export class TopicalityGuardrail implements IGuardrailService {
   clearCache(): void {
     clearEmbeddingCache();
   }
+
+  /**
+   * Writes, once for this guardrail, that the embedding tier is unavailable,
+   * why, and which tier decides instead.
+   */
+  private logEmbeddingsUnavailable(): void {
+    if (this.embeddingsUnavailableLogged) return;
+    this.embeddingsUnavailableLogged = true;
+    const reason = _loadError instanceof Error ? _loadError.message : String(_loadError);
+    const next = this.opts.llmInvoker
+      ? 'the LLM tier (llmInvoker), then the keyword tier'
+      : 'the keyword tier';
+    const line = `topicality: the embedding tier is unavailable (Xenova/all-MiniLM-L6-v2 could not load: ${reason}); deciding with ${next}`;
+    if (this.logger) this.logger.warn(line);
+    else console.warn(line);
+  }
+
+  /**
+   * Writes, once for this guardrail, why it passes every input: it was given
+   * no allowed and no blocked topic.
+   */
+  private logNoTopics(): void {
+    if (this.noTopicsLogged) return;
+    this.noTopicsLogged = true;
+    const line =
+      'topicality: no allowedTopics or blockedTopics configured, so this guardrail passes every input';
+    if (this.logger) this.logger.warn(line);
+    else console.warn(line);
+  }
+}
+
+/**
+ * A topic list as the options give it: the strings of an array, else none.
+ * A host that names no topics (a manifest entry with no options, the
+ * registry's options) gives `undefined` here.
+ */
+function topicList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((topic): topic is string => typeof topic === 'string') : [];
 }
