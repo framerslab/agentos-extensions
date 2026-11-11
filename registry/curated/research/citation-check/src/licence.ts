@@ -12,7 +12,7 @@
  */
 
 import type { SourceLicence } from '@framers/agentos-ext-public-sources';
-import { anchors, cleanText, cutText, jsonLdNodes, relNames, resolveHttp, tags, withoutScripts } from './meta.js';
+import { cleanAttribute, cleanText, cutText, jsonLdNodes, relNames, resolveHttp, scanMarkup, type MarkupScan } from './meta.js';
 
 /** The Creative Commons licences by their codes in a deed's address. */
 const CODES: ReadonlySet<string> = new Set(['by', 'by-sa', 'by-nd', 'by-nc', 'by-nc-sa', 'by-nc-nd']);
@@ -85,24 +85,24 @@ function jsonLdLicence(value: unknown, base: string): SourceLicence | null {
  * @param baseUrl - The page's own address, after redirects, which relative addresses resolve against.
  */
 export function readLicence(html: string, baseUrl: string): SourceLicence | null {
-  return licenceOf(withoutScripts(html), jsonLdNodes(html), baseUrl);
+  const scan = scanMarkup(html);
+  return licenceOf(scan, jsonLdNodes(scan.jsonLd), baseUrl);
 }
 
 /**
- * {@link readLicence} over markup already read: the markup with its scripts set aside, and the page's JSON-LD nodes.
+ * {@link readLicence} over markup already read: one pass's links and anchors, and the page's JSON-LD nodes.
  *
- * @param markup - The markup, from `withoutScripts`.
+ * @param scan - The pass over the markup, from `scanMarkup`.
  * @param nodes - The page's JSON-LD nodes, from `jsonLdNodes`.
  * @param baseUrl - The page's own address.
  */
-export function licenceOf(markup: string, nodes: ReadonlyArray<Record<string, unknown>>, baseUrl: string): SourceLicence | null {
-  for (const attributes of tags(markup, 'link')) {
+export function licenceOf(scan: MarkupScan, nodes: ReadonlyArray<Record<string, unknown>>, baseUrl: string): SourceLicence | null {
+  for (const attributes of scan.links) {
     if (!relNames(attributes, 'license')) continue;
     const url = resolveHttp(attributes.get('href'), baseUrl);
-    if (url !== null) return licenceAt(url, attributes.has('title') ? cutText(cleanText(attributes.get('title') as string), ANCHOR_NAME_MAX) : null);
+    if (url !== null) return licenceAt(url, attributes.has('title') ? cutText(cleanAttribute(attributes.get('title') as string), ANCHOR_NAME_MAX) : null);
   }
-  const links = [...anchors(markup)];
-  for (const anchor of links) {
+  for (const anchor of scan.anchors) {
     if (!relNames(anchor.attributes, 'license')) continue;
     const url = resolveHttp(anchor.attributes.get('href'), baseUrl);
     if (url !== null) return licenceAt(url, cutText(cleanText(anchor.text), ANCHOR_NAME_MAX));
@@ -112,7 +112,7 @@ export function licenceOf(markup: string, nodes: ReadonlyArray<Record<string, un
     const licence = jsonLdLicence(node.license, baseUrl);
     if (licence !== null) return licence;
   }
-  for (const anchor of links) {
+  for (const anchor of scan.anchors) {
     const url = resolveHttp(anchor.attributes.get('href'), baseUrl);
     const name = url === null ? null : creativeCommonsName(url);
     if (url !== null && name !== null) return { name, url };

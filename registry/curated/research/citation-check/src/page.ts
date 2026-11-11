@@ -22,7 +22,7 @@ import { browserHeaders, type ScrapeInput, type ScrapeResult } from '@framers/ag
 import { collapse, sentenceSpans } from '@framers/agentos-ext-grounding-guard/values';
 import { licenceOf } from './licence.js';
 import { withoutInvisible } from './match.js';
-import { cutText, jsonLdNodes, metaContents, pageDateOf, pageTitle, publisherOf, withoutScripts } from './meta.js';
+import { cutText, jsonLdNodes, pageDateOf, pageTitle, publisherOf, scanMarkup } from './meta.js';
 import { readRobots, robotsAllows, type RobotsRule } from './robots.js';
 import type { CitationLogger, PageFailure, PageStatus } from './types.js';
 
@@ -118,6 +118,9 @@ function requestHeaders(userAgent: string | undefined, acceptEncoding: string | 
   if (acceptEncoding !== null) headers['Accept-Encoding'] = acceptEncoding;
   return headers;
 }
+
+/** The transports built here, which apply the rules to the address they are given as well as to every redirect target. */
+const checkingTransports = new WeakSet<Transport>();
 
 /** Whether rules hold anything to apply. */
 function hasRules(rules: TransportRules | undefined): rules is TransportRules {
@@ -219,6 +222,7 @@ export function fetchTransport(fetchFn: typeof globalThis.fetch, userAgent?: str
       return fetchAnswer(response, current);
     }
   };
+  checkingTransports.add(transport);
   return transport;
 }
 
@@ -306,6 +310,7 @@ export async function egressTransport(profile: EgressProfile, bounds: { timeoutM
       };
     }
   };
+  checkingTransports.add(transport);
   return transport;
 }
 
@@ -400,7 +405,7 @@ export interface PageFallbackReader {
 export interface PageReaderOptions {
   /** The request each attempt goes through. */
   transport: Transport;
-  /** The fallback for a failure it may mend, or null for none. */
+  /** The fallback for a failure it may mend, or null for none; not used when `allowUrl` or `robots` is given. */
   scraper: PageScraper | null;
   /** The deadline of one request, in milliseconds. */
   timeoutMs: number;
@@ -460,10 +465,9 @@ interface PageMeta {
 /** The title, the publisher's name, the page's own date and its licence, from its markup (null for plain text) and its `Last-Modified`. */
 function pageMeta(html: string | null, finalUrl: string, lastModified: string | null): PageMeta {
   if (html === null) return { title: null, publisher: null, pageDate: pageDateOf(new Map(), [], lastModified), licence: null };
-  const markup = withoutScripts(html);
-  const metas = metaContents(markup);
-  const nodes = jsonLdNodes(html);
-  return { title: pageTitle(markup), publisher: publisherOf(metas, nodes), pageDate: pageDateOf(metas, nodes, lastModified), licence: licenceOf(markup, nodes, finalUrl) };
+  const scan = scanMarkup(html);
+  const nodes = jsonLdNodes(scan.jsonLd);
+  return { title: pageTitle(scan), publisher: publisherOf(scan.metas, nodes), pageDate: pageDateOf(scan.metas, nodes, lastModified), licence: licenceOf(scan, nodes, finalUrl) };
 }
 
 /** A page that was read, as a document and its passages. */
@@ -525,8 +529,8 @@ async function attempt(url: string, options: PageReaderOptions): Promise<Attempt
   const rules = rulesOf(options);
   let answer: TransportAnswer;
   try {
-    // The first address is checked here too, so a transport that applies no rules never requests a refused page.
-    if (rules !== undefined) await checkAddress(url, rules, options.transport, signal);
+    // A transport of the host's own may apply no rules, so the first address is checked here before it is asked.
+    if (rules !== undefined && !checkingTransports.has(options.transport)) await checkAddress(url, rules, options.transport, signal);
     answer = await options.transport(url, signal, rules);
   } catch (error) {
     const { failure, detail } = failureOf(error, deadline, options.signal);
@@ -629,10 +633,10 @@ async function scrape(url: string, scraper: PageScraper, options: PageReaderOpti
 }
 
 /**
- * Reads one page: the rules checked when given, one request, then for a 200 with no text one read through the
- * fallback reader when given, and for a failure the scraper may mend (a deadline, no connection, an error status other
- * than 404 and 410, a page with no text) one try through the fallback scraper. Answers a status for a page that is not
- * read; throws only the caller's own cancellation.
+ * Reads one page: the rules checked when given, one request, then for a 200 with no text one read of its address after
+ * redirects through the fallback reader when given, and, when no rules are given, for a failure the scraper may mend (a
+ * deadline, no connection, an error status other than 404 and 410, a page with no text) one try through the fallback
+ * scraper. Answers a status for a page that is not read; throws only the caller's own cancellation.
  *
  * @param url - The address to fetch, from {@link pageKey}.
  * @param options - How to read it.
@@ -643,14 +647,17 @@ export async function readPage(url: string, options: PageReaderOptions): Promise
   const first = await attempt(url, options);
   if (first.kind === 'read') return first.page;
   if (first.failure === 'no_text' && first.status === 200 && options.fallback !== undefined) {
-    const blocks = await readThroughFallback(url, options.fallback, options);
+    // The page answered from its address after redirects, the one its document names, so the fallback reads that one.
+    const finalUrl = first.finalUrl ?? url;
+    const blocks = await readThroughFallback(finalUrl, options.fallback, options);
     if (blocks !== null) {
       options.logger?.info('citation_check.page_read_by_fallback', { origin: originOf(url), failure: first.failure });
-      return pageRead(url, first.finalUrl ?? url, 200, 'fallback', blocks, options.now(), first.meta);
+      return pageRead(url, finalUrl, 200, 'fallback', blocks, options.now(), first.meta);
     }
   }
   const mendable = MENDABLE.has(first.failure) && first.status !== 404 && first.status !== 410;
-  if (options.scraper !== null && mendable) {
+  // The scraper's requests go through neither the host's rule nor robots.txt, so it is not used under them.
+  if (options.scraper !== null && mendable && rulesOf(options) === undefined) {
     const mended = await scrape(url, options.scraper, options);
     if (mended !== null) {
       options.logger?.info('citation_check.page_read_by_fallback', { origin: originOf(url), failure: first.failure });

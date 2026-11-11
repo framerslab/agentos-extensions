@@ -62,7 +62,8 @@
   "dependencies": {
     "@framers/agentos-ext-grounding-guard": "^0.11.0",
     "@framers/agentos-ext-public-sources": "^0.2.3",
-    "@framers/agentos-ext-web-scraper": "^0.1.4"
+    "@framers/agentos-ext-web-scraper": "^0.1.4",
+    "entities": "^8.1.0"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",

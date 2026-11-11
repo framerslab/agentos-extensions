@@ -7,7 +7,8 @@
  * matching rule decides, an `Allow` over a `Disallow` of the same length, `*` matching any run of characters and a
  * final `$` the end of the path and query. A 400-range answer allows every page (2.3.1.3); a 500-range answer, a
  * failed request or a passed deadline refuses every page (2.3.1.4); a file past five redirects is taken as
- * unavailable (2.3.1.2). An origin's answer is kept for `cacheMs` per transport.
+ * unavailable (2.3.1.2). An origin's answer is kept for `cacheMs` per transport and parsing limit, save one the
+ * host's rule decided, since the next read may be under another rule.
  *
  * @module agentos/extensions/research/citation-check/robots
  */
@@ -182,12 +183,20 @@ export interface ReadRobotsOptions {
   now?: () => number;
 }
 
-/** The answers each transport keeps, by origin, with when each was read. */
+/** The answers each transport keeps, by origin and parsing limit, with when each was read. */
 const kept = new WeakMap<Transport, Map<string, { at: number; file: RobotsFile }>>();
 
-/** Whether an error is a transport's refusal of a file past its redirects. */
-function pastRedirects(error: unknown): boolean {
-  return error instanceof Error && error.name === 'PageRefusal' && (error as Error & { failure?: unknown }).failure === 'redirects';
+/** A transport's refusal, by its failure and its detail, or null for another error. */
+function refusalOf(error: unknown): { failure: unknown; detail: unknown } | null {
+  if (!(error instanceof Error) || error.name !== 'PageRefusal') return null;
+  const { failure, detail } = error as Error & { failure?: unknown; detail?: unknown };
+  return { failure, detail };
+}
+
+/** What a read of the file answered, and whether the answer may be kept for the next read under another host rule. */
+interface RobotsAnswer {
+  file: RobotsFile;
+  keep: boolean;
 }
 
 /** A file's bytes as text, held to the parsing limit; past it, the line the limit cuts is left out. */
@@ -202,7 +211,7 @@ function robotsText(bytes: Uint8Array, limit: number): string {
 }
 
 /** Requests the file and reads what its answer means. */
-async function fetchRobots(robotsUrl: string, options: ReadRobotsOptions): Promise<RobotsFile> {
+async function fetchRobots(robotsUrl: string, options: ReadRobotsOptions): Promise<RobotsAnswer> {
   const deadline = AbortSignal.timeout(options.robots.timeoutMs);
   const signal = options.signal ? AbortSignal.any([deadline, options.signal]) : deadline;
   let answer: TransportAnswer;
@@ -210,29 +219,33 @@ async function fetchRobots(robotsUrl: string, options: ReadRobotsOptions): Promi
     answer = await options.transport(robotsUrl, signal, options.allowUrl !== undefined ? { allowUrl: options.allowUrl } : undefined);
   } catch (error) {
     if (options.signal?.aborted) throw options.signal.reason;
-    return pastRedirects(error) ? ALLOW_ALL : DISALLOW_ALL;
+    const refusal = refusalOf(error);
+    if (refusal?.failure === 'redirects') return { file: ALLOW_ALL, keep: true };
+    // The host's rule refused a hop: the rule is the caller's, so the next read, under its own rule, asks again.
+    return { file: DISALLOW_ALL, keep: !(refusal?.failure === 'refused' && refusal.detail === 'host') };
   }
   try {
     if (answer.status >= 200 && answer.status < 300) {
       const limit = options.robots.maxBytes;
       // One byte past the limit says whether the file runs past it.
       const bytes = answer.readPrefix !== undefined ? await answer.readPrefix(limit + 1) : await answer.read(limit + 1);
-      if (bytes === null) return DISALLOW_ALL;
-      return parseRobots(robotsText(bytes, limit));
+      if (bytes === null) return { file: DISALLOW_ALL, keep: true };
+      return { file: parseRobots(robotsText(bytes, limit)), keep: true };
     }
     await answer.discard();
-    return answer.status >= 500 ? DISALLOW_ALL : ALLOW_ALL;
+    return { file: answer.status >= 500 ? DISALLOW_ALL : ALLOW_ALL, keep: true };
   } catch {
     await answer.discard().catch(() => undefined);
     if (options.signal?.aborted) throw options.signal.reason;
-    return DISALLOW_ALL;
+    return { file: DISALLOW_ALL, keep: true };
   }
 }
 
 /**
  * Reads the robots.txt of an address's origin through the transport, or the answer the transport keeps for it.
  * A 2xx answer is parsed; a 400-range answer allows every page; a 500-range answer, a failed request, a passed
- * deadline or a hop the host rule refuses refuses every page; a file past five redirects allows every page.
+ * deadline or a hop the host rule refuses refuses every page; a file past five redirects allows every page. An answer
+ * is kept for `cacheMs` per transport, origin and parsing limit, save one the host's rule decided.
  *
  * @param url - Any address of the origin.
  * @param options - The transport, the rule, the host rule for the file's hops, the caller's cancellation.
@@ -246,11 +259,13 @@ export async function readRobots(url: string, options: ReadRobotsOptions): Promi
     answers = new Map();
     kept.set(options.transport, answers);
   }
-  const held = answers.get(origin);
+  // A file parsed to a shorter limit may lack a rule a longer one reads, so each limit keeps its own answer.
+  const key = `${options.robots.maxBytes} ${origin}`;
+  const held = answers.get(key);
   if (held !== undefined && now() - held.at < options.robots.cacheMs) return held.file;
-  const file = await fetchRobots(`${origin}/robots.txt`, options);
-  answers.delete(origin);
-  answers.set(origin, { at: now(), file });
+  const { file, keep } = await fetchRobots(`${origin}/robots.txt`, options);
+  answers.delete(key);
+  if (keep) answers.set(key, { at: now(), file });
   if (answers.size > CACHE_ENTRIES) answers.delete(answers.keys().next().value as string);
   return file;
 }

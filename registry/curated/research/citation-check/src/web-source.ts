@@ -38,8 +38,9 @@ export interface WebPageSourceOptions {
   /** The User-Agent the checked egress sends when no transport is given; a browser's when left out. */
   userAgent?: string;
   /**
-   * The host's rule for each address and each redirect target, with the phrase whose search found the page (the empty
-   * string for a hit this provider's search did not answer): false refuses it before it is requested.
+   * The host's rule for each address and each redirect target, with the phrase whose search answered the hit read (the
+   * empty string for a hit object this provider's search did not answer, a copy of one included): false refuses it
+   * before it is requested.
    */
   allowUrl?: (url: string, phrase: string) => boolean;
   /** robots.txt as read before each address; {@link DEFAULT_ROBOTS} when left out, none with null. */
@@ -60,8 +61,6 @@ export interface WebPageSourceOptions {
 
 /** The most hits a search answers when the call names no limit. */
 const DEFAULT_LIMIT = 3;
-/** The most phrases the provider keeps by page, for the host's rule; the oldest goes first. */
-const PHRASES_KEPT = 1_000;
 
 /** A whole number of at least 1, or the default when left out. */
 function whole(name: string, value: number | undefined, fallback: number): number {
@@ -110,7 +109,8 @@ export class WebPageSourceProvider implements PublicSourceProvider {
   private readonly robots: RobotsRule | null;
   private readonly now: () => number;
   private transport: Promise<Transport> | null = null;
-  private readonly phrases = new Map<string, string>();
+  /** The phrase each hit this provider's search answered was found by, held as long as the hit is. */
+  private readonly phrases = new WeakMap<SourceHit, string>();
 
   /**
    * @param options - The host's search and how pages are read.
@@ -133,13 +133,6 @@ export class WebPageSourceProvider implements PublicSourceProvider {
     if (this.options.transport !== undefined) return Promise.resolve(this.options.transport);
     this.transport ??= egressTransport(this.options.egress ?? 'hosted', { timeoutMs: this.timeoutMs, maxBytes: this.maxBytes }, this.options.userAgent);
     return this.transport;
-  }
-
-  /** Keeps the phrase a page was found by, for the host's rule when it is read. */
-  private remember(key: string, phrase: string): void {
-    this.phrases.delete(key);
-    this.phrases.set(key, phrase);
-    if (this.phrases.size > PHRASES_KEPT) this.phrases.delete(this.phrases.keys().next().value as string);
   }
 
   /**
@@ -175,8 +168,9 @@ export class WebPageSourceProvider implements PublicSourceProvider {
       const key = keyOf(address);
       if (key === null || seen.has(key)) continue;
       seen.add(key);
-      hits.push({ key, title: (address as string).trim() });
-      this.remember(key, phrase);
+      const hit: SourceHit = { key, title: (address as string).trim() };
+      this.phrases.set(hit, phrase);
+      hits.push(hit);
     }
     return { kind: 'hits', hits };
   }
@@ -193,7 +187,7 @@ export class WebPageSourceProvider implements PublicSourceProvider {
     options.signal?.throwIfAborted();
     const url = keyOf(hit.key);
     if (url === null) return { kind: 'skipped', status: null };
-    const phrase = this.phrases.get(url) ?? '';
+    const phrase = this.phrases.get(hit) ?? '';
     const { allowUrl, fallback, logger } = this.options;
     const transport = await this.transportOf();
     const page = await readPage(url, {

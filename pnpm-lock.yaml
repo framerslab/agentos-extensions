@@ -1651,6 +1651,9 @@ importers:
       '@framers/agentos-ext-web-scraper':
         specifier: ^0.1.4
         version: link:../web-scraper
+      entities:
+        specifier: ^8.1.0
+        version: 8.1.0
     devDependencies:
       '@framers/agentos':
         specifier: ^0.16.0
