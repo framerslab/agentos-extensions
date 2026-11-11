@@ -198,13 +198,29 @@ describe('JiraClient', () => {
     const unnamed = standIn((request) => (request.method === 'GET' ? json({ transitions: [transitions[0], { ...transitions[1], isAvailable: false }, { id: '51', name: 'Closed', to: { statusCategory: { key: 'done' } } }] }) : new Response(null, { status: 204 })));
     await new JiraClient(token, site, { fetchImpl: unnamed.fetchImpl }).closeIssue('ABC-7');
     expect(JSON.parse(unnamed.seen[1]?.body ?? '{}')).toEqual({ transition: { id: '51' } });
-    const statusOf = (key: string) => standIn((request) => (new URL(request.url).pathname.endsWith('/transitions') ? json({ transitions: [transitions[0]] }) : json({ id: '10001', key: 'ABC-7', fields: { status: { statusCategory: { key } } } })));
+    // With no done transition the status is read through the JQL search, whose scopes the set holds; reading the issue
+    // itself needs granular scopes outside it, which Atlassian answers with 401.
+    const statusOf = (key: string | null) => standIn((request) => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith('/transitions')) return json({ transitions: [transitions[0]] });
+      if (request.method === 'POST' && path.endsWith('/search/jql')) return json({ issues: key === null ? [] : [{ id: '10001', key: 'ABC-7', fields: { status: { statusCategory: { key } } } }], isLast: true });
+      return json({ code: 401, message: 'Unauthorized; scope does not match' }, 401);
+    });
     const done = statusOf('done');
     await new JiraClient(token, site, { fetchImpl: done.fetchImpl }).closeIssue('ABC-7');
-    expect(done.seen.map(line)).toEqual(['GET /ex/jira/cloud-1/rest/api/3/issue/ABC-7/transitions', 'GET /ex/jira/cloud-1/rest/api/3/issue/ABC-7?fields=status']);
+    expect(done.seen.map(line)).toEqual(['GET /ex/jira/cloud-1/rest/api/3/issue/ABC-7/transitions', 'POST /ex/jira/cloud-1/rest/api/3/search/jql']);
+    expect(JSON.parse(done.seen[1]?.body ?? '{}')).toEqual({ jql: 'issue = "ABC-7"', fields: ['status'], maxResults: 1 });
     const stuck = statusOf('indeterminate');
     await expect(new JiraClient(token, site, { fetchImpl: stuck.fetchImpl }).closeIssue('ABC-7')).rejects.toSatisfy((error: unknown) => error instanceof TrackerFault && error.reason === 'refused');
-    expect(stuck.seen.some((each) => each.method === 'POST')).toBe(false);
+    expect(stuck.seen.filter((each) => each.method === 'POST').map(line)).toEqual(['POST /ex/jira/cloud-1/rest/api/3/search/jql']);
+    const unseen = statusOf(null);
+    await expect(new JiraClient(token, site, { fetchImpl: unseen.fetchImpl }).closeIssue('ABC-7')).rejects.toSatisfy((error: unknown) => error instanceof TrackerFault && error.reason === 'refused');
+  });
+
+  it('quotes the key in the status search, so a key cannot widen the query', async () => {
+    const { fetchImpl, seen } = standIn((request) => (request.method === 'GET' ? json({ transitions: [] }) : json({ issues: [], isLast: true })));
+    await new JiraClient(token, site, { fetchImpl }).closeIssue('ABC-7"OR"x\\').catch(() => undefined);
+    expect(JSON.parse(seen[1]?.body ?? '{}').jql).toBe('issue = "ABC-7\\"OR\\"x\\\\"');
   });
 
   it('puts an issue key into the path as one encoded segment', async () => {

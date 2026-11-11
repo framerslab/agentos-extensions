@@ -1,7 +1,8 @@
 /**
  * @fileoverview The account sources' tracker conformance checks over `JiraTracker`, on a REST stand-in that keeps a
  * Jira Cloud site in memory: two projects that take a Task, the person's open and done issues and someone else's,
- * issues created into a map with their descriptions in Atlassian Document Format, transitions by status category, a
+ * issues created into a map with their descriptions in Atlassian Document Format, transitions to the other status
+ * categories, an issue's own read refused as Atlassian refuses a scope the grant lacks, a
  * rate limit armed on demand, and the grant ended by the host's `forget` of a real `JiraOAuthFlow`, which has no
  * revocation endpoint to call.
  */
@@ -83,6 +84,11 @@ function memorySite() {
       return json({ startAt: 0, maxResults: 50, total: projects.length, isLast: true, values: projects });
     }
     if (request.method === 'POST' && path === '/search/jql') {
+      const one = /^issue = "([^"\\]+)"$/.exec(String(body.jql));
+      if (one !== null) {
+        const issue = byIdOrKey(one[1]!);
+        return json({ issues: issue === undefined ? [] : [listed(issue)], isLast: true });
+      }
       if (body.jql !== JQL) return json({ errorMessages: ['unexpected jql'] }, 400);
       const mine = [...issues.values()]
         .filter((each) => each.assignee === 'me' && each.category !== 'done')
@@ -102,17 +108,15 @@ function memorySite() {
     if (transitionsPath !== null) {
       const issue = byIdOrKey(decodeURIComponent(transitionsPath[1]!));
       if (issue === undefined) return json({ errorMessages: ['Issue does not exist'] }, 404);
-      if (request.method === 'GET') return json({ transitions });
+      // As Jira lists them: the transitions to a status of another category than the issue's own.
+      if (request.method === 'GET') return json({ transitions: transitions.filter((each) => each.to.statusCategory.key !== issue.category) });
       const chosen = transitions.find((each) => each.id === body.transition?.id);
       if (chosen === undefined) return json({ errorMessages: ['no transition'] }, 400);
       issue.category = chosen.to.statusCategory.key as Category;
       return new Response(null, { status: 204 });
     }
-    const issuePath = /^\/issue\/([^/]+)$/.exec(path);
-    if (issuePath !== null && request.method === 'GET') {
-      const issue = byIdOrKey(decodeURIComponent(issuePath[1]!));
-      return issue === undefined ? json({}, 404) : json(listed(issue));
-    }
+    // Reading an issue itself needs granular scopes outside the set, which Atlassian answers with 401.
+    if (/^\/issue\/[^/]+$/.test(path) && request.method === 'GET') return json({ code: 401, message: 'Unauthorized; scope does not match' }, 401);
     return json({}, 404);
   };
 
@@ -193,6 +197,16 @@ describe('JiraTracker', () => {
       destination: { id: '10000', key: 'ABC', name: 'Alpha' },
     });
     expect(JSON.stringify(issues)).not.toContain('account-');
+  });
+
+  it('closes an issue already done, which Jira offers no done transition for, by reading its status through the search', async () => {
+    const before = seen.length;
+    await plain.closeIssue({ id: '20004', key: 'ABC-4' });
+    expect(seen.slice(before).map((each) => `${each.method} ${new URL(each.url).pathname}`)).toEqual([
+      `GET ${new URL(API).pathname}/issue/ABC-4/transitions`,
+      `POST ${new URL(API).pathname}/search/jql`,
+    ]);
+    expect(site.issues.get('ABC-4')?.category).toBe('done');
   });
 
   it('refuses an issue without an issue type before any call', async () => {
