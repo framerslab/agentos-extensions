@@ -32,6 +32,7 @@ import type {
   ToolExecutionContext,
   ToolExecutionResult,
 } from '@framers/agentos';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export type GoogleChatAudienceType = 'app-url' | 'project-number';
 
@@ -510,7 +511,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-google-chat',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'googleChatChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'googleChatChannel', kind: 'messaging-channel', priority, payload: adapter },

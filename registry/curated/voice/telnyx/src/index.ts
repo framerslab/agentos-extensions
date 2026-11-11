@@ -13,6 +13,7 @@ import { bindVoiceProvider, type VoiceProviderBinding } from '@framers/agentos/i
 import { TelnyxVoiceService, type TelnyxServiceConfig } from './TelnyxVoiceService';
 import { TelnyxVoiceProvider } from './TelnyxVoiceProvider';
 import { TelnyxVoiceCallTool } from './tools/voiceCall';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ============================================================================
 // Options
@@ -130,7 +131,7 @@ export function createExtensionPack(context: ExtensionContext): TelnyxVoicePack 
   return {
     binding,
     name: '@framers/agentos-ext-voice-telnyx',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'telnyxVoiceCall', kind: 'tool', priority, payload: voiceCallTool },
       { id: 'telnyxVoiceProvider', kind: 'voice-provider', priority, payload: provider },

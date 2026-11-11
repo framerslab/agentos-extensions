@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createExtensionPack } from '../src/index.js';
+import { createRequire as createPackageRequire } from 'node:module';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -22,7 +23,7 @@ describe('createExtensionPack (Fly.io)', () => {
   it('should return a valid ExtensionPack', () => {
     const pack = createExtensionPack({ secrets: { 'fly.token': 'tok' } });
     expect(pack.name).toBe('@framers/agentos-ext-cloud-flyio');
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
     expect(pack.descriptors).toHaveLength(4);
   });
 

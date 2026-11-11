@@ -15,6 +15,7 @@ import { EXTENSION_KIND_GUARDRAIL, EXTENSION_KIND_TOOL } from '@framers/agentos'
 import type { MLClassifierOptions } from './types';
 import { MLClassifierGuardrail } from './MLClassifierGuardrail';
 import { ClassifyContentTool } from './tools/ClassifyContentTool';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Re-exports
@@ -40,7 +41,7 @@ export function createMLClassifierGuardrail(options?: MLClassifierOptions): Exte
 
   return {
     name: 'ml-classifiers',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: 'ml-classifier-guardrail',

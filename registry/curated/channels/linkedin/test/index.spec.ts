@@ -31,6 +31,7 @@ vi.mock('@framers/agentos/auth', () => ({
 }));
 
 import { createExtensionPack } from '../src/index';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -60,7 +61,7 @@ describe('createExtensionPack', () => {
       options: { accessToken: 'test-token' },
     });
 
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   // ── Descriptors ──

@@ -18,6 +18,7 @@ import { TypeTool } from './tools/type.js';
 import { ScreenshotTool } from './tools/screenshot.js';
 import { SnapshotTool } from './tools/snapshot.js';
 import type { BrowserConfig } from './types.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /**
  * Extension configuration options
@@ -76,7 +77,7 @@ export function createExtensionPack(context: {
 
   return {
     name: '@framers/agentos-ext-web-browser',
-    version: '1.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: navigateTool.name,

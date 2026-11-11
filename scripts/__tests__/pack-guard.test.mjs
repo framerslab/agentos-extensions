@@ -1307,7 +1307,8 @@ test('every publishable pack built in the workspace reports its own package vers
       version: entry.pkg.version,
     };
     const result = spawnSync(process.execPath, [verifyScript, JSON.stringify(payload)], { cwd: path.join(repoRoot, entry.dir), encoding: 'utf8', timeout: 60_000 });
-    const reason = (result.stderr || result.error?.message || '').trim().split('\n')[0];
+    // The verifier's reason is its last line: a pack's own warnings can come before it.
+    const reason = (result.stderr || result.error?.message || '').trim().split('\n').pop();
     if (result.status === 0) {
       checked += 1;
     } else if (/reports the version/.test(reason)) {

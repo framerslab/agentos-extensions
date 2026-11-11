@@ -33,6 +33,7 @@ import { EXTENSION_KIND_GUARDRAIL, EXTENSION_KIND_TOOL } from '@framers/agentos'
 import type { TopicalityOptions } from './types';
 import { TopicalityGuardrail } from './TopicalityGuardrail';
 import { CheckTopicTool } from './tools/CheckTopicTool';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Re-exports
@@ -93,7 +94,7 @@ export function createTopicalityGuardrail(options: TopicalityOptions): Extension
     name: 'topicality',
 
     /** Semantic version of the pack. */
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
 
     /**
      * Descriptors getter — returns the current component instances wrapped

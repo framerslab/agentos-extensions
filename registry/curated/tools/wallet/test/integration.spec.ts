@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { createExtensionPack } from '../src/index.js';
 import type { ExtensionPack } from '../src/index.js';
+import { createRequire as createPackageRequire } from 'node:module';
 
 /* ------------------------------------------------------------------ */
 /*  Extension pack factory                                             */
@@ -20,7 +21,7 @@ describe('createExtensionPack', () => {
     const pack = createExtensionPack({ options: { enabled: true, chains: ['solana'] } });
 
     expect(pack.name).toBe('@framers/agentos-ext-wallet');
-    expect(pack.version).toBe('0.2.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
     expect(pack.descriptors.length).toBe(3);
     expect(pack.descriptors.every(d => d.kind === 'tool')).toBe(true);
   });

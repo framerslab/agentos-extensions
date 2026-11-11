@@ -17,6 +17,7 @@ import { LinodeDeployStackScriptTool } from './tools/deployStackScript.js';
 import { LinodeManageDnsTool } from './tools/manageDns.js';
 import { LinodeDeleteInstanceTool } from './tools/deleteInstance.js';
 import { LinodeCreateNodeBalancerTool } from './tools/createNodeBalancer.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -80,7 +81,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-cloud-linode',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'linodeCreateInstance', kind: 'tool', priority: 40, payload: createInstanceTool },
       { id: 'linodeListInstances', kind: 'tool', priority: 40, payload: listInstancesTool },

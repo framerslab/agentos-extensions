@@ -11,6 +11,7 @@
 import { OMDBService } from './OMDBService.js';
 import { OMDBSearchTool } from './tools/omdbSearch.js';
 import { OMDBDetailsTool } from './tools/omdbDetails.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /** Configuration options for the OMDB extension pack. */
 export interface OMDBExtensionOptions {
@@ -42,7 +43,7 @@ export function createExtensionPack(context: any) {
 
   return {
     name: '@framers/agentos-ext-omdb',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         // IMPORTANT: ToolExecutor uses descriptor id as the lookup key for tool calls.

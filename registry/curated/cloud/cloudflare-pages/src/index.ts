@@ -14,6 +14,7 @@ import { CfDeployPagesTool } from './tools/deploy.js';
 import { CfListProjectsTool } from './tools/listProjects.js';
 import { CfConfigureDnsTool } from './tools/configureDns.js';
 import { CfCreateWorkerTool } from './tools/createWorker.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -77,7 +78,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-cloud-cloudflare-pages',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'cfDeployPages', kind: 'tool', priority: 40, payload: deployTool },
       { id: 'cfListProjects', kind: 'tool', priority: 40, payload: listProjectsTool },

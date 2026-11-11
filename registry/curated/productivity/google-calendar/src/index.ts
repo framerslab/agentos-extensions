@@ -16,6 +16,7 @@ import { CalendarUpdateEventTool } from './tools/updateEvent.js';
 import { CalendarDeleteEventTool } from './tools/deleteEvent.js';
 import { CalendarFindFreeTimeTool } from './tools/findFreeTime.js';
 import { CalendarListCalendarsTool } from './tools/listCalendars.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface GoogleCalendarOptions {
   clientId?: string;
@@ -75,7 +76,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-calendar-google',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'calendarListEvents', kind: 'tool', priority, payload: listEventsTool },
       { id: 'calendarCreateEvent', kind: 'tool', priority, payload: createEventTool },
