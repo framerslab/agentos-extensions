@@ -150,6 +150,42 @@ describe("the open issues assigned to a person", () => {
     expect(github.received).toHaveLength(2);
   });
 
+  /*
+   * "For most endpoints, the maximum value of per_page is 100." A listing past one page carries a `link` header, and
+   * "The URL for the next page is followed by rel="next"."
+   *   https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api
+   * The call reads one page a repository and never follows that link, so a repository answers at most 100 issues.
+   */
+  it('reads one page a repository, at most 100 issues, and never asks for the page its `link` header names next', async () => {
+    github = await startGitHub((request, base) => {
+      if (request.path === '/user') return { status: 200, body: { login: 'test-person', id: 501 } };
+      if (request.path === '/repos/acme-team/planner/issues') {
+        const page = `${base}/repos/acme-team/planner/issues?state=open&assignee=test-person&per_page=100&page=`;
+        return {
+          status: 200,
+          headers: { link: `<${page}2>; rel="next", <${page}3>; rel="last"` },
+          body: Array.from({ length: 100 }, (_, index) => issue('acme-team/planner', index + 1, `Issue ${index + 1}`, '2026-11-09T16:20:00Z')),
+        };
+      }
+      if (request.path === '/repos/acme-team/handbook/issues') {
+        return { status: 200, body: [issue('acme-team/handbook', 7, 'Update the onboarding page', '2026-11-01T08:00:00Z')] };
+      }
+      return { status: 404, body: { message: 'Not Found' } };
+    });
+
+    const issues = await listAssignedIssues(TOKEN, { repositories: ['acme-team/planner', 'acme-team/handbook'] }, { apiBase: github.base });
+
+    expect(issues.filter((found) => found.repository === 'acme-team/planner')).toHaveLength(100);
+    expect(issues[99]).toEqual({ repository: 'acme-team/planner', number: 100, title: 'Issue 100', url: 'https://github.com/acme-team/planner/issues/100', updatedAt: '2026-11-09T16:20:00Z' });
+    expect(issues[100]).toEqual({ repository: 'acme-team/handbook', number: 7, title: 'Update the onboarding page', url: 'https://github.com/acme-team/handbook/issues/7', updatedAt: '2026-11-01T08:00:00Z' });
+    // The person, then one page of each repository given: no `page` asked, and the next page left unread.
+    expect(github.received.map((request) => request.path)).toEqual(['/user', '/repos/acme-team/planner/issues', '/repos/acme-team/handbook/issues']);
+    for (const request of github.received.slice(1)) {
+      expect(request.query.get('per_page')).toBe('100');
+      expect(request.query.has('page')).toBe(false);
+    }
+  });
+
   it('refuses a repository that is not written `owner/name` before any request, so no text of it becomes part of an address', async () => {
     github = await startGitHub(() => ({ status: 200, body: [] }));
     const at = { apiBase: github.base };
