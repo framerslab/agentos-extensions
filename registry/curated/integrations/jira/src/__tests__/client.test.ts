@@ -215,10 +215,11 @@ describe('JiraClient', () => {
     const unnamed = siteWith('indeterminate', [transitions[0], { ...transitions[1], isAvailable: false }, { id: '51', name: 'Closed', to: { statusCategory: { key: 'done' } } }]);
     await new JiraClient(token, site, { fetchImpl: unnamed.fetchImpl }).closeIssue('ABC-7');
     expect(JSON.parse(unnamed.seen.at(-1)?.body ?? '{}')).toEqual({ transition: { id: '51' } });
-    // A search that does not find the issue yet reads it as not done.
+    // A search that does not find the issue leaves its status unknown: nothing is posted, since an issue the index has
+    // not caught up with may already be in Done, where a move to Won't Do would rewrite how it was closed.
     const unindexed = siteWith(null, transitions);
-    await new JiraClient(token, site, { fetchImpl: unindexed.fetchImpl }).closeIssue('ABC-7');
-    expect(JSON.parse(unindexed.seen.at(-1)?.body ?? '{}')).toEqual({ transition: { id: '31' } });
+    await expect(new JiraClient(token, site, { fetchImpl: unindexed.fetchImpl }).closeIssue('ABC-7')).rejects.toSatisfy((error: unknown) => error instanceof TrackerFault && error.reason === 'not_found');
+    expect(unindexed.seen.filter((each) => each.method === 'POST').map(line)).toEqual(['POST /ex/jira/cloud-1/rest/api/3/search/jql']);
   });
 
   it('leaves an issue already done as it is, though its workflow offers a move to another done status or back to its own', async () => {
@@ -258,7 +259,7 @@ describe('JiraClient', () => {
     await expect(new JiraClient(token, site, { fetchImpl: stuck.fetchImpl }).closeIssue('ABC-7')).rejects.toSatisfy((error: unknown) => error instanceof TrackerFault && error.reason === 'refused');
     expect(stuck.seen.filter((each) => each.method === 'POST').map(line)).toEqual(['POST /ex/jira/cloud-1/rest/api/3/search/jql']);
     const unseen = statusOf(null);
-    await expect(new JiraClient(token, site, { fetchImpl: unseen.fetchImpl }).closeIssue('ABC-7')).rejects.toSatisfy((error: unknown) => error instanceof TrackerFault && error.reason === 'refused');
+    await expect(new JiraClient(token, site, { fetchImpl: unseen.fetchImpl }).closeIssue('ABC-7')).rejects.toSatisfy((error: unknown) => error instanceof TrackerFault && error.reason === 'not_found');
   });
 
   it('quotes the key in the status search, so a key cannot widen the query', async () => {
