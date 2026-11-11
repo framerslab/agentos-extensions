@@ -49,11 +49,12 @@ describe('SiteDeployTool', () => {
     expect(result.data?.framework).toBe('nextjs');
   });
 
-  it('should detect vue from source containing "nuxt.config"', async () => {
+  it('should detect a Node server app from source containing "nuxt.config"', async () => {
     tool.setToolExecutor(createMockExecutor());
 
+    // Nuxt builds a server by default, so it is deployed as a Node app.
     const result = await tool.execute({ source: '/project/nuxt.config.ts', dryRun: true });
-    expect(result.data?.framework).toBe('vue');
+    expect(result.data?.framework).toBe('node');
   });
 
   it('should detect svelte from source containing "svelte.config"', async () => {

@@ -9,6 +9,9 @@
  * tool does not accept, is recorded as a violation.
  */
 import { describe, it, expect } from 'vitest';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SiteDeployTool } from '../src/SiteDeployTool';
 
 import { VercelDeployTool } from '../../../cloud/vercel/src/tools/deploy';
@@ -177,7 +180,6 @@ describe('siteDeploy calls the tools the curated cloud packs register', () => {
     ['cloudflare', { source: GIT, envVars: { A: '1' }, buildCommand: 'npm run build', outputDirectory: 'dist' }, 'cfDeployPages'],
     ['digitalocean', { source: GIT, envVars: { A: '1' }, buildCommand: 'npm run build', outputDirectory: 'dist' }, 'doCreateApp'],
     ['netlify', { source: GIT, envVars: { A: '1' }, buildCommand: 'npm run build', outputDirectory: 'dist' }, 'netlifyDeploySite'],
-    ['aws', { source: GIT, envVars: { A: '1' } }, 'awsDeployAmplify'],
     ['railway', { source: GIT, envVars: { A: '1' } }, 'railwayDeployService'],
     ['heroku', { source: 'https://example.org/builds/shop.tar.gz', projectName: 'shop', envVars: { A: '1' } }, 'herokuDeployApp'],
   ];
@@ -195,12 +197,16 @@ describe('siteDeploy calls the tools the curated cloud packs register', () => {
   });
 
   it('deploys a local directory to AWS through the S3 site tool', async () => {
+    const project = mkdtempSync(join(tmpdir(), 'site-deploy-'));
+    mkdirSync(join(project, 'dist'));
+    writeFileSync(join(project, 'dist', 'index.html'), '<h1>shop</h1>');
+    writeFileSync(join(project, '.env'), 'SECRET=1');
     const { executor, calls, violations } = contractExecutor();
     const tool = new SiteDeployTool();
     tool.setToolExecutor(executor);
 
     const result = await tool.execute({
-      source: '/srv/shop',
+      source: project,
       outputDirectory: 'dist',
       cloudProvider: 'aws',
       projectName: 'shop-site-bucket',
@@ -208,9 +214,79 @@ describe('siteDeploy calls the tools the curated cloud packs register', () => {
 
     expect(violations).toEqual([]);
     expect(calls).toEqual([
-      { tool: 'awsDeployS3Site', args: { bucketName: 'shop-site-bucket', sourceDir: '/srv/shop/dist' } },
+      { tool: 'awsDeployS3Site', args: { bucketName: 'shop-site-bucket', sourceDir: join(project, 'dist') } },
     ]);
     expect(result.success).toBe(true);
+  });
+
+  it('never uploads a framework project root to the public S3 bucket', async () => {
+    const project = mkdtempSync(join(tmpdir(), 'site-deploy-'));
+    writeFileSync(join(project, 'package.json'), '{}');
+    const { executor, calls } = contractExecutor();
+    const tool = new SiteDeployTool();
+    tool.setToolExecutor(executor);
+
+    const result = await tool.execute({
+      source: project,
+      framework: 'react',
+      cloudProvider: 'aws',
+      projectName: 'shop-site-bucket',
+    } as any);
+
+    expect(calls).toEqual([]);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/awsDeployS3Site uploads every file .* pass the built site's folder as outputDirectory/);
+  });
+
+  it.each(['.env', '.env.production', '.git'])(
+    'never uploads a directory holding %s to the public S3 bucket',
+    async (entry) => {
+      const site = mkdtempSync(join(tmpdir(), 'site-deploy-'));
+      writeFileSync(join(site, 'index.html'), '<h1>shop</h1>');
+      if (entry === '.git') mkdirSync(join(site, entry));
+      else writeFileSync(join(site, entry), 'SECRET=1');
+      const { executor, calls } = contractExecutor();
+      const tool = new SiteDeployTool();
+      tool.setToolExecutor(executor);
+
+      const result = await tool.execute({
+        source: site,
+        framework: 'static',
+        cloudProvider: 'aws',
+        projectName: 'shop-site-bucket',
+      } as any);
+
+      expect(calls).toEqual([]);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain(`holds ${entry}`);
+    },
+  );
+
+  it.each([
+    'https://github.com/heroku/node-js-sample/tarball/master/',
+    'https://s3-external-1.amazonaws.com/herokusources/abc123?AWSAccessKeyId=x&Signature=y',
+    'https://codeload.github.com/acme/shop/tar.gz/refs/heads/main',
+  ])('heroku builds from the archive URL %s', async (source) => {
+    const { executor, calls, violations } = contractExecutor();
+    const tool = new SiteDeployTool();
+    tool.setToolExecutor(executor);
+
+    const result = await tool.execute({ source, projectName: 'shop', cloudProvider: 'heroku' } as any);
+
+    expect(violations).toEqual([]);
+    expect(calls).toEqual([{ tool: 'herokuDeployApp', args: { appName: 'shop', sourceUrl: source } }]);
+    expect(result.success).toBe(true);
+  });
+
+  it('sends a Nuxt repository to DigitalOcean as a server app, not a static site', async () => {
+    const { executor, calls, violations } = contractExecutor();
+    const tool = new SiteDeployTool();
+    tool.setToolExecutor(executor);
+
+    await tool.execute({ source: 'https://github.com/acme/nuxt-shop', cloudProvider: 'digitalocean' } as any);
+
+    expect(violations).toEqual([]);
+    expect(calls[0]?.args.isStatic).toBe(false);
   });
 
   it.each([
@@ -218,6 +294,8 @@ describe('siteDeploy calls the tools the curated cloud packs register', () => {
     ['netlify', './shop', /netlifyDeploySite deploys from a Git repository URL; "\.\/shop" is not one/],
     ['railway', 'https://gitlab.com/acme/shop', /railwayDeployService deploys a GitHub repository .* is not a GitHub URL/],
     ['heroku', GIT, /herokuDeployApp builds from a source tarball URL/],
+    ['heroku', 'https://gitlab.com/acme/shop.git', /herokuDeployApp builds from a source tarball URL/],
+    ['aws', GIT, /awsDeployAmplify needs a repository access token, which siteDeploy does not take/],
     ['linode', GIT, /linodeDeployStackScript .* which siteDeploy does not take/],
     ['flyio', GIT, /flyDeployApp runs a Docker image/],
   ])('refuses %s for source %s without calling a tool the pack cannot serve', async (provider, source, reason) => {
@@ -303,8 +381,9 @@ describe('siteDeploy calls the tools the curated registrar packs register', () =
         data: {
           domain: 'shop.dev',
           records: [
-            { hostId: '1', name: '@', type: 'MX', address: 'mx.mail.example.net', mxPref: '10', ttl: '1800', isActive: true },
+            { hostId: '1', name: 'mail', type: 'MX', address: 'mx.mail.example.net', mxPref: '10', ttl: '1800', isActive: true },
             { hostId: '2', name: 'www', type: 'CNAME', address: 'old.example.net', mxPref: '10', ttl: '1800', isActive: true },
+            { hostId: '3', name: '@', type: 'CNAME', address: 'previous.example.net', mxPref: '10', ttl: '1800', isActive: true },
           ],
         },
       }),
@@ -323,13 +402,65 @@ describe('siteDeploy calls the tools the curated registrar packs register', () =
     const set = calls.find((c) => c.tool === 'namecheapConfigureDns');
     expect(set?.args.records).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ hostName: '@', recordType: 'MX', address: 'mx.mail.example.net' }),
+        expect.objectContaining({ hostName: 'mail', recordType: 'MX', address: 'mx.mail.example.net' }),
         expect.objectContaining({ hostName: 'www', recordType: 'CNAME', address: 'old.example.net' }),
         expect.objectContaining({ hostName: '@', recordType: 'CNAME', address: 'site.example.net' }),
       ]),
     );
     expect(set?.args.records).toHaveLength(3);
     expect(result.data?.domainStatus).toBe('configured');
+  });
+
+  it.each([
+    ['MX', 'mx.mail.example.net'],
+    ['TXT', 'v=spf1 include:_spf.example.net ~all'],
+    ['A', '192.0.2.10'],
+  ])('namecheap: never adds an apex CNAME beside an apex %s record', async (type, address) => {
+    const { executor, calls } = contractExecutor({
+      namecheapSearchDomain: () => ({ success: true, data: [{ domain: 'shop.dev', available: false }] }),
+      namecheapGetDnsRecords: () => ({
+        success: true,
+        data: { domain: 'shop.dev', records: [{ hostId: '1', name: '@', type, address, mxPref: '10', ttl: '1800' }] },
+      }),
+    });
+    const tool = new SiteDeployTool();
+    tool.setToolExecutor(executor);
+
+    const result = await tool.execute({
+      source: GIT,
+      cloudProvider: 'vercel',
+      domain: 'shop.dev',
+      domainRegistrar: 'namecheap',
+    } as any);
+
+    expect(calls.some((c) => c.tool === 'namecheapConfigureDns')).toBe(false);
+    expect(result.data?.domainStatus).toBe('pending_dns');
+    expect(result.data?.dnsInstructions?.join(' ')).toContain(`apex ${type} record`);
+  });
+
+  it.each([
+    ['porkbun', 'porkbunConfigureDns'],
+    [undefined, undefined],
+  ])('railway (registrar %s): no DNS record is written while the deployment has no hostname', async (registrar, dnsTool) => {
+    const { executor, calls } = contractExecutor({
+      railwayDeployService: () => ({ success: true, data: { service: { id: 'svc_1', name: 'shop' }, projectId: 'prj_1' } }),
+      porkbunSearchDomain: () => ({ success: true, data: { domain: 'shop.dev', available: false } }),
+    });
+    const tool = new SiteDeployTool();
+    tool.setToolExecutor(executor);
+
+    const result = await tool.execute({
+      source: GIT,
+      cloudProvider: 'railway',
+      domain: 'shop.dev',
+      domainRegistrar: registrar,
+    } as any);
+
+    if (dnsTool) expect(calls.some((c) => c.tool === dnsTool)).toBe(false);
+    expect(result.data?.domainStatus).toBe('pending_dns');
+    const text = result.data?.dnsInstructions?.join(' ') ?? '';
+    expect(text).not.toContain('railway.app');
+    expect(text).toContain('no hostname');
   });
 
   it('namecheap: never replaces the records when it cannot read them first', async () => {
