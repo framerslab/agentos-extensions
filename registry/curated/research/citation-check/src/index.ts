@@ -4,7 +4,9 @@
  * no search service: `parseCitedClaims` finds the claims and their addresses, `checkCitations` reads each page once and
  * grades each claim (word for word first, then through AgentOS's `CitationVerifier` when an embedding function is
  * given), `renderCitationLog` writes the markdown for a "Citation check log" section, and `citationReportFails` decides
- * the result. The pack's one tool is `citation_verify`; the `agentos-citations` command runs the same check.
+ * the result. The pack's one tool is `citation_verify`; the `agentos-citations` command runs the same check. The page
+ * reader is exported (`readPage` with its transports, the host rule and robots.txt on every hop, the licence read),
+ * and `WebPageSourceProvider` makes the open web a public source over a search the host gives.
  *
  * @module @framers/agentos-ext-citation-check
  */
@@ -18,7 +20,25 @@ import type { EmbedFn, NliFn } from './types.js';
 export * from './types.js';
 export { parseCitedClaims, CitationInputError, isHttpUrl, type CitedClaimFormat } from './parse.js';
 export { normalizeForMatch, quoteFragments, locateQuote, lexicalNearest, withoutInvisible } from './match.js';
-export { pageKey, type EgressProfile, type PageScraper } from './page.js';
+export {
+  pageKey,
+  readPage,
+  fetchTransport,
+  egressTransport,
+  PageRefusal,
+  UNREAD_LICENCE,
+  type EgressProfile,
+  type PageScraper,
+  type PageReaderOptions,
+  type PageRead,
+  type PageFallbackReader,
+  type Transport,
+  type TransportAnswer,
+  type TransportRules,
+} from './page.js';
+export { readRobots, robotsAllows, parseRobots, ROBOTS_PARSING_FLOOR, type RobotsRule, type RobotsFile, type RobotsGroup, type RobotsLine, type ReadRobotsOptions } from './robots.js';
+export { readLicence } from './licence.js';
+export { WebPageSourceProvider, DEFAULT_ROBOTS, type WebPageSourceOptions } from './web-source.js';
 export { checkCitations, checkCitationDocument, CitationSetupError, type CitationCheckOptions } from './runner.js';
 export { renderCitationLog, citationReportFails, FAILING_VERDICTS, type CitationReportOptions } from './report.js';
 export { openAIEmbeddings, managerEmbeddings, type OpenAIEmbeddingOptions, type EmbeddingManagerLike } from './embeddings.js';
