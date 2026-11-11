@@ -217,6 +217,21 @@ describe('the wikipedia provider over HTTP', () => {
     expect(refused).toBeInstanceOf(LimiterRefused);
     expect(asked).toHaveLength(1);
   });
+
+  it("a refusal from another public-sources copy's limiter reaches the caller as that refusal and sends nothing", async () => {
+    // A host whose own public-sources resolves to a copy other than this pack's: its refusal is not this copy's class.
+    const refused = Object.assign(new Error('refused'), { name: 'LimiterRefused', reason: 'blocked' });
+    const limiter = {
+      run: async () => {
+        throw refused;
+      },
+      block: () => {},
+    } as unknown as SourceLimiter;
+    const thrown = await rejection(service(limiter).search('Treaty of Versailles', { provider: 'wikipedia' }));
+    expect(thrown).toBe(refused);
+    expect(thrown).not.toBeInstanceOf(SearchFailed);
+    expect(asked).toHaveLength(0);
+  });
 });
 
 describe('the providers listed', () => {

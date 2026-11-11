@@ -232,9 +232,16 @@ describe('WebSearchTool', () => {
 
 describe('WebSearchTool providers', () => {
   const ctx: any = { gmiId: 'test-gmi', personaId: 'test-persona', userContext: { userId: 'test-user' } };
+  const CLIENT = { name: 'TestClient', version: '1.0', contact: 'https://example.org/contact' };
 
-  it('accepts tavily, firecrawl and wikipedia, and lists every provider in its schema', () => {
-    const tool = new WebSearchTool(new SearchProviderService({}) as any);
+  /** The service class itself: this file mocks its module for the tests above. */
+  async function realService(config: Record<string, unknown>): Promise<any> {
+    const actual: any = await vi.importActual('../src/services/searchProvider');
+    return new actual.SearchProviderService(config);
+  }
+
+  it('accepts tavily, firecrawl and wikipedia, and lists every provider in its schema, on a service that enables wikipedia', async () => {
+    const tool = new WebSearchTool(await realService({ wikipedia: { enabled: true, client: CLIENT } }));
     for (const provider of ['tavily', 'firecrawl', 'wikipedia']) {
       expect(tool.validateArgs({ query: 'q', provider })).toEqual({ isValid: true });
     }
@@ -251,8 +258,37 @@ describe('WebSearchTool providers', () => {
     expect(tool.description).toContain('Wikipedia');
   });
 
+  it('leaves wikipedia out of the schema, the description and validateArgs on a service that does not enable it', async () => {
+    const services = [
+      await realService({}),
+      await realService({ serperApiKey: 'k', wikipedia: { enabled: false, client: CLIENT } }),
+      // The mocked class, whose getAvailableProviders answers undefined.
+      new SearchProviderService({}) as any,
+    ];
+    for (const service of services) {
+      const tool = new WebSearchTool(service);
+      expect(tool.validateArgs({ query: 'Treaty of Versailles', provider: 'wikipedia' })).toEqual({
+        isValid: false,
+        errors: ['Invalid provider'],
+      });
+      expect(tool.inputSchema.properties.provider.enum).toEqual([
+        'serper',
+        'serpapi',
+        'brave',
+        'tavily',
+        'firecrawl',
+        'searxng',
+        'duckduckgo',
+      ]);
+      expect(tool.description).not.toContain('Wikipedia');
+      for (const provider of ['tavily', 'firecrawl', 'duckduckgo']) {
+        expect(tool.validateArgs({ query: 'q', provider })).toEqual({ isValid: true });
+      }
+    }
+  });
+
   it('passes a call pinned to wikipedia to the service', async () => {
-    const service = new SearchProviderService({}) as any;
+    const service = await realService({ wikipedia: { enabled: true, client: CLIENT } });
     service.search = vi.fn().mockResolvedValue({ provider: 'wikipedia', results: [], metadata: {} });
     const tool = new WebSearchTool(service);
     expect(tool.validateArgs({ query: 'Treaty of Versailles', provider: 'wikipedia' })).toEqual({ isValid: true });
