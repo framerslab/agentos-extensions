@@ -9,16 +9,18 @@
  * OpenAPI document `v2-openapi.json`, read on 11 November 2026): `POST https://api.firecrawl.dev/v2/scrape` with
  * `Authorization: Bearer <key>` and a JSON body whose one required field is `url`; `formats` is a list of format names
  * (`html` asks for the page's cleaned HTML, its scripts and styles removed), `onlyMainContent` (true when left out) cuts
- * the headers, navigation and footers, and `timeout` is Firecrawl's own deadline in milliseconds, from 1,000 to 300,000
- * (60,000 when left out). A 200 answers `{ success, data: { html, metadata: { statusCode } } }`, where `statusCode` is
- * the status the page itself answered; an error answers 400, 402, 403, 404, 409, 429, 500 or 503. Firecrawl's pricing
+ * the headers, navigation and footers, `timeout` is Firecrawl's own deadline in milliseconds, from 1,000 to 300,000
+ * (60,000 when left out), and `maxAge` lets it answer a cached copy younger than that many milliseconds (172,800,000, two
+ * days, when left out). A 200 answers `{ success, data: { html, metadata: { statusCode, url } } }`, where `statusCode`
+ * is the status the page itself answered and `url` the page's address after the redirects Firecrawl followed; an error
+ * answers 400, 402, 403, 404, 409, 429, 500 or 503. Firecrawl's pricing
  * (https://www.firecrawl.dev/pricing, read the same day) counts a scrape as 1 credit a page, a page that answers an
  * error status included, and a scrape that returns no result as none.
  *
  * @module agentos/extensions/research/citation-check/firecrawl
  */
 
-import { pageBlocks, readCapped, whenAborted, type PageFallbackReader } from './page.js';
+import { originOf, pageBlocks, readCapped, whenAborted, type PageFallbackReader } from './page.js';
 
 /** Firecrawl's scrape endpoint, where the reader sends when the host names no other. */
 export const FIRECRAWL_SCRAPE_URL = 'https://api.firecrawl.dev/v2/scrape';
@@ -84,15 +86,24 @@ function discard(response: Response): null {
   return null;
 }
 
-/** The page's HTML from a scrape's answer, or null for a failed scrape, an error page or an answer with none. */
-function htmlOf(answer: unknown): string | null {
+/**
+ * The page's HTML from a scrape's answer, or null for a failed scrape, an error page, a page Firecrawl ended on at
+ * another origin than the address asked for, or an answer with none.
+ */
+function htmlOf(answer: unknown, asked: string): string | null {
   if (answer === null || typeof answer !== 'object') return null;
   const { success, data } = answer as { success?: unknown; data?: unknown };
   if (success !== true || data === null || typeof data !== 'object') return null;
   const { html, metadata } = data as { html?: unknown; metadata?: unknown };
+  const meta = metadata !== null && typeof metadata === 'object' ? (metadata as { statusCode?: unknown; url?: unknown }) : {};
   // Firecrawl answers a page that answered an error status with that page's text, which is no text of the page cited.
-  const status = metadata !== null && typeof metadata === 'object' ? (metadata as { statusCode?: unknown }).statusCode : undefined;
-  if (typeof status === 'number' && (status < 200 || status > 299)) return null;
+  if (typeof meta.statusCode === 'number' && (meta.statusCode < 200 || meta.statusCode > 299)) return null;
+  // Firecrawl follows redirects itself and names the page it ended on; one at another origin is not the page cited, and
+  // neither the host's rule nor robots.txt cleared it.
+  if (typeof meta.url === 'string') {
+    const ended = originOf(meta.url);
+    if (ended === 'unparsable' || ended !== originOf(asked)) return null;
+  }
   return typeof html === 'string' && html !== '' ? html : null;
 }
 
@@ -147,7 +158,7 @@ export class FirecrawlPageReader implements PageFallbackReader {
       const sent = this.#send(url, signal);
       // A response that comes after the read ended is cancelled, so its connection is not left open.
       void ended.promise.catch(() => sent.then(discard, () => undefined));
-      blocks = await this.#blocksOf(await Promise.race([sent, ended.promise]), signal);
+      blocks = await this.#blocksOf(url, await Promise.race([sent, ended.promise]), signal);
     } catch {
       // Every failure answers null; the caller's cancellation is thrown below.
     } finally {
@@ -163,11 +174,14 @@ export class FirecrawlPageReader implements PageFallbackReader {
     return fetchFn(this.#url, {
       method: 'POST',
       headers: { authorization: `Bearer ${this.#apiKey}`, 'content-type': 'application/json', accept: 'application/json' },
-      // The whole page, as the reader reads its own fetches, rather than Firecrawl's main-content cut.
+      // The whole page, as the reader reads its own fetches, rather than Firecrawl's main-content cut; and a fresh
+      // scrape, since Firecrawl answers a cached copy up to two days old unless `maxAge` says otherwise, and the
+      // document is dated by the reader's clock.
       body: JSON.stringify({
         url,
         formats: ['html'],
         onlyMainContent: false,
+        maxAge: 0,
         timeout: Math.min(FIRECRAWL_TIMEOUT_CEILING, Math.max(FIRECRAWL_TIMEOUT_FLOOR, this.#timeoutMs)),
       }),
       // The key goes to the endpoint alone, never to an address a redirect names.
@@ -176,14 +190,14 @@ export class FirecrawlPageReader implements PageFallbackReader {
     });
   }
 
-  /** The page's text from Firecrawl's answer, or null. */
-  async #blocksOf(response: Response, signal: AbortSignal): Promise<string[] | null> {
+  /** The page's text from Firecrawl's answer for the address asked for, or null. */
+  async #blocksOf(url: string, response: Response, signal: AbortSignal): Promise<string[] | null> {
     if (!response.ok) return discard(response);
     const declared = Number(response.headers.get('content-length') ?? '');
     if (Number.isFinite(declared) && declared > this.#maxBytes) return discard(response);
     const bytes = await readCapped(response, this.#maxBytes, signal);
     if (bytes === null) return null;
-    const html = htmlOf(JSON.parse(new TextDecoder('utf-8').decode(bytes)));
+    const html = htmlOf(JSON.parse(new TextDecoder('utf-8').decode(bytes)), url);
     if (html === null) return null;
     const blocks = pageBlocks('html', html, this.#textBudget);
     return blocks.length === 0 ? null : blocks;

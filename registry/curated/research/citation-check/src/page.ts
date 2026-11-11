@@ -182,6 +182,8 @@ export async function readCapped(response: Response, cap: number, signal?: Abort
     let total = 0;
     for (;;) {
       const { done, value } = await (ended === null ? reader.read() : Promise.race([reader.read(), ended.promise]));
+      // The abort's cancel settles the pending read as done before the abort rejects, so the signal decides first.
+      signal?.throwIfAborted();
       if (done) break;
       total += value.byteLength;
       if (total > cap) {
