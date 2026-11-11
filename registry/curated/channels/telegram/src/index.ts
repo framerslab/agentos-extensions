@@ -24,6 +24,7 @@ import {
 } from './TelegramChannelAdapter';
 import { TelegramSendMessageTool } from './tools/sendMessage';
 import { TelegramSendMediaTool } from './tools/sendMedia';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface TelegramChannelOptions {
   botToken?: string;
@@ -94,7 +95,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-telegram',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'telegramChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'telegramChannelSendMedia', kind: 'tool', priority, payload: sendMediaTool },

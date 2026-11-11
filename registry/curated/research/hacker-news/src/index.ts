@@ -7,6 +7,7 @@
  */
 
 import { HackerNewsTool } from './tools/hackerNews.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface HackerNewsExtensionOptions {
   priority?: number;
@@ -18,7 +19,7 @@ export function createExtensionPack(context: any) {
 
   return {
     name: '@framers/agentos-ext-hacker-news',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: tool.name,

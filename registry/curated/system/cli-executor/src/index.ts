@@ -21,6 +21,7 @@ import { ListDirectoryTool } from './tools/listDir.js';
 import { CreateSpreadsheetTool } from './tools/createSpreadsheet.js';
 import { CreateDocumentTool } from './tools/createDocument.js';
 import type { ShellConfig } from './types.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /**
  * Extension configuration options
@@ -118,7 +119,7 @@ export function createExtensionPack(context: {
 
   return {
     name: '@framers/agentos-ext-cli-executor',
-    version: '1.2.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: executeTool.name,

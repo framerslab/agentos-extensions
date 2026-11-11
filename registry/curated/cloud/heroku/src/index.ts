@@ -15,6 +15,7 @@ import { HerokuDeployAppTool } from './tools/deployApp.js';
 import { HerokuAddAddonTool } from './tools/addAddon.js';
 import { HerokuGetLogsTool } from './tools/getLogs.js';
 import { HerokuScaleDynosTool } from './tools/scaleDynos.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -75,7 +76,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-cloud-heroku',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'herokuCreateApp', kind: 'tool', priority: 40, payload: createAppTool },
       { id: 'herokuDeployApp', kind: 'tool', priority: 40, payload: deployAppTool },

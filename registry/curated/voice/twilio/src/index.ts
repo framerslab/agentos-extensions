@@ -15,6 +15,7 @@ import { bindVoiceProvider, type VoiceProviderBinding } from '@framers/agentos/i
 import { TwilioVoiceService, type TwilioServiceConfig } from './TwilioVoiceService';
 import { TwilioVoiceProvider } from './TwilioVoiceProvider';
 import { VoiceCallTool } from './tools/voiceCall';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ============================================================================
 // Options
@@ -147,7 +148,7 @@ export function createExtensionPack(context: ExtensionContext): TwilioVoicePack 
   return {
     binding,
     name: '@framers/agentos-ext-voice-twilio',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'twilioVoiceCall', kind: 'tool', priority, payload: voiceCallTool },
       { id: 'twilioVoiceProvider', kind: 'voice-provider', priority, payload: provider },

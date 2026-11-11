@@ -20,6 +20,7 @@ vi.mock('axios', () => {
 });
 
 import { createExtensionPack } from '../src/index';
+import { createRequire as createPackageRequire } from 'node:module';
 
 describe('createExtensionPack', () => {
   beforeEach(() => {
@@ -33,7 +34,7 @@ describe('createExtensionPack', () => {
       options: { accessToken: 'test-token' },
     } as any);
     expect(pack.name).toBe('@framers/agentos-ext-channel-pinterest');
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   it('should include 7 descriptors (6 tools + 1 channel)', () => {

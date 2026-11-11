@@ -90,6 +90,7 @@ vi.mock(
 import { ToxicityClassifier } from '../src/classifiers/ToxicityClassifier';
 import { InjectionClassifier } from '../src/classifiers/InjectionClassifier';
 import { JailbreakClassifier } from '../src/classifiers/JailbreakClassifier';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -112,7 +113,7 @@ describe('createMLClassifierGuardrail', () => {
 
     it('returns an ExtensionPack with version "1.0.0"', () => {
       const pack = createMLClassifierGuardrail();
-      expect(pack.version).toBe('1.0.0');
+      expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
     });
   });
 
@@ -385,7 +386,7 @@ describe('createExtensionPack', () => {
     const context: ExtensionPackContext = {};
     const pack = createExtensionPack(context);
 
-    expect(pack.version).toBe('1.0.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   it('provides 2 descriptors with empty context', () => {

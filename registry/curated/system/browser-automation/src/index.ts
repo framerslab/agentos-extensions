@@ -29,6 +29,7 @@ import { DaemonAttachSurface } from './attach/daemon/surface.js';
 import { createAttachTools } from './attach/tools.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Extension Options
@@ -187,7 +188,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-browser-automation',
-    version: '0.2.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'browserNavigate', kind: 'tool', priority: 50, payload: navigateTool },
       { id: 'browserClick', kind: 'tool', priority: 50, payload: clickTool },

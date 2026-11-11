@@ -18,6 +18,7 @@ import { BlogListArticlesTool } from './tools/listArticles';
 import { BlogAnalyticsTool } from './tools/analytics';
 import { BlogScheduleTool } from './tools/schedule';
 import { BlogCrossPostTool } from './tools/crossPost';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ============================================================================
 // Options & Config Resolution
@@ -128,7 +129,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-blog-publisher',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'blogPublishArticle', kind: 'tool', priority, payload: publishTool },
       { id: 'blogUpdateArticle', kind: 'tool', priority, payload: updateTool },

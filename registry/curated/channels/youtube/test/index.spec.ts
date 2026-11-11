@@ -49,6 +49,7 @@ vi.mock('googleapis', () => {
 });
 
 import { createExtensionPack } from '../src/index';
+import { createRequire as createPackageRequire } from 'node:module';
 
 describe('createExtensionPack', () => {
   beforeEach(() => {
@@ -64,7 +65,7 @@ describe('createExtensionPack', () => {
       options: { apiKey: 'test-api-key' },
     } as any);
     expect(pack.name).toBe('@framers/agentos-ext-channel-youtube');
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   it('should include 9 descriptors (8 tools + 1 channel)', () => {

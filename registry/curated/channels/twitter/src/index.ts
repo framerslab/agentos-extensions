@@ -22,6 +22,7 @@ import { TwitterDmTool } from './tools/dm.js';
 import { TwitterAnalyticsTool } from './tools/analytics.js';
 import { TwitterScheduleTool } from './tools/schedule.js';
 import { TwitterThreadTool } from './tools/thread.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -108,7 +109,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-twitter',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'twitterPost', kind: 'tool', priority: 50, payload: postTool },
       { id: 'twitterReply', kind: 'tool', priority: 50, payload: replyTool },

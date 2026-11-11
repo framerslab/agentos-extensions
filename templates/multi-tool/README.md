@@ -39,13 +39,15 @@ This template includes:
 // src/index.ts
 import { Tool1, Tool2, Tool3 } from './tools';
 import { SharedService } from './services/shared';
+// The package's own version, read from its package.json (templates/basic-tool/src/packageVersion.ts).
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export function createExtensionPack(context) {
   const service = new SharedService(context.options);
   
   return {
     name: '@framers/agentos-category-name',
-    version: '1.0.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: 'tool1',
