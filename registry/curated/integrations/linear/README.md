@@ -47,6 +47,8 @@ npm install @framers/agentos-ext-linear @framers/agentos @framers/agentos-ext-ac
 - `revoke(token, hint)` posts `token` and `token_type_hint` (`refresh_token` by default, or `access_token`) to `https://api.linear.app/oauth/revoke`. Linear answers 200 when it revoked the token; any other answer throws the core's `OAuthGrantRefused` with reason `revoke` and the status.
 - `forget(key)` revokes the kept refresh token and clears the grant whatever Linear answers, and answers `{ revoked }`.
 
+Build one flow per process and share it across requests: the access token is held in its memory, and a key's refreshes run one at a time within it. Processes that share a store coordinate their refreshes, as [Linear asks](https://linear.app/developers/oauth-2-0-authentication); a refresh that finds the kept grant changed under it throws the core's `OAuthGrantRefused('missing')`, which the client reads as `TrackerGrantRefused`.
+
 `LinearClient` takes a supplier of the access token, so the same client serves any credential the host holds:
 
 - `organization()`: the workspace's name and URL key.
@@ -54,7 +56,7 @@ npm install @framers/agentos-ext-linear @framers/agentos @framers/agentos-ext-ac
 - `assignedIssues(limit = 50)`: the person's open issues, the newest change first, at most 250.
 - `createIssue({ teamId, title, description })`: one issue, its description read by Linear as Markdown.
 - `closeIssue(issueId)`: moves the issue to its team's completed state with the lowest position, and writes nothing for an issue already done.
-- `linearGraphql(token, operationName, query, variables)` makes one call of a host's own document under the same deadline, cap and faults.
+- `linearGraphql(token, operationName, query, variables)` makes one call of a host's own document under the same deadline, cap, faults and address rule: it posts to Linear's GraphQL address, or on CI to a stand-in's, and throws `TrackerFault('configuration')` before any call for any other address or a deadline outside 1 ms to ten minutes.
 
 `LinearTracker` implements `IssueTracker` on the client. Its destinations are teams, with `visibility: null`, since a team's issues are read inside the workspace and never in public, and `issueTypes: []`, since Linear has no issue types. A draft that names an issue type is refused before any call. A draft's body is plain text and Linear reads a description as Markdown, so the tracker writes the body as Markdown that shows as written: in each line it escapes the characters that open emphasis, code, links, tags and tables, and a leading `#`, `-`, `+`, `=` or numbered `1.`, with CommonMark's backslash escapes; lines and blank lines stay where they are, and a line's leading spaces and tabs are left out, since four of them open a code block. The title goes as it is. Its `revoke` calls the function the host gives it, the flow's `forget` of the grant's key. It passes the account sources library's tracker conformance checks.
 
@@ -70,7 +72,7 @@ npm install @framers/agentos-ext-linear @framers/agentos @framers/agentos-ext-ac
 
 Stand-in addresses are taken only on CI (`CI=true`) and only at a loopback or `.invalid` host. Never take them from a request.
 
-Every call runs under its deadline and the caller's signal, follows no redirect, and reads its answer under a cap (64 KiB for a token answer, 1 MiB for a GraphQL answer).
+Every call runs under its deadline and the caller's signal, follows no redirect, and reads its answer under a cap (64 KiB for a token answer, 1 MiB for a GraphQL answer). The client's wait for its token supplier runs under the same deadline and signal, so a cancel during a refresh ends the call at once.
 
 ## What Linear gives
 
@@ -98,7 +100,7 @@ Every call of the client and the tracker throws the account sources library's tr
 | An error of type `invalid input` named `Entity not found`, Linear's answer for an issue or a team id it cannot find | `TrackerFault('not_found')` with the status |
 | Any other status outside 2xx, or any other error | `TrackerFault('refused')` with the status |
 | An answer past the cap, or one without the fields the call needs | `TrackerFault('invalid_response')` |
-| A draft or a limit refused before any call | `TrackerFault('configuration')` |
+| A draft, a limit, or a `linearGraphql` address or deadline refused before any call | `TrackerFault('configuration')` |
 
 A token supplier that throws the core's `OAuthGrantRefused` reads as `TrackerGrantRefused`. Two cases keep the grant: a refresh Linear answered 429 reads as `TrackerRateLimited`, and a refresh it answered with a 5xx reads as `TrackerFault('refused')`. The flow throws the core's `OAuthGrantRefused` for a refused exchange, refresh or revocation, `TrackerNoAnswer` for a call with no answer, and `LinearFault` for an option, input or answer the pack refuses on its own.
 

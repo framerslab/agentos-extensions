@@ -10,7 +10,9 @@
  *   an issue or a team it cannot find) is `TrackerFault('not_found')` with the status;
  * - no answer by the deadline, a cancel or a failed connection is `TrackerNoAnswer`;
  * - any other status outside 2xx, or any other error, is `TrackerFault('refused')` with the status;
- * - an answer past the cap, or a success without `data`, is `TrackerFault('invalid_response')`.
+ * - an answer past the cap, or a success without `data`, is `TrackerFault('invalid_response')`;
+ * - an address other than Linear's that the stand-in rule refuses, a deadline outside 1 ms to ten minutes, or options
+ *   that are not an object, is `TrackerFault('configuration')`, thrown before any call.
  *
  * Sources, read on 11 November 2026: https://linear.app/developers/rate-limiting,
  * https://linear.app/developers/oauth-2-0-authentication ("Make an API request"), and the SDK's error types and its
@@ -23,16 +25,16 @@
 import {
   ReadCapExceeded, TrackerFault, TrackerGrantRefused, TrackerRateLimited,
 } from '@framers/agentos-ext-account-sources';
-import { boundedCall, deadlineOf, isObject, jsonObject, type Answer } from './http.js';
+import { boundedCall, deadlineMs, deadlineOf, isObject, isOptions, jsonObject, standInAddress, type Answer } from './http.js';
 import { LINEAR_ENDPOINTS } from './oauth.js';
 
 /** Where a call goes and how long it may take. */
 export interface LinearGraphqlOptions {
   /** The fetch the call is made with; the global fetch when absent. */
   readonly fetchImpl?: typeof fetch;
-  /** The GraphQL address; Linear's when absent. A host passes a stand-in's through `LinearClient`, which checks it. */
+  /** The GraphQL address; Linear's when absent. Any other is taken only as a stand-in: on CI, at a loopback or `.invalid` host. */
   readonly endpoint?: string;
-  /** How long the call may take, its answer included, in milliseconds; 30 seconds when absent. */
+  /** How long the call may take, its answer included, in milliseconds from 1 to ten minutes; 30 seconds when absent. */
   readonly timeoutMs?: number;
 }
 
@@ -133,12 +135,25 @@ export async function linearGraphql(
   options: LinearGraphqlOptions = {},
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  const deadline = deadlineOf(signal, options.timeoutMs ?? LINEAR_TIMEOUT_MS);
+  if (!isOptions(options)) throw new TrackerFault('configuration');
+  const endpoint = options.endpoint ?? LINEAR_ENDPOINTS.graphql;
+  const timeoutMs = options.timeoutMs ?? LINEAR_TIMEOUT_MS;
+  if (!deadlineMs(timeoutMs)) throw new TrackerFault('configuration');
+  if (options.fetchImpl !== undefined && typeof options.fetchImpl !== 'function') throw new TrackerFault('configuration');
+  // The bearer reaches Linear's own address alone, or on CI a stand-in's, whoever calls.
+  if (endpoint !== LINEAR_ENDPOINTS.graphql) {
+    try {
+      standInAddress(endpoint);
+    } catch {
+      throw new TrackerFault('configuration');
+    }
+  }
+  const deadline = deadlineOf(signal, timeoutMs);
   let answer: Answer;
   try {
     answer = await boundedCall(
       options.fetchImpl ?? fetch,
-      options.endpoint ?? LINEAR_ENDPOINTS.graphql,
+      endpoint,
       {
         method: 'POST',
         headers: {

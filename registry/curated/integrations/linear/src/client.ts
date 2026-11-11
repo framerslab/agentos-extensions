@@ -20,7 +20,7 @@ import {
 import { OAuthGrantRefused } from '@framers/agentos/auth';
 import { LinearFault } from './faults.js';
 import { linearGraphql, LINEAR_TIMEOUT_MS } from './graphql.js';
-import { credential, deadlineMs, isObject, isOptions, standInAddress } from './http.js';
+import { credential, deadlineMs, deadlineOf, isObject, isOptions, standInAddress, untilDeadline } from './http.js';
 import { LINEAR_ENDPOINTS } from './oauth.js';
 
 /** The workspace a grant was made in, as the person's settings show it. */
@@ -65,7 +65,10 @@ export interface LinearIssueDraft {
 export interface LinearClientOptions {
   /** The fetch every call is made with; the global fetch when absent. */
   readonly fetchImpl?: typeof fetch;
-  /** How long each call may take, its answer included, in milliseconds; 30 seconds when absent. */
+  /**
+   * How long each call may take, its answer included, in milliseconds; 30 seconds when absent. The wait for the token
+   * supplier runs under a deadline of the same length.
+   */
   readonly timeoutMs?: number;
   /** A stand-in's GraphQL address, taken only on CI (`CI=true`) at a loopback or `.invalid` host. */
   readonly endpoint?: string;
@@ -173,8 +176,9 @@ function connectionOf(value: unknown): { nodes: unknown[]; next: string | null }
 /**
  * The fault a refusal from the host's token supplier reads as. A refused or missing grant is `TrackerGrantRefused`;
  * a refresh Linear answered 429 is `TrackerRateLimited`; a refresh Linear could not serve (a 5xx) is a refusal that
- * keeps the grant; the pack's own faults and the tracker faults pass as they are, a `LinearFault` as the tracker
- * fault of its reason; anything else is the host's own error, thrown on unchanged.
+ * keeps the grant; the pack's own faults and the tracker faults pass as they are (a supplier still answering at the
+ * deadline or the caller's cancel is `TrackerNoAnswer`), a `LinearFault` as the tracker fault of its reason; anything
+ * else is the host's own error, thrown on unchanged.
  */
 function supplierFault(error: unknown): unknown {
   if (error instanceof TrackerFault) return error;
@@ -215,11 +219,15 @@ export class LinearClient {
     this.endpoint = options.endpoint === undefined ? LINEAR_ENDPOINTS.graphql : standInAddress(options.endpoint);
   }
 
-  /** A usable access token from the supplier, or the fault its refusal reads as. */
-  private async token(): Promise<string> {
+  /**
+   * A usable access token from the supplier, or the fault its refusal reads as. The wait runs under the call's deadline
+   * and the caller's cancel, so a cancel during a refresh ends the call at once with `TrackerNoAnswer('cancelled')`,
+   * and a refusal the supplier answers after that is dropped.
+   */
+  private async token(signal?: AbortSignal): Promise<string> {
     let token: unknown;
     try {
-      token = await this.accessToken();
+      token = await untilDeadline(Promise.resolve(this.accessToken()), deadlineOf(signal, this.timeoutMs));
     } catch (error) {
       throw supplierFault(error);
     }
@@ -230,7 +238,7 @@ export class LinearClient {
   /** One call: the caller's cancel first, then the token, then the document. */
   private async call(operationName: string, query: string, variables: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
     if (signal?.aborted === true) throw new TrackerNoAnswer('cancelled');
-    const token = await this.token();
+    const token = await this.token(signal);
     return linearGraphql(token, operationName, query, variables, { fetchImpl: this.fetchImpl, endpoint: this.endpoint, timeoutMs: this.timeoutMs }, signal);
   }
 
@@ -254,7 +262,9 @@ export class LinearClient {
         teams.push(teamOf(node));
         if (teams.length >= TEAM_LIMIT) return teams;
       }
-      if (next === null) return teams;
+      // A page with no team ends the paging, as one that names no next page does: pages of nothing with fresh cursors
+      // would otherwise be asked for without end, since the cap counts teams.
+      if (next === null || nodes.length === 0) return teams;
       // A page that names the cursor it was asked by would be asked for again without end.
       if (next === after) throw invalid();
       after = next;
