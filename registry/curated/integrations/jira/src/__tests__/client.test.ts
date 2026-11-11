@@ -294,7 +294,8 @@ describe('JiraClient', () => {
   });
 
   it('caps a dated Retry-After or X-RateLimit-Reset at a day from now, as it caps seconds', async () => {
-    for (const headers of [{ 'retry-after': 'Fri, 31 Dec 2027 23:59:59 GMT' }, { 'x-ratelimit-reset': '2027-12-31T23:59:59Z' }]) {
+    const dated: Array<Record<string, string>> = [{ 'retry-after': 'Fri, 31 Dec 2027 23:59:59 GMT' }, { 'x-ratelimit-reset': '2027-12-31T23:59:59Z' }];
+    for (const headers of dated) {
       const before = Date.now();
       const far = standIn(() => json({}, 429, headers));
       const error = (await outcome(new JiraClient(token, site, { fetchImpl: far.fetchImpl }).projects())) as TrackerRateLimited;
