@@ -1545,6 +1545,13 @@ test("9d an adopted package counts from the highest version npm holds, and a ver
   // A version named at or below npm's is not a name: the patch above npm's highest version publishes.
   const below = handover({ alphaVersion: '0.3.3' });
   assert.deepEqual(pick(alpha(await plan(below.ws, { table: below.table }))), { planned: '0.3.4', bump: 'patch', newest: '0.3.3', baseCommit: null, baseSource: null });
+
+  // A tag here above every version npm holds (its publish never reached npm) is counted too, so the planned version
+  // never names a tag that stands at another commit.
+  const tagged = handover();
+  tagged.ws.tag(ALPHA, '0.3.4', tagged.ws.head());
+  tagged.ws.commit(src(2), 'fix(alpha): after the tag');
+  assert.deepEqual(pick(alpha(await plan(tagged.ws, { table: tagged.table }))), { planned: '0.3.5', bump: 'patch', newest: '0.3.4', baseCommit: null, baseSource: null });
 });
 
 test("9e an adopted package's ranges on its siblings are master's text, and a sibling's release raises them as any package's", async () => {
@@ -1570,6 +1577,10 @@ test("9e an adopted package's ranges on its siblings are master's text, and a si
   assert.equal(entryOf(result, BETA).planned, '1.0.0');
   assert.deepEqual([range.raised, range.applied], [true, '^1.0.0']);
   assert.equal(alpha(result).planned, '0.3.4');
+  // Its release notes say where its earlier versions came from, then list the range the release raised.
+  const notes = releaseNotes(result, { event: 'published', name: ALPHA, version: '0.3.4' });
+  assert.match(notes, /^The first release of @framers\/agentos-ext-alpha from this repository/);
+  assert.match(notes, /^- @framers\/agentos-ext-beta \^0\.5\.0 to \^1\.0\.0, in peerDependencies$/m);
 });
 
 test('9f the role map lists under adopted only the directories of publishable packages', async () => {
@@ -1605,6 +1616,23 @@ test("9g once the adopted version is tagged here, the package is planned as any 
   assert.equal(alpha(result).adopted, undefined);
   assert.deepEqual(pick(alpha(result)), { planned: '0.3.5', bump: 'patch', newest: '0.3.4', baseCommit: handed, baseSource: 'tag' });
   assert.deepEqual(result.repairs, []);
+});
+
+test("9i an adopted package whose handover version reached npm without its tag is repaired, and the other repository's versions below it are left as they are", async () => {
+  const { ws, table } = handover();
+  const handed = ws.head();
+  // The release published 0.3.4 from this repository and its tag push failed: npm's latest names this repository.
+  table[ALPHA].latest = '0.3.4';
+  table[ALPHA].versions['0.3.4'] = { gitHead: handed, repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` } };
+  ws.commit(src(2), 'fix(alpha): the first change made here');
+
+  const result = await plan(ws, { table });
+
+  assert.deepEqual(pick(alpha(result)), { planned: '0.3.5', bump: 'patch', newest: '0.3.4', baseCommit: handed, baseSource: 'gitHead' });
+  assert.deepEqual(
+    result.repairs.filter((record) => record.name === ALPHA),
+    [{ name: ALPHA, version: '0.3.4', commit: handed, kind: 'tag' }],
+  );
 });
 
 test("9h apply writes the adopted package's version, its release notes say where its earlier versions came from, and the summary names it", async () => {
