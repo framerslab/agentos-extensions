@@ -1856,6 +1856,9 @@ importers:
 
   registry/curated/research/web-search:
     dependencies:
+      '@framers/agentos-ext-public-sources':
+        specifier: ^0.2.2
+        version: 0.2.2(@framers/agentos@0.16.0(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(express@5.3.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@6.0.3)(utf-8-validate@5.0.10))
       axios:
         specifier: ^1.7.7
         version: 1.21.0
@@ -3366,6 +3369,12 @@ packages:
 
   '@framers/agentos-ext-grounding-guard@0.11.0':
     resolution: {integrity: sha512-r6r+8vffAweFKjUVcL2yaZ3dsA75b9oR8RwwQ4rxow2WSoOOEDvkUsSDYwILK1Ofn6cCAJ3UTbgZWIm2RYadGA==}
+    peerDependencies:
+      '@framers/agentos': ^0.16.0
+
+  '@framers/agentos-ext-public-sources@0.2.2':
+    resolution: {integrity: sha512-aCPZd7dSWnEzIaMRPgZyENNZ0HVihQALRnYnN+es0Dzw35fY4HJzm31Jd7rYCa5qoI6XnTf2C/Q0qPIGLqQo1Q==}
+    engines: {node: '>=22'}
     peerDependencies:
       '@framers/agentos': ^0.16.0
 
@@ -11848,6 +11857,11 @@ snapshots:
       '@framers/agentos': 0.16.0(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(express@5.3.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@6.0.3)(utf-8-validate@5.0.10)
     optionalDependencies:
       '@huggingface/transformers': 3.8.1
+
+  '@framers/agentos-ext-public-sources@0.2.2(@framers/agentos@0.16.0(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(express@5.3.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@6.0.3)(utf-8-validate@5.0.10))':
+    dependencies:
+      '@framers/agentos': 0.16.0(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(express@5.3.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@6.0.3)(utf-8-validate@5.0.10)
+      htmlparser2: 12.0.0
 
   '@framers/agentos@0.16.0(@aws-sdk/client-s3@3.984.0)(@livekit/rtc-node@1.1.0)(bufferutil@4.1.0)(express@5.3.0)(pdf-parse@1.1.4)(react@19.3.1)(socks@2.8.7)(typescript@6.0.3)(utf-8-validate@5.0.10)':
     dependencies:
