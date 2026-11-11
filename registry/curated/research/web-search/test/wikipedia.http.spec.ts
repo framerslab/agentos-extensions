@@ -189,6 +189,27 @@ describe('the wikipedia provider over HTTP', () => {
     expect(asked).toHaveLength(0);
   });
 
+  it("an abort while onSend is pending ends the search with the caller's reason and sends nothing", async () => {
+    const controller = new AbortController();
+    const reason = new Error('the caller stopped');
+    let hookRan: () => void = () => {};
+    const ran = new Promise<void>((resolve) => {
+      hookRan = resolve;
+    });
+    const pending = service().search('Treaty of Versailles', {
+      provider: 'wikipedia',
+      signal: controller.signal,
+      onSend: () => {
+        hookRan();
+        return new Promise<void>(() => {});
+      },
+    });
+    await ran;
+    controller.abort(reason);
+    expect(await rejection(pending)).toBe(reason);
+    expect(asked).toHaveLength(0);
+  });
+
   it('one limiter covers every service it is given: a block from one is a refusal in the other', async () => {
     const limiter = new SourceLimiter({ spacingMs: 0 });
     await rejection(service(limiter).search('busy', { provider: 'wikipedia' }));

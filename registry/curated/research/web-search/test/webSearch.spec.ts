@@ -229,3 +229,35 @@ describe('WebSearchTool', () => {
     });
   });
 });
+
+describe('WebSearchTool providers', () => {
+  const ctx: any = { gmiId: 'test-gmi', personaId: 'test-persona', userContext: { userId: 'test-user' } };
+
+  it('accepts tavily, firecrawl and wikipedia, and lists every provider in its schema', () => {
+    const tool = new WebSearchTool(new SearchProviderService({}) as any);
+    for (const provider of ['tavily', 'firecrawl', 'wikipedia']) {
+      expect(tool.validateArgs({ query: 'q', provider })).toEqual({ isValid: true });
+    }
+    expect(tool.inputSchema.properties.provider.enum).toEqual([
+      'serper',
+      'serpapi',
+      'brave',
+      'tavily',
+      'firecrawl',
+      'searxng',
+      'wikipedia',
+      'duckduckgo',
+    ]);
+    expect(tool.description).toContain('Wikipedia');
+  });
+
+  it('passes a call pinned to wikipedia to the service', async () => {
+    const service = new SearchProviderService({}) as any;
+    service.search = vi.fn().mockResolvedValue({ provider: 'wikipedia', results: [], metadata: {} });
+    const tool = new WebSearchTool(service);
+    expect(tool.validateArgs({ query: 'Treaty of Versailles', provider: 'wikipedia' })).toEqual({ isValid: true });
+    const result = await tool.execute({ query: 'Treaty of Versailles', provider: 'wikipedia' }, ctx);
+    expect(result.success).toBe(true);
+    expect(service.search).toHaveBeenCalledWith('Treaty of Versailles', { maxResults: 10, provider: 'wikipedia', category: undefined });
+  });
+});

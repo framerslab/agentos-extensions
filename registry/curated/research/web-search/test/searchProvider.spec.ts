@@ -657,3 +657,58 @@ describe('the wikipedia provider in the service', () => {
     expect(response.results.map((result) => result.url)).toEqual(['https://wiki.example/wiki/Treaty_of_Versailles']);
   });
 });
+
+describe('an abort while onSend is pending, and the unpinned loop beside wikipedia', () => {
+  const mockFetch = global.fetch as any;
+  const CLIENT = { name: 'TestClient', version: '1.0', contact: 'https://example.org/contact' };
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it("an abort while onSend is pending ends a pinned search with the signal's reason and sends nothing", async () => {
+    const controller = new AbortController();
+    const reason = new Error('the caller stopped');
+    const pending = new SearchProviderService({ serperApiKey: 'k' }).search('q', {
+      provider: 'serper',
+      signal: controller.signal,
+      onSend: () => new Promise<void>(() => {}),
+    });
+    setTimeout(() => controller.abort(reason), 20);
+    await expect(pending).rejects.toBe(reason);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("an onSend that throws once the caller has aborted leaves the signal's reason", async () => {
+    const controller = new AbortController();
+    const reason = new Error('the caller stopped');
+    const pending = new SearchProviderService({ serperApiKey: 'k', braveApiKey: 'k' }).search('q', {
+      signal: controller.signal,
+      onSend: async () => {
+        controller.abort(reason);
+        throw new Error('the hook saw the abort');
+      },
+    });
+    await expect(pending).rejects.toBe(reason);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('an unpinned search never asks the wikipedia provider: with no keyed provider answering, DuckDuckGo answers', async () => {
+    mockFetch.mockImplementation(async (url: string) =>
+      url.includes('serper')
+        ? { ok: false, status: 500, statusText: 'Server Error' }
+        : {
+            ok: true,
+            status: 200,
+            text: async () => '',
+            json: async () => ({ Heading: 'A', AbstractText: 'An answer', AbstractURL: 'https://example.com/a', RelatedTopics: [] }),
+          },
+    );
+    const service = new SearchProviderService({ serperApiKey: 'k', wikipedia: { enabled: true, client: CLIENT } });
+    const response = await service.search('best laptop');
+    expect(response.provider).toBe('duckduckgo');
+    expect(response.results.map((result) => result.url)).toEqual(['https://example.com/a']);
+    expect(mockFetch.mock.calls.some((call: unknown[]) => String(call[0]).includes('/w/rest.php/'))).toBe(false);
+    expect(service.getAvailableProviders()).toEqual(['serper', 'wikipedia']);
+  });
+});
