@@ -15,7 +15,7 @@ import { TrackerFault, TrackerGrantRefused, TrackerNoAnswer, TrackerRateLimited 
 import { adfParagraphs } from './adf.js';
 import { JiraFault } from './faults.js';
 import { chosenEndpoints, chosenTimeout, type JiraEndpoints } from './oauth.js';
-import { credential, isObject, jiraFetch, loopbackHost, record, whenAborted, type JiraTransport } from './rest.js';
+import { credential, isObject, jiraFetch, loopbackHost, record, whenAborted, type JiraCall, type JiraTransport } from './rest.js';
 
 /** Supplies a usable access token, such as a `JiraOAuthFlow`'s `accessToken(key)` bound by the host. */
 export type JiraAccessToken = () => Promise<string>;
@@ -24,7 +24,7 @@ export type JiraAccessToken = () => Promise<string>;
 export interface JiraClientOptions {
   /** The fetch the API is called with; the global fetch when absent. */
   readonly fetchImpl?: typeof fetch;
-  /** One deadline over a call and the reading of its answer; 15 seconds when absent. */
+  /** One deadline over a call: the wait for its token, the call and the reading of its answer; 15 seconds when absent. */
   readonly timeoutMs?: number;
   /** Stand-in addresses, taken only on CI (`CI=true`) at a loopback or `.invalid` host. Never take them from a request. */
   readonly endpoints?: JiraEndpoints;
@@ -191,18 +191,34 @@ function supplierFault(error: unknown): unknown {
   return error;
 }
 
+/** The milliseconds left before `endAt`; a deadline already passed is `TrackerNoAnswer('timeout')`. */
+function leftUntil(endAt: number): number {
+  const left = endAt - Date.now();
+  if (left <= 0) throw new TrackerNoAnswer('timeout');
+  return left;
+}
+
 /**
- * A usable access token from the supplier, waited for under the call's deadline and the caller's signal: a wait the
- * deadline ends is `TrackerNoAnswer('timeout')`, one the signal ends `TrackerNoAnswer('cancelled')`, and a token that
- * is not a credential `TrackerGrantRefused`. The supplier's own failures read as `supplierFault` gives.
+ * A usable access token from the supplier, waited for until the call's end time and under the caller's signal: a
+ * wait the end time ends is `TrackerNoAnswer('timeout')`, one the signal ends `TrackerNoAnswer('cancelled')`, and a
+ * token that is not a credential `TrackerGrantRefused`. A supplier that finds no grant (`OAuthGrantRefused` with
+ * `missing`) is asked once more before the time runs out, since a flow sharing the store may have just kept a
+ * refreshed grant in place of the one this flow read. The supplier's other failures read as `supplierFault` gives.
  */
-async function tokenOf(accessToken: JiraAccessToken, timeoutMs: number, signal: AbortSignal | undefined): Promise<string> {
+async function tokenOf(accessToken: JiraAccessToken, endAt: number, signal: AbortSignal | undefined): Promise<string> {
   if (signal?.aborted === true) throw new TrackerNoAnswer('cancelled');
-  const deadline = AbortSignal.timeout(timeoutMs);
+  const deadline = AbortSignal.timeout(leftUntil(endAt));
   const joined = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
   const aborted = whenAborted(joined, () => new TrackerNoAnswer(deadline.aborted ? 'timeout' : 'cancelled'));
+  const ask = (): Promise<string> => Promise.race([Promise.resolve().then(accessToken), aborted.promise]);
   try {
-    const token = await Promise.race([Promise.resolve().then(accessToken), aborted.promise]);
+    let token: unknown;
+    try {
+      token = await ask();
+    } catch (error) {
+      if (!(error instanceof OAuthGrantRefused) || error.reason !== 'missing') throw error;
+      token = await ask();
+    }
     if (!credential(token)) throw new TrackerGrantRefused();
     return token;
   } catch (error) {
@@ -210,6 +226,13 @@ async function tokenOf(accessToken: JiraAccessToken, timeoutMs: number, signal: 
   } finally {
     aborted.dispose();
   }
+}
+
+/** One REST call whose token wait and send share one deadline: the token by `endAt`, the call in the time left. */
+async function fetchBy(accessToken: JiraAccessToken, url: string, call: JiraCall, transport: JiraTransport, signal: AbortSignal | undefined): Promise<unknown> {
+  const endAt = Date.now() + transport.timeoutMs;
+  const token = await tokenOf(accessToken, endAt, signal);
+  return jiraFetch(token, url, call, { fetchImpl: transport.fetchImpl, timeoutMs: leftUntil(endAt) }, signal);
 }
 
 /** The issue's numeric id when `issue` names one, for the search to reconcile. */
@@ -234,7 +257,7 @@ export class JiraClient {
   static async sites(accessToken: JiraAccessToken, options: JiraClientOptions = {}, signal?: AbortSignal): Promise<JiraSite[]> {
     const transport = transportOf(options);
     const endpoints = chosenEndpoints(options.endpoints);
-    const answer = await jiraFetch(await tokenOf(accessToken, transport.timeoutMs, signal), endpoints.resources, { method: 'GET' }, transport, signal);
+    const answer = await fetchBy(accessToken, endpoints.resources, { method: 'GET' }, transport, signal);
     if (!Array.isArray(answer)) throw new TrackerFault('invalid_response');
     const sites: JiraSite[] = [];
     for (const each of answer) {
@@ -267,8 +290,7 @@ export class JiraClient {
 
   /** One call to the site's REST API, the path under `/rest/api/3`. */
   private async call(method: 'GET' | 'POST', path: string, body: unknown, signal: AbortSignal | undefined): Promise<unknown> {
-    const token = await tokenOf(this.accessToken, this.transport.timeoutMs, signal);
-    return jiraFetch(token, `${this.base}${path}`, body === undefined ? { method } : { method, body }, this.transport, signal);
+    return fetchBy(this.accessToken, `${this.base}${path}`, body === undefined ? { method } : { method, body }, this.transport, signal);
   }
 
   /** An issue's page on the site. */

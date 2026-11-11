@@ -4,7 +4,7 @@
  * it, follows no redirect, sends no credentials or referrer of the fetch's own, and reads its answer under a byte cap.
  * A REST call's refusal becomes one of the account sources' tracker faults, which carry a reason and a status and never
  * Atlassian's text: 429 is `TrackerRateLimited` with the time `Retry-After` (seconds, or an HTTP date) or
- * `X-RateLimit-Reset` (an ISO 8601 time) names (https://developer.atlassian.com/cloud/jira/platform/rate-limiting/,
+ * `X-RateLimit-Reset` (an ISO 8601 time) names, at most a day out (https://developer.atlassian.com/cloud/jira/platform/rate-limiting/,
  * read 10 November 2026), 401 is `TrackerGrantRefused`, 404 is `not_found`, any other refusal is `refused` with its
  * status, an answer that is not JSON or is past the cap is `invalid_response`, and no answer is `TrackerNoAnswer`.
  * @module agentos-ext-jira/rest
@@ -21,7 +21,7 @@ export const JIRA_ANSWER_BYTES = 1_048_576;
 /** One deadline over a call and the reading of its answer, when the host names none. */
 export const JIRA_DEADLINE_MS = 15_000;
 
-/** The longest wait passed on from a relative `Retry-After`: a day. */
+/** The longest wait a 429 passes on, whichever header names it: a day. */
 const MAX_WAIT_MS = 86_400_000;
 
 /** The hosts a stand-in may answer at over plain HTTP. */
@@ -136,8 +136,8 @@ export async function send(url: string, init: RequestInit, bounds: CallBounds): 
 }
 
 /**
- * The time a 429 names, epoch milliseconds: `Retry-After` in whole seconds from now (of any length, at most a day) or as an HTTP date,
- * else `X-RateLimit-Reset` as an ISO 8601 time; null when it names none.
+ * The time a 429 names, epoch milliseconds: `Retry-After` in whole seconds from now or as an HTTP date, else
+ * `X-RateLimit-Reset` as an ISO 8601 time, each at most a day from now; null when it names none.
  */
 export function retryAt(headers: Headers): number | null {
   const after = headers.get('retry-after')?.trim() ?? '';
@@ -145,7 +145,7 @@ export function retryAt(headers: Headers): number | null {
   for (const value of [after, headers.get('x-ratelimit-reset')?.trim() ?? '']) {
     if (value === '') continue;
     const at = Date.parse(value);
-    if (Number.isFinite(at)) return at;
+    if (Number.isFinite(at)) return Math.min(at, Date.now() + MAX_WAIT_MS);
   }
   return null;
 }
