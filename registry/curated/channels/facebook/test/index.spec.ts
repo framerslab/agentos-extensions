@@ -22,9 +22,9 @@ const { mockAxios } = vi.hoisted(() => {
 vi.mock('axios', () => ({ default: mockAxios }));
 
 vi.mock('@framers/agentos/auth', () => ({
-  FileTokenStore: vi.fn().mockImplementation(() => ({
+  FileTokenStore: vi.fn().mockImplementation(function () { return ({
     load: vi.fn().mockResolvedValue(null),
-  })),
+  }); }),
 }));
 import { createExtensionPack } from '../src/index.js';
 import type { ExtensionPack, ExtensionContext } from '../src/index.js';
