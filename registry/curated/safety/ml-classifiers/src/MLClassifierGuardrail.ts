@@ -117,6 +117,13 @@ export class MLClassifierGuardrail implements IGuardrailService {
    */
   private onnxPipeline: OnnxTextClassificationPipeline | null | undefined = undefined;
 
+  /**
+   * The one load of the ONNX pipeline. Classifications that start before it
+   * settles wait for the same load, so the model loads once and an
+   * unavailable tier is reported once.
+   */
+  private onnxLoad: Promise<void> | undefined = undefined;
+
   /** The host's logger, for the one line about an unavailable ONNX tier. */
   private readonly logger: MLClassifierLogger | undefined;
 
@@ -247,34 +254,12 @@ export class MLClassifierGuardrail implements IGuardrailService {
     // If we already know ONNX is unavailable, skip.
     if (this.onnxPipeline === null) return null;
 
-    // First-time load attempt.
+    // First-time load attempt, shared by every classification that starts before it settles.
     if (this.onnxPipeline === undefined) {
-      try {
-        // Dynamic import so the optional dependency does not fail at boot.
-        const transformers = await import('@huggingface/transformers');
-        const pipelineInstance = await transformers.pipeline(
-          'text-classification',
-          'Xenova/toxic-bert',
-          { device: 'cpu' }
-        );
-        // The HuggingFace pipeline is callable as a function. We always
-        // request all labels (top_k higher than any model's label count
-        // causes HF to return every label, matching `top_k: null`).
-        // Cast through unknown because the Pipeline union type is too
-        // wide for the inferred call signature here.
-        const callable = pipelineInstance as unknown as (
-          text: string,
-          opts: { top_k: number },
-        ) => Promise<OnnxClassificationLabel[]>;
-        this.onnxPipeline = (text: string) => callable(text, { top_k: 9999 });
-      } catch (error) {
-        // Module not installed or model load failed — mark as unavailable,
-        // and say so once for this guardrail.
-        this.onnxPipeline = null;
-        this.logOnnxUnavailable(error);
-        return null;
-      }
+      this.onnxLoad ??= this.loadOnnxPipeline();
+      await this.onnxLoad;
     }
+    if (!this.onnxPipeline) return null;
 
     try {
       const raw = await this.onnxPipeline(text);
@@ -289,6 +274,39 @@ export class MLClassifierGuardrail implements IGuardrailService {
     } catch {
       // Inference failed — fall through to next tier.
       return null;
+    }
+  }
+
+  /**
+   * Loads the ONNX pipeline once: a working pipeline, or `null` with the one
+   * warning when the module or the model cannot load.
+   *
+   * @internal
+   */
+  private async loadOnnxPipeline(): Promise<void> {
+    try {
+      // Dynamic import so the optional dependency does not fail at boot.
+      const transformers = await import('@huggingface/transformers');
+      const pipelineInstance = await transformers.pipeline(
+        'text-classification',
+        'Xenova/toxic-bert',
+        { device: 'cpu' }
+      );
+      // The HuggingFace pipeline is callable as a function. We always
+      // request all labels (top_k higher than any model's label count
+      // causes HF to return every label, matching `top_k: null`).
+      // Cast through unknown because the Pipeline union type is too
+      // wide for the inferred call signature here.
+      const callable = pipelineInstance as unknown as (
+        text: string,
+        opts: { top_k: number },
+      ) => Promise<OnnxClassificationLabel[]>;
+      this.onnxPipeline = (text: string) => callable(text, { top_k: 9999 });
+    } catch (error) {
+      // Module not installed or model load failed — mark as unavailable,
+      // and say so once for this guardrail.
+      this.onnxPipeline = null;
+      this.logOnnxUnavailable(error);
     }
   }
 
