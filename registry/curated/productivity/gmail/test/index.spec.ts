@@ -33,7 +33,7 @@ vi.mock('googleapis', () => {
     google: {
       gmail: vi.fn().mockReturnValue(mockGmail),
       auth: {
-        OAuth2: vi.fn().mockImplementation(() => ({ setCredentials: vi.fn() })),
+        OAuth2: vi.fn().mockImplementation(function () { return ({ setCredentials: vi.fn() }); }),
       },
     },
   };

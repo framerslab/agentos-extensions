@@ -28,12 +28,12 @@ vi.mock('googleapis', () => {
     },
   };
 
-  const mockOAuth2 = vi.fn().mockImplementation(() => ({
+  const mockOAuth2 = vi.fn().mockImplementation(function () { return ({
     setCredentials: vi.fn(),
     refreshAccessToken: vi.fn().mockResolvedValue({
       credentials: { access_token: 'refreshed-token' },
     }),
-  }));
+  }); });
 
   return {
     google: {
