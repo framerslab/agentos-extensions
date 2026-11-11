@@ -13,6 +13,13 @@ export interface BrowserMeetingProviderOptions {
   botIdentity?: string;
   /** The `fetch` the provider calls the scheduler with. Default the global `fetch`. */
   fetchImpl?: typeof fetch;
+  /**
+   * How long a start (`POST /runs`) waits for the scheduler, in milliseconds. Default 60 000: the scheduler may first
+   * stop the run's earlier container, with five seconds' grace, before it makes and starts the new one.
+   */
+  startTimeoutMs?: number;
+  /** How long every other call to the scheduler waits for it, in milliseconds. Default 15 000, three times that grace. */
+  callTimeoutMs?: number;
   /** Platforms this worker serves. Default both. */
   platforms?: readonly MeetingPlatform[];
   /**
@@ -24,6 +31,14 @@ export interface BrowserMeetingProviderOptions {
    */
   identityFor?: (run: MeetingRunRecord) => Promise<string | undefined>;
 }
+
+/** How long a start waits for the scheduler by default: it may first stop the run's earlier container with five seconds' grace. */
+const DEFAULT_START_TIMEOUT_MS = 60_000;
+/** How long every other call waits for the scheduler by default: three times that grace. */
+const DEFAULT_CALL_TIMEOUT_MS = 15_000;
+
+/** The statuses whose answers carry no body. */
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 
 const MEET_URL = /^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:[?#].*)?$/;
 const TEAMS_HOSTS = new Set(['teams.microsoft.com', 'teams.live.com']);
@@ -91,14 +106,29 @@ export class BrowserMeetingProvider implements IMeetingBotProvider {
     return { events: [{ eventId: reportEventId(post.runId, post.seq, post.event), runId: post.runId, type: post.event, at: post.at, data: post.data as ProviderParseResult['events'][number]['data'] }], rawData: post };
   }
 
-  private async call(path: string, init: { method: string; body?: unknown }): Promise<Response> {
-    const res = await this.fetch(`${this.options.schedulerUrl}${path}`, {
-      method: init.method,
-      headers: { authorization: `Bearer ${this.options.schedulerToken}`, 'content-type': 'application/json' },
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
-      redirect: 'error',
-    });
-    return res;
+  /**
+   * One request to the scheduler, ended at its deadline: `timeoutMs`, or `callTimeoutMs`. The answer's body is read
+   * under the same deadline, so a scheduler that sends its headers and stalls is ended too. A request past it throws an
+   * ordinary error with a fixed message, as a refusal does, so the manager's retry and purge paths take it.
+   */
+  private async call(path: string, init: { method: string; body?: unknown; timeoutMs?: number }): Promise<Response> {
+    const timeoutMs = init.timeoutMs ?? this.options.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+    const signal = AbortSignal.timeout(timeoutMs);
+    try {
+      const res = await this.fetch(`${this.options.schedulerUrl}${path}`, {
+        method: init.method,
+        headers: { authorization: `Bearer ${this.options.schedulerToken}`, 'content-type': 'application/json' },
+        body: init.body === undefined ? undefined : JSON.stringify(init.body),
+        redirect: 'error',
+        signal,
+      });
+      const text = await res.text();
+      // a 204, 205 or 304 carries no body, and a Response of one refuses any
+      return new Response(NULL_BODY_STATUSES.has(res.status) ? null : text, { status: res.status, statusText: res.statusText, headers: res.headers });
+    } catch (error) {
+      if (signal.aborted) throw new Error(`scheduler did not answer within ${timeoutMs} ms`);
+      throw error;
+    }
   }
 
   /**
@@ -129,7 +159,7 @@ export class BrowserMeetingProvider implements IMeetingBotProvider {
       reportUrl: input.reportUrl,
       ...(identity === undefined ? {} : { identity }),
     };
-    const res = await this.call('/runs', { method: 'POST', body });
+    const res = await this.call('/runs', { method: 'POST', body, timeoutMs: this.options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS });
     if (res.status === 409) {
       let refused: unknown;
       try { refused = await res.json(); } catch { refused = undefined; }
