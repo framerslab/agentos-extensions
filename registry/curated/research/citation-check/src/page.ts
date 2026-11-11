@@ -1,22 +1,29 @@
 /**
  * @file page.ts
- * @description One cited page as passages. A request goes out once per page, with a browser-like User-Agent from the
- * web scraper pack, a deadline and a size cap, through Node's fetch or through AgentOS's checked egress (every address
- * and every redirect checked against a policy), each following up to five redirects; a page that fails in a way a browser may mend is
- * retried once through the web scraper pack's tiers. The answer is read by its content type: HTML and XML through
+ * @description One page as a document and passages. A request goes out once per page, with a browser-like User-Agent
+ * from the web scraper pack, a deadline and a size cap, through Node's fetch or through AgentOS's checked egress (every
+ * address and every redirect checked against a policy), each following up to five redirects. Given rules, the reader checks the first
+ * address against the host's rule and the origin's robots.txt before it is requested, and the transport checks every
+ * redirect target the same way before its request. The answer is read by its content type: HTML and XML through
  * public-sources' `htmlToBlocks` in page mode, other text by paragraphs, a PDF or another binary not at all; its
- * charset from a byte order mark, the content type or a `<meta>` tag. Its sentences become passages through
- * public-sources' `citationSources`, cut by grounding-guard's `sentenceSpans`. A page that fails is a status, never a
- * throw; only the caller's own cancellation throws.
+ * charset from a byte order mark, the content type or a `<meta>` tag. The document carries the page's title, the
+ * licence it states, the publisher's name and the page's own date where the markup gives them. Its sentences become
+ * passages through public-sources' `citationSources`, cut by grounding-guard's `sentenceSpans`. A page that answered
+ * 200 with no text is read once through the host's fallback reader when one is given; a page that fails in a way a
+ * browser may mend is retried once through the web scraper pack's tiers. A page that fails is a status, never a throw;
+ * only the caller's own cancellation throws.
  *
  * @module agentos/extensions/research/citation-check/page
  */
 
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
-import { citationSources, htmlToBlocks, type CitationSource, type SourceDocument } from '@framers/agentos-ext-public-sources';
+import { citationSources, htmlToBlocks, type CitationSource, type SourceDocument, type SourceLicence } from '@framers/agentos-ext-public-sources';
 import { browserHeaders, type ScrapeInput, type ScrapeResult } from '@framers/agentos-ext-web-scraper';
 import { collapse, sentenceSpans } from '@framers/agentos-ext-grounding-guard/values';
+import { licenceOf } from './licence.js';
 import { withoutInvisible } from './match.js';
+import { cutText, jsonLdNodes, pageDateOf, pageTitle, publisherOf, scanMarkup } from './meta.js';
+import { readRobots, robotsAllows, type RobotsRule } from './robots.js';
 import type { CitationLogger, PageFailure, PageStatus } from './types.js';
 
 /**
@@ -40,12 +47,29 @@ export interface TransportAnswer {
   header(name: string): string | null;
   /** The body read up to `cap` bytes: its bytes, or null past the cap. */
   read(cap: number): Promise<Uint8Array | null>;
+  /** The body's first `cap` bytes, the rest left unread. Both transports here give it; robots.txt is read with it. */
+  readPrefix?(cap: number): Promise<Uint8Array>;
   /** Releases a body that will not be read. */
   discard(): Promise<void>;
 }
 
-/** One GET of an address under a signal. */
-export type Transport = (url: string, signal: AbortSignal) => Promise<TransportAnswer>;
+/**
+ * The rules a transport applies to the address it is given and to every redirect target, before each request: the
+ * host's rule, and the robots.txt of each hop's origin, read through the same transport.
+ */
+export interface TransportRules {
+  /** The host's rule for an address: false refuses it, a `PageRefusal` with `refused` and `host`. */
+  allowUrl?: (url: string) => boolean;
+  /** robots.txt as read before each request: a disallow refuses the address, a `PageRefusal` with `refused` and `robots`. */
+  robots?: RobotsRule;
+}
+
+/**
+ * One GET of an address under a signal. Given rules, the transport applies them to the address and to every redirect
+ * target before its request, and throws {@link PageRefusal} for one they refuse; a transport of the host's own that
+ * follows redirects applies them too, or the reader checks the first address alone.
+ */
+export type Transport = (url: string, signal: AbortSignal, rules?: TransportRules) => Promise<TransportAnswer>;
 
 /** A failure a transport names itself, such as the egress policy's refusal. */
 export class PageRefusal extends Error {
@@ -68,8 +92,8 @@ const MAX_REDIRECTS = 5;
 const MENDABLE: ReadonlySet<PageFailure> = new Set(['timeout', 'network', 'status', 'no_text']);
 /** Failures of a page that answered but holds no text this check reads. */
 const UNREADABLE: ReadonlySet<PageFailure> = new Set(['too_large', 'pdf', 'binary', 'no_text']);
-/** A cited page's licence is not read: its sentences grade claims and stand as evidence in a report, nothing more. */
-const UNREAD_LICENCE = { name: 'not read', url: '' };
+/** The licence of a page that states none the reader finds, and of a text that is not HTML. */
+export const UNREAD_LICENCE: Readonly<SourceLicence> = Object.freeze({ name: 'not read', url: '' });
 
 /** The address a page is fetched at: the cited address without its fragment, which never reaches a server. */
 export function pageKey(url: string): string {
@@ -95,6 +119,37 @@ function requestHeaders(userAgent: string | undefined, acceptEncoding: string | 
   return headers;
 }
 
+/** The transports built here, which apply the rules to the address they are given as well as to every redirect target. */
+const checkingTransports = new WeakSet<Transport>();
+
+/** Whether rules hold anything to apply. */
+function hasRules(rules: TransportRules | undefined): rules is TransportRules {
+  return rules !== undefined && (rules.allowUrl !== undefined || rules.robots !== undefined);
+}
+
+/**
+ * Applies the rules to one address before it is requested: the host's rule first, then the origin's robots.txt,
+ * read through the transport with the host's rule on its own hops.
+ *
+ * @throws {PageRefusal} `refused` with `host` or `robots`, or with the egress policy's reason when the policy refuses
+ * the origin's robots.txt.
+ */
+async function checkAddress(url: string, rules: TransportRules, transport: Transport, signal: AbortSignal): Promise<void> {
+  if (rules.allowUrl !== undefined) {
+    let allowed = false;
+    try {
+      allowed = rules.allowUrl(url) === true;
+    } catch {
+      // A rule that throws refuses.
+    }
+    if (!allowed) throw new PageRefusal('refused', 'host');
+  }
+  if (rules.robots !== undefined) {
+    const file = await readRobots(url, { transport, robots: rules.robots, signal, ...(rules.allowUrl !== undefined ? { allowUrl: rules.allowUrl } : {}) });
+    if (!robotsAllows(file, rules.robots.token, url)) throw new PageRefusal('refused', 'robots');
+  }
+}
+
 /** A body read up to `cap` bytes: its bytes, or null past the cap with the rest of the stream cancelled. */
 async function readCapped(response: Response, cap: number): Promise<Uint8Array | null> {
   if (response.body === null) return new Uint8Array(0);
@@ -114,13 +169,30 @@ async function readCapped(response: Response, cap: number): Promise<Uint8Array |
   return Buffer.concat(chunks);
 }
 
-/** An answer of a `fetch` as a transport gives it. */
-function fetchAnswer(response: Response, url: string): TransportAnswer {
+/** A body's first `cap` bytes, the rest of the stream cancelled. */
+async function readPrefix(response: Response, cap: number): Promise<Uint8Array> {
+  if (response.body === null) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (total < cap) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  await reader.cancel().catch(() => undefined);
+  return Buffer.concat(chunks).subarray(0, cap);
+}
+
+/** An answer of `fetch` as a transport gives it. */
+function fetchAnswer(response: Response, finalUrl: string): TransportAnswer {
   return {
     status: response.status,
-    finalUrl: response.url || url,
+    finalUrl,
     header: (name) => response.headers.get(name),
     read: (cap) => readCapped(response, cap),
+    readPrefix: (cap) => readPrefix(response, cap),
     discard: async () => {
       await response.body?.cancel().catch(() => undefined);
     },
@@ -128,28 +200,48 @@ function fetchAnswer(response: Response, url: string): TransportAnswer {
 }
 
 /**
- * Requests through a `fetch`: up to five redirects followed, the body streamed up to the cap. Node's fetch hands back
- * a redirect asked for with `redirect: 'manual'` as it came (https://github.com/nodejs/undici/issues/1193), and the
- * transport follows it; a `fetch` that hides it, as a browser's does, follows its redirects itself.
+ * The address a redirect names, resolved against the address that answered. A target that is not http or https ends
+ * the read before any rule reads it, as `fetch` itself ends such a redirect.
  *
- * @throws {PageRefusal} `redirects` past the fifth redirect.
+ * @throws {PageRefusal} `refused` with `scheme`, for a target such as a `data:` address.
+ */
+function redirectTarget(location: string, from: string): string {
+  const target = new URL(location, from);
+  if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new PageRefusal('refused', 'scheme');
+  return target.href;
+}
+
+/**
+ * Requests through a `fetch`, the body streamed up to the cap, up to five redirects followed one at a time and a sixth
+ * the failure `redirects`; given rules, each target is checked before its request. A target that is not http or https
+ * is refused (`scheme`). Node's fetch hands back a redirect asked for with `redirect: 'manual'` as it came
+ * (https://github.com/nodejs/undici/issues/1193); with no rules, a `fetch` that hides it, as a browser's does, is asked
+ * again to follow its redirects itself.
  */
 export function fetchTransport(fetchFn: typeof globalThis.fetch, userAgent?: string): Transport {
-  return async (url, signal) => {
+  const transport: Transport = async (url, signal, rules) => {
+    const checked = hasRules(rules) ? rules : null;
     const headers = requestHeaders(userAgent, null);
     let current = url;
     for (let hop = 0; ; hop += 1) {
+      if (checked !== null) await checkAddress(current, checked, transport, signal);
       const response = await fetchFn(current, { method: 'GET', redirect: 'manual', headers, signal });
-      if (response.type === 'opaqueredirect') {
-        return fetchAnswer(await fetchFn(current, { method: 'GET', redirect: 'follow', headers, signal }), current);
+      if (response.type === 'opaqueredirect' && checked === null) {
+        const followed = await fetchFn(current, { method: 'GET', redirect: 'follow', headers, signal });
+        return fetchAnswer(followed, followed.url || current);
       }
-      const location = response.status >= 300 && response.status < 400 ? response.headers.get('location') : null;
-      if (location === null) return fetchAnswer(response, current);
-      await response.body?.cancel().catch(() => undefined);
-      if (hop >= MAX_REDIRECTS) throw new PageRefusal('redirects');
-      current = new URL(location, current).href;
+      const location = response.headers.get('location');
+      if (response.status >= 300 && response.status < 400 && location !== null) {
+        await response.body?.cancel().catch(() => undefined);
+        if (hop >= MAX_REDIRECTS) throw new PageRefusal('redirects');
+        current = redirectTarget(location, current);
+        continue;
+      }
+      return fetchAnswer(response, current);
     }
   };
+  checkingTransports.add(transport);
+  return transport;
 }
 
 /** A header of an answer from `node:http`, whose values may be lists. */
@@ -193,7 +285,8 @@ function egressFailure(error: unknown): PageRefusal | null {
 /**
  * Requests through AgentOS's checked egress (`@framers/agentos/safety/egress`, from 0.13.120): each address, and each
  * address a redirect names, is checked against the policy before a byte is sent, its connection pinned to the address
- * checked, and the answer bounded by the deadline and the size cap. Up to five redirects are followed.
+ * checked, and the answer bounded by the deadline and the size cap. Up to five redirects are followed, a target that is
+ * not http or https refused (`scheme`); given rules, each address is checked against them before its request too.
  *
  * @throws {Error} When the installed AgentOS has no checked egress.
  */
@@ -205,9 +298,10 @@ export async function egressTransport(profile: EgressProfile, bounds: { timeoutM
     profile === 'local'
       ? egress.localEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: bounds.maxBytes })
       : egress.hostedEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: bounds.maxBytes });
-  return async (url, signal) => {
+  const transport: Transport = async (url, signal, rules) => {
     let current = url;
     for (let hop = 0; ; hop += 1) {
+      if (hasRules(rules)) await checkAddress(current, rules, transport, signal);
       const answer = await egress
         .checkedRequest({ url: current, method: 'GET', headers: requestHeaders(userAgent, 'identity'), policy, signal, onRedirect: 'return' })
         .catch((error: unknown) => {
@@ -217,7 +311,7 @@ export async function egressTransport(profile: EgressProfile, bounds: { timeoutM
       const location = headerOf(headers, 'location');
       if (answer.status >= 300 && answer.status < 400 && location !== null) {
         if (hop >= MAX_REDIRECTS) throw new PageRefusal('redirects');
-        current = new URL(location, current).href;
+        current = redirectTarget(location, current);
         continue;
       }
       const body = answer.status >= 200 && answer.status < 300 ? decodedBody(answer.body, headerOf(headers, 'content-encoding'), bounds.maxBytes) : answer.body;
@@ -226,10 +320,16 @@ export async function egressTransport(profile: EgressProfile, bounds: { timeoutM
         finalUrl: current,
         header: (name) => headerOf(headers, name),
         read: async (cap) => (body === null || body.byteLength > cap ? null : body),
+        readPrefix: async (cap) => {
+          if (body === null) throw new PageRefusal('too_large');
+          return body.subarray(0, cap);
+        },
         discard: async () => undefined,
       };
     }
   };
+  checkingTransports.add(transport);
+  return transport;
 }
 
 /** A content type's media type in lower case, or '' when none came. */
@@ -321,11 +421,16 @@ function pageBlocks(kind: 'html' | 'text', text: string, budget: number): string
   return raw.map((block) => collapse(withoutInvisible(block))).filter((block) => block !== '');
 }
 
+/** Reads a page the reader's own fetch found no text in, such as one a script draws. Answers the text as blocks, or null. */
+export interface PageFallbackReader {
+  read(url: string, options: { signal: AbortSignal }): Promise<string[] | null>;
+}
+
 /** How a page is read. */
 export interface PageReaderOptions {
   /** The request each attempt goes through. */
   transport: Transport;
-  /** The fallback for a failure it may mend, or null for none. */
+  /** The fallback for a failure it may mend, or null for none; not used when `allowUrl` or `robots` is given. */
   scraper: PageScraper | null;
   /** The deadline of one request, in milliseconds. */
   timeoutMs: number;
@@ -339,9 +444,27 @@ export interface PageReaderOptions {
   now: () => number;
   /** Where the reader writes its events. */
   logger?: CitationLogger;
+  /**
+   * The host's rule for an address, run on the first address and on every redirect target before its request: false
+   * ends the page as `refused` with `detail: 'host'`, the address never requested.
+   */
+  allowUrl?: (url: string) => boolean;
+  /**
+   * robots.txt by RFC 9309, read before the first address and before every redirect target: a disallow ends the page as
+   * `refused` with `detail: 'robots'`, the address never requested; a robots.txt the egress policy refuses ends it with
+   * the policy's reason, as the same read with no robots rule does. None is read when left out.
+   */
+  robots?: RobotsRule;
+  /**
+   * The reader for a page that answered 200 with no text, called once for the address the reader's own request reached
+   * under the rules (every hop checked), with the caller's signal, its blocks held to `textBudget`. With none, or when it
+   * answers null, the page is `unreadable` with `no_text`. A fallback that requests the page itself does so outside
+   * these rules: the reader asks it only for an address they cleared.
+   */
+  fallback?: PageFallbackReader;
 }
 
-/** A page as the check reads it: its status, and when it was read, its blocks and its sentences as passages. */
+/** A page as the check reads it: its status, and when it was read, its document, its blocks and its sentences as passages. */
 export interface PageRead {
   /** How the page fared. */
   status: PageStatus;
@@ -349,25 +472,68 @@ export interface PageRead {
   blocks: string[];
   /** Its sentences, shaped as AgentOS's `VerificationSource`, in page order; empty when it was not read. */
   passages: CitationSource[];
+  /**
+   * The page as a document: its address after redirects, its `<title>` cut to 255 characters (the host when it has
+   * none), the licence it states (`not read` when the reader finds none), the publisher's name and its own date where
+   * it states them, and its blocks; null when it was not read.
+   */
+  document: SourceDocument | null;
+  /** The page's own date in milliseconds, as on the document; null when it states none or was not read. */
+  pageDate: number | null;
+}
+
+/** What the page's markup and headers say about it. */
+interface PageMeta {
+  title: string | null;
+  publisher: string | null;
+  pageDate: number | null;
+  licence: SourceLicence | null;
+}
+
+/** The title, the publisher's name, the page's own date and its licence, from its markup (null for plain text) and its `Last-Modified`. */
+function pageMeta(html: string | null, finalUrl: string, lastModified: string | null): PageMeta {
+  if (html === null) return { title: null, publisher: null, pageDate: pageDateOf(new Map(), [], lastModified), licence: null };
+  const scan = scanMarkup(html, finalUrl);
+  const nodes = jsonLdNodes(scan.jsonLd);
+  return { title: pageTitle(scan), publisher: publisherOf(scan.metas, nodes), pageDate: pageDateOf(scan.metas, nodes, lastModified), licence: licenceOf(scan, nodes, finalUrl) };
 }
 
 /** A page that was read, as a document and its passages. */
-function pageRead(url: string, finalUrl: string, status: number, via: 'fetch' | 'fallback', blocks: string[], readAt: number): PageRead {
+function pageRead(url: string, finalUrl: string, status: number, via: 'fetch' | 'fallback', blocks: string[], readAt: number, meta: PageMeta | undefined): PageRead {
   let host = finalUrl;
   try {
     host = new URL(finalUrl).hostname;
   } catch {
     // The address the scraper names is kept as it came.
   }
-  const document: SourceDocument = { site: host, key: finalUrl, title: host, url: finalUrl, revision: null, readAt, licence: UNREAD_LICENCE, blocks };
+  const publisher = meta?.publisher ?? null;
+  const pageDate = meta?.pageDate ?? null;
+  const document: SourceDocument = {
+    site: host,
+    key: finalUrl,
+    title: meta?.title ?? host,
+    url: finalUrl,
+    revision: null,
+    readAt,
+    licence: { ...(meta?.licence ?? UNREAD_LICENCE) },
+    blocks,
+    ...(publisher !== null ? { publisher } : {}),
+    ...(pageDate !== null ? { pageDate } : {}),
+  };
   const passages = citationSources(document, sentenceSpans);
-  return { status: { url, outcome: 'read', finalUrl, status, failure: null, detail: null, via, passages: passages.length }, blocks, passages };
+  return {
+    status: { url, outcome: 'read', finalUrl, status, failure: null, detail: null, via, passages: passages.length },
+    blocks,
+    passages,
+    document,
+    pageDate,
+  };
 }
 
 /** One attempt's outcome: the page, or the failure with what came with it. */
 type Attempt =
   | { kind: 'read'; page: PageRead }
-  | { kind: 'failed'; failure: PageFailure; status: number | null; detail: string | null; finalUrl: string | null };
+  | { kind: 'failed'; failure: PageFailure; status: number | null; detail: string | null; finalUrl: string | null; meta?: PageMeta };
 
 /** The failure an error stands for; the caller's own cancellation is thrown instead. */
 function failureOf(error: unknown, deadline: AbortSignal, caller: AbortSignal | undefined): { failure: PageFailure; detail: string | null } {
@@ -377,14 +543,23 @@ function failureOf(error: unknown, deadline: AbortSignal, caller: AbortSignal | 
   return { failure: 'network', detail: null };
 }
 
+/** The reader's rules for the transport, or undefined when it has none. */
+function rulesOf(options: PageReaderOptions): TransportRules | undefined {
+  if (options.allowUrl === undefined && options.robots === undefined) return undefined;
+  return { ...(options.allowUrl !== undefined ? { allowUrl: options.allowUrl } : {}), ...(options.robots !== undefined ? { robots: options.robots } : {}) };
+}
+
 /** One request for a page, and its body read as text. */
 async function attempt(url: string, options: PageReaderOptions): Promise<Attempt> {
   const deadline = AbortSignal.timeout(options.timeoutMs);
   const signal = options.signal ? AbortSignal.any([deadline, options.signal]) : deadline;
   const failed = (failure: PageFailure, status: number | null, detail: string | null, finalUrl: string | null): Attempt => ({ kind: 'failed', failure, status, detail, finalUrl });
+  const rules = rulesOf(options);
   let answer: TransportAnswer;
   try {
-    answer = await options.transport(url, signal);
+    // A transport of the host's own may apply no rules, so the first address is checked here before it is asked.
+    if (rules !== undefined && !checkingTransports.has(options.transport)) await checkAddress(url, rules, options.transport, signal);
+    answer = await options.transport(url, signal, rules);
   } catch (error) {
     const { failure, detail } = failureOf(error, deadline, options.signal);
     return failed(failure, null, detail, null);
@@ -418,14 +593,49 @@ async function attempt(url: string, options: PageReaderOptions): Promise<Attempt
     const kind = isMarkup(type) || looks === 'html' ? 'html' : type === '' ? looks : 'text';
     if (kind === 'binary') return failed('binary', status, null, finalUrl);
     const charset = bomCharset(bytes) ?? headerCharset(contentType) ?? (kind === 'html' ? metaCharset(bytes) : null);
-    const blocks = pageBlocks(kind, decodeText(bytes, charset), options.textBudget);
-    if (blocks.length === 0) return failed('no_text', status, null, finalUrl);
-    return { kind: 'read', page: pageRead(url, finalUrl, status, 'fetch', blocks, options.now()) };
+    const text = decodeText(bytes, charset);
+    const meta = pageMeta(kind === 'html' ? text : null, finalUrl, answer.header('last-modified'));
+    const blocks = pageBlocks(kind, text, options.textBudget);
+    if (blocks.length === 0) return { kind: 'failed', failure: 'no_text', status, detail: null, finalUrl, meta };
+    return { kind: 'read', page: pageRead(url, finalUrl, status, 'fetch', blocks, options.now(), meta) };
   } catch (error) {
     await answer.discard().catch(() => undefined);
     const { failure, detail } = failureOf(error, deadline, options.signal);
     return failed(failure, status, detail, finalUrl);
   }
+}
+
+/** Blocks a fallback gave, as the reader keeps its own: NFC, invisible characters gone, white space collapsed, within the budget. */
+function boundedBlocks(blocks: readonly unknown[], budget: number): string[] {
+  const out: string[] = [];
+  let kept = 0;
+  for (const raw of blocks) {
+    if (kept >= budget) break;
+    if (typeof raw !== 'string') continue;
+    let block = collapse(withoutInvisible(raw.normalize('NFC')));
+    if (block.length > budget - kept) block = collapse(cutText(block, budget - kept));
+    if (block === '') continue;
+    out.push(block);
+    kept += block.length;
+  }
+  return out;
+}
+
+/** The page's text through the host's fallback reader, or null when it gives none or fails. */
+async function readThroughFallback(url: string, fallback: PageFallbackReader, options: PageReaderOptions): Promise<string[] | null> {
+  // The fallback keeps its own deadline; the signal is the caller's, or one that never fires.
+  const signal = options.signal ?? new AbortController().signal;
+  let answer: unknown;
+  try {
+    answer = await fallback.read(url, { signal });
+  } catch {
+    if (options.signal?.aborted) throw options.signal.reason;
+    return null;
+  }
+  if (options.signal?.aborted) throw options.signal.reason;
+  if (!Array.isArray(answer)) return null;
+  const blocks = boundedBlocks(answer, options.textBudget);
+  return blocks.length === 0 ? null : blocks;
 }
 
 /** The page through the fallback scraper, or null when it fails too. */
@@ -442,26 +652,40 @@ async function scrape(url: string, scraper: PageScraper, options: PageReaderOpti
   // A tier can answer with the page of an error status; that is no page of the claim's.
   if (!result.success || status < 200 || status > 299) return null;
   let blocks: string[] = [];
-  if (typeof result.html === 'string' && result.html !== '') blocks = pageBlocks('html', result.html.slice(0, options.maxBytes), options.textBudget);
+  const html = typeof result.html === 'string' && result.html !== '' ? result.html.slice(0, options.maxBytes) : null;
+  if (html !== null) blocks = pageBlocks('html', html, options.textBudget);
   else if (typeof result.text === 'string') blocks = pageBlocks('text', result.text.slice(0, options.maxBytes), options.textBudget);
   if (blocks.length === 0) return null;
   const finalUrl = typeof result.url === 'string' && /^https?:\/\//iu.test(result.url) ? result.url : url;
-  return pageRead(url, finalUrl, status, 'fallback', blocks, options.now());
+  return pageRead(url, finalUrl, status, 'fallback', blocks, options.now(), pageMeta(html, finalUrl, null));
 }
 
 /**
- * Reads one page: one request, then for a failure the fallback may mend (a deadline, no connection, an error status
- * other than 404 and 410, a page with no text) one try through the fallback scraper. Answers a status for a page that
- * is not read; throws only the caller's own cancellation.
+ * Reads one page: the rules checked when given, one request, then for a 200 with no text one read of its address after
+ * redirects through the fallback reader when given, and, when no rules are given, for a failure the scraper may mend (a
+ * deadline, no connection, an error status other than 404 and 410, a page with no text) one try through the fallback
+ * scraper. Answers a status for a page that is not read; throws only the caller's own cancellation.
  *
  * @param url - The address to fetch, from {@link pageKey}.
  * @param options - How to read it.
  */
 export async function readPage(url: string, options: PageReaderOptions): Promise<PageRead> {
+  // A signal that has already fired never fires again, so a transport waiting on it would wait for good.
+  options.signal?.throwIfAborted();
   const first = await attempt(url, options);
   if (first.kind === 'read') return first.page;
+  if (first.failure === 'no_text' && first.status === 200 && options.fallback !== undefined) {
+    // The page answered from its address after redirects, the one its document names, so the fallback reads that one.
+    const finalUrl = first.finalUrl ?? url;
+    const blocks = await readThroughFallback(finalUrl, options.fallback, options);
+    if (blocks !== null) {
+      options.logger?.info('citation_check.page_read_by_fallback', { origin: originOf(url), failure: first.failure });
+      return pageRead(url, finalUrl, 200, 'fallback', blocks, options.now(), first.meta);
+    }
+  }
   const mendable = MENDABLE.has(first.failure) && first.status !== 404 && first.status !== 410;
-  if (options.scraper !== null && mendable) {
+  // The scraper's requests go through neither the host's rule nor robots.txt, so it is not used under them.
+  if (options.scraper !== null && mendable && rulesOf(options) === undefined) {
     const mended = await scrape(url, options.scraper, options);
     if (mended !== null) {
       options.logger?.info('citation_check.page_read_by_fallback', { origin: originOf(url), failure: first.failure });
@@ -474,5 +698,7 @@ export async function readPage(url: string, options: PageReaderOptions): Promise
     status: { url, outcome, finalUrl: first.finalUrl, status: first.status, failure: first.failure, detail: first.detail, via: null, passages: 0 },
     blocks: [],
     passages: [],
+    document: null,
+    pageDate: null,
   };
 }
