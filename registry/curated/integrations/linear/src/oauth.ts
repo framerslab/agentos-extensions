@@ -17,7 +17,8 @@ import {
 } from '@framers/agentos/auth';
 import { LinearFault } from './faults.js';
 import {
-  boundedCall, checkCallback, credential, deadlineMs, deadlineOf, discard, isObject, standInAddress, untilDeadline,
+  boundedCall, checkCallback, credential, deadlineMs, deadlineOf, discard, isObject, isOptions, standInAddress,
+  untilDeadline,
 } from './http.js';
 
 /** Linear's addresses; a test on CI passes a stand-in's. */
@@ -143,7 +144,7 @@ export class LinearOAuthFlow extends RedirectOAuthFlow {
    * an object.
    */
   constructor(client: LinearOAuthClient, store: IOAuthTokenStore | null, options: LinearOAuthOptions = {}) {
-    if (!isObject(client) || !isObject(options) || typeof options === 'function') throw new LinearFault('configuration');
+    if (!isObject(client) || !isOptions(options)) throw new LinearFault('configuration');
     if (!credential(client.clientId) || !credential(client.clientSecret)) throw new LinearFault('configuration');
     const timeoutMs = options.timeoutMs ?? DEADLINE_MS;
     if (!deadlineMs(timeoutMs)) throw new LinearFault('configuration');

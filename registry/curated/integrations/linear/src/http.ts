@@ -18,6 +18,14 @@ export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+/**
+ * True for an options object a caller passes: an object that is not null. It answers a plain boolean rather than a
+ * type guard, so a typed options parameter keeps its declared fields after the check.
+ */
+export function isOptions(value: unknown): boolean {
+  return typeof value === 'object' && value !== null;
+}
+
 /** A nonempty credential of bounded length with no whitespace or control character. */
 export function credential(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 16_384 && !/[\x00-\x20\x7f]/.test(value);

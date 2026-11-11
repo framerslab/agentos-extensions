@@ -20,7 +20,7 @@ import {
 import { OAuthGrantRefused } from '@framers/agentos/auth';
 import { LinearFault } from './faults.js';
 import { linearGraphql, LINEAR_TIMEOUT_MS } from './graphql.js';
-import { credential, deadlineMs, isObject, standInAddress } from './http.js';
+import { credential, deadlineMs, isObject, isOptions, standInAddress } from './http.js';
 import { LINEAR_ENDPOINTS } from './oauth.js';
 
 /** The workspace a grant was made in, as the person's settings show it. */
@@ -205,7 +205,7 @@ export class LinearClient {
    * number of milliseconds up to ten minutes, an address the stand-in rule refuses, or options that are not an object.
    */
   constructor(accessToken: () => Promise<string>, options: LinearClientOptions = {}) {
-    if (typeof accessToken !== 'function' || !isObject(options) || typeof options === 'function') throw new LinearFault('configuration');
+    if (typeof accessToken !== 'function' || !isOptions(options)) throw new LinearFault('configuration');
     const timeoutMs = options.timeoutMs ?? LINEAR_TIMEOUT_MS;
     if (!deadlineMs(timeoutMs)) throw new LinearFault('configuration');
     if (options.fetchImpl !== undefined && typeof options.fetchImpl !== 'function') throw new LinearFault('configuration');
