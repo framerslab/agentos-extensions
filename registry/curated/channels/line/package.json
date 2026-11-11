@@ -40,7 +40,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@line/bot-sdk": "10.6.0"
+    "@line/bot-sdk": "11.4.0"
   },
   "repository": {
     "type": "git",
