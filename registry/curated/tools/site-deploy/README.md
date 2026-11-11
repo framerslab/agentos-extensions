@@ -32,10 +32,12 @@ const agentos = await AgentOS.create({
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
-| `source` | `string` | Yes | Git repository URL or local directory path |
+| `source` | `string` | Yes | Git repository URL, source tarball URL or local directory path (see the table below for what each provider takes) |
 | `cloudProvider` | `string`, enum: `vercel`, `cloudflare`, `digitalocean`, `netlify`, `heroku`, `aws`, `linode`, `railway`, `flyio` | No | Cloud provider to deploy to (default: auto-detect best fit) |
+| `projectName` | `string` | No | Project, site or app name on the provider, derived from the source when omitted. Required for Heroku (the existing app) and for a local directory on AWS (the S3 bucket). |
 | `domain` | `string` | No | Custom domain to configure (optional). If not registered, will attempt to register via `domainRegistrar`. |
 | `domainRegistrar` | `string`, enum: `porkbun`, `namecheap`, `godaddy`, `cloudflare` | No | Domain registrar to use for domain purchase (required if domain is not already registered) |
+| `registrant` | `object` | No | Registrant contact for a new registration: `firstName`, `lastName`, `email`, `phone`, `address1`, `city`, `state`, `postalCode`, `country`, and optionally `address2` and `organization`. Required to register at Namecheap or GoDaddy. |
 | `framework` | `string`, enum: `nextjs`, `react`, `vue`, `svelte`, `astro`, `static`, `node`, `python`, `auto` | No | Framework/runtime (default: auto-detect) |
 | `envVars` | `object<string, string>` | No | Environment variables to set on the deployment |
 | `buildCommand` | `string` | No | Build command override |
@@ -48,9 +50,33 @@ The factory does not attach a tool executor. The host attaches one through `Site
 
 Framework detection examines the source URL or path string. It falls back to `static` when no pattern matches. Automatic provider selection uses Vercel for Next.js, React, Vue and Svelte, Cloudflare for Astro and static sites, and Railway for Node and Python.
 
-For the deployment, `siteDeploy` calls one tool per provider with the arguments `source`, `framework` and, when given, `envVars`, `buildCommand` and `outputDirectory`: `vercelDeploy`, `cfDeployPages`, `doCreateApp`, `netlifyDeploy`, `herokuDeploy`, `awsDeploy`, `linodeDeploy`, `railwayDeploy`, `flyioDeploy`. The curated cloud packs register the first three under those names, and those three take other arguments (`gitUrl`, and `name` for `doCreateApp`). The other six names are not tools any curated pack registers. The host's executor has to map each call to a real tool and its arguments.
+For the deployment, `siteDeploy` calls the deploy tool the curated cloud pack registers, with that tool's own arguments:
 
-For the domain, it calls the registrar's search tool with `domain`, its register tool with `domain` and `years: 1` when the domain is available, and its DNS tool with `domain`, `action: 'add'`, `type`, `name` and `content` for an apex CNAME. Porkbun's tools accept those arguments. Namecheap's register tool needs `domainName` and `registrant`, GoDaddy's needs `contactRegistrant`, and Namecheap's DNS tool needs a `records` array, so those calls fail unless the executor adapts them. The Cloudflare registrar path skips registration. Without a registrar, domain setup returns manual DNS instructions.
+| Provider | Tool | Source it takes | Arguments sent |
+| --- | --- | --- | --- |
+| `vercel` | `vercelDeploy` | Git URL | `gitUrl`, `projectName`, `framework` (`nextjs` and `astro` only; Vercel detects the rest), `buildCommand`, `outputDirectory`, `envVars` |
+| `cloudflare` | `cfDeployPages` | Git URL | `gitUrl`, `projectName`, `buildCommand`, `buildOutputDirectory`, `envVars` |
+| `digitalocean` | `doCreateApp` | Git URL | `name` (`projectName` or derived from the source), `gitUrl`, `isStatic`, `buildCommand`, `outputDir`, `envVars` |
+| `netlify` | `netlifyDeploySite` | Git URL | `gitUrl`, `siteName`, `buildCommand`, `publishDirectory`, `envVars` |
+| `heroku` | `herokuDeployApp` | Source tarball URL (`.tar.gz`, `.tgz`) | `appName` (`projectName`, required), `sourceUrl`, `configVars` |
+| `aws` | `awsDeployAmplify` | Git URL | `appName`, `repository`, `environmentVariables` |
+| `aws` | `awsDeployS3Site` | Local directory of static files | `bucketName` (`projectName`, required), `sourceDir` (the source joined with `outputDirectory` when given) |
+| `railway` | `railwayDeployService` | GitHub URL | `repo` (`owner/repo`), `projectName`, `variables` |
+| `linode` | none | | Refused: `linodeDeployStackScript` needs a StackScript id, region, plan, image and root password |
+| `flyio` | none | | Refused: `flyDeployApp` runs a Docker image |
+
+A source the provider's tool cannot take, a missing required `projectName`, or an option that tool does not accept (`buildCommand` on Heroku, AWS Amplify or Railway, for example) is refused before any tool is called, with the reason in `error`. A dry run reports the same refusal and otherwise shows the tool and its arguments, with environment values replaced by their names.
+
+For the domain, `siteDeploy` calls the registrar pack's tools:
+
+| Registrar | Search | Register (when the domain is available) | DNS |
+| --- | --- | --- | --- |
+| `porkbun` | `porkbunSearchDomain` with `domain` | `porkbunRegisterDomain` with `domain`, `years: 1` and the `registrant` fields when given (Porkbun uses the account's contact otherwise) | `porkbunConfigureDns` adds the apex record with an empty `name` |
+| `namecheap` | `namecheapSearchDomain` with `domains` | `namecheapRegisterDomain` with `domainName`, `years: 1` and `registrant` | `namecheapGetDnsRecords`, then `namecheapConfigureDns` with the current records plus the apex record |
+| `godaddy` | `godaddySearchDomain` with `domain` | `godaddyRegisterDomain` with `domain`, `period: 1` and `contactRegistrant` | `godaddyConfigureDns` adds `records: [{ type, name: '@', data }]` |
+| `cloudflare` | `cfRegGetDomainInfo` with `domain` | none: Cloudflare's registrar takes transfers only | `cfRegConfigureDns` adds the record named by the full domain |
+
+`namecheapConfigureDns` replaces every host record of the domain, so when the current records cannot be read the DNS step is not attempted and `domainStatus` is `pending_dns`. An available domain at Namecheap or GoDaddy without a complete `registrant` is not registered, and `domainStatus` is `registration_failed`. Without a registrar, domain setup returns manual DNS instructions.
 
 A deployment failure stops domain setup. A returned domain registration or DNS failure appears in `domainStatus` and the step results while a successful deployment keeps the overall result successful.
 

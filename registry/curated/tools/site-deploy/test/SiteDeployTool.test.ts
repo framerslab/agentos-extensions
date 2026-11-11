@@ -46,7 +46,6 @@ describe('SiteDeployTool', () => {
 
     const result = await tool.execute({ source: '/app/next.config.js', dryRun: true });
 
-    expect(result.success).toBe(true);
     expect(result.data?.framework).toBe('nextjs');
   });
 
@@ -155,12 +154,32 @@ describe('SiteDeployTool', () => {
     expect(dryRunStep?.data?.envVars).toContain('NODE_ENV');
     expect(dryRunStep?.data?.buildCommand).toBe('npm run build');
     expect(dryRunStep?.data?.outputDirectory).toBe('.next');
+    // The plan shows the real tool's arguments, with environment values left out
+    expect(dryRunStep?.data?.deployArgs).toEqual({
+      gitUrl: 'https://github.com/user/my-next-app',
+      framework: 'nextjs',
+      buildCommand: 'npm run build',
+      outputDirectory: '.next',
+      envVars: ['NODE_ENV'],
+    });
 
     // domain instructions
     expect(result.data?.dnsInstructions).toBeDefined();
     expect(result.data?.dnsInstructions?.some(i => i.includes('porkbun'))).toBe(true);
 
     // The executor should NOT have been called during dry run
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('should fail a dry run whose provider cannot take the source', async () => {
+    const executor = createMockExecutor();
+    tool.setToolExecutor(executor);
+
+    const result = await tool.execute({ source: '/srv/site', cloudProvider: 'vercel', dryRun: true });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Git repository URL');
+    expect(result.data?.steps.find(s => s.step === 'dry_run_plan')?.success).toBe(false);
     expect(executor).not.toHaveBeenCalled();
   });
 
@@ -182,7 +201,7 @@ describe('SiteDeployTool', () => {
     expect(result.success).toBe(true);
     expect(result.data?.deploymentUrl).toBe('https://my-app.vercel.app');
     expect(result.data?.domainStatus).toBe('not_configured');
-    expect(executor).toHaveBeenCalledWith('vercelDeploy', expect.objectContaining({ source: 'https://github.com/user/my-next-app' }));
+    expect(executor).toHaveBeenCalledWith('vercelDeploy', expect.objectContaining({ gitUrl: 'https://github.com/user/my-next-app' }));
   });
 
   it('should pass envVars, buildCommand, outputDirectory to deploy tool', async () => {
@@ -190,7 +209,7 @@ describe('SiteDeployTool', () => {
     tool.setToolExecutor(executor);
 
     await tool.execute({
-      source: '/app',
+      source: 'https://github.com/user/app',
       framework: 'nextjs',
       cloudProvider: 'vercel',
       envVars: { API_KEY: 'secret' },
@@ -249,7 +268,7 @@ describe('SiteDeployTool', () => {
       domain: 'myapp.dev',
       action: 'add',
       type: 'CNAME',
-      name: '@',
+      name: '',
     }));
   });
 
@@ -338,7 +357,7 @@ describe('SiteDeployTool', () => {
 
   it('should handle DNS configuration failure gracefully', async () => {
     const executor = createMockExecutor({
-      netlifyDeploy: async () => ({
+      netlifyDeploySite: async () => ({
         success: true,
         data: { url: 'https://my-app.netlify.app' },
       }),
@@ -374,6 +393,10 @@ describe('SiteDeployTool', () => {
       namecheapSearchDomain: async () => {
         throw new Error('Network timeout');
       },
+      namecheapGetDnsRecords: async () => ({
+        success: true,
+        data: { domain: 'timeout.com', records: [] },
+      }),
       namecheapConfigureDns: async () => ({
         success: true,
         data: {},
@@ -459,7 +482,7 @@ describe('SiteDeployTool', () => {
     tool.setToolExecutor(executor);
 
     const result = await tool.execute({
-      source: '/app',
+      source: 'https://github.com/user/app',
       framework: 'nextjs',
       cloudProvider: 'vercel',
       domain: 'test.com',
@@ -478,7 +501,7 @@ describe('SiteDeployTool', () => {
     tool.setToolExecutor(executor);
 
     const result = await tool.execute({
-      source: '/app',
+      source: 'https://github.com/user/app',
       framework: 'nextjs',
       cloudProvider: 'vercel',
       domain: 'test.com',
