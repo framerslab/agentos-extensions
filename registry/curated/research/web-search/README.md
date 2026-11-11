@@ -2,7 +2,7 @@
 
 Professional web search, research aggregation, and fact-checking for AgentOS agents.
 
-Supports Serper.dev, Tavily, Brave, SerpAPI, Firecrawl and SearXNG. A search asks the configured providers in that order and answers with the first one that returns without an error, even when it returns no results (a Tavily or Firecrawl request that times out returns no results). It moves to the next provider only when one throws an error or is past its rate limit, and falls back to DuckDuckGo, which needs no API key, when every configured provider did.
+Supports Serper.dev, Tavily, Brave, SerpAPI, Firecrawl and SearXNG, and English Wikipedia with no key once a host enables it (see [Options](#options)). A search asks the configured providers in that order and answers with the first one that returns without an error, even when it returns no results (a Tavily or Firecrawl request that times out returns no results). It moves to the next provider only when one throws an error or is past its rate limit, and falls back to DuckDuckGo, which needs no API key, when every configured provider did.
 
 ## Installation
 
@@ -44,7 +44,69 @@ const agentos = await AgentOS.create({
 - `FIRECRAWL_API_KEY` (optional)
 - `SEARXNG_URL` (optional, a SearXNG instance URL)
 
-If none are set, the extension falls back to DuckDuckGo.
+If none are set, the extension falls back to DuckDuckGo. Wikipedia needs no key and no variable: the `wikipedia` option enables it.
+
+## Options
+
+Beside the keys above, the pack options and `SearchProviderService`'s configuration take:
+
+| Option | What it does | When left out |
+|---|---|---|
+| `wikipedia` | `{ enabled, client, limiter?, origin?, timeoutMs? }`: English Wikipedia's REST search through [`@framers/agentos-ext-public-sources`](https://www.npmjs.com/package/@framers/agentos-ext-public-sources)' `WikipediaSourceProvider`. It needs no key. `client` (`{ name, version, contact }`) is sent as the User-Agent Wikimedia's policy asks for. `limiter` is the process's one `SourceLimiter` for the wiki: pass the same one to every service and every reader that calls it, since Wikimedia counts its limits per client. `origin` points the provider at another wiki or a stand-in; `timeoutMs` is each request's deadline. | Off. Once enabled: a new `SourceLimiter`, `https://en.wikipedia.org`, 3,000 ms. |
+| `serperUrl` | Serper's search endpoint, such as a stand-in in a host's tests. | `https://google.serper.dev/search` |
+| `tavilyUrl` | Tavily's search endpoint. | `https://api.tavily.com/search` |
+| `firecrawlUrl` | Firecrawl's search endpoint. | `https://api.firecrawl.dev/v1/search` |
+| `tavily` | `{ searchDepth: 'basic' \| 'advanced' }`, the `search_depth` Tavily is sent. `include_answer` and `include_raw_content` are false at either depth. | `advanced` |
+
+The `wikipedia` provider is listed after every other configured provider, so a host that enables it keeps the order of the providers it had. It answers each hit as `{ title, url, snippet: '', position }`, the `url` built by public-sources' `articleUrl`, so `decodeURIComponent` of the path after `/wiki/` gives the article's key back for a read through `WikipediaSourceProvider.read`.
+
+## Searching from code
+
+```ts
+import { SourceLimiter } from '@framers/agentos-ext-public-sources';
+import { LimiterRefused, SearchFailed, SearchProviderService } from '@framers/agentos-ext-web-search';
+
+// One limiter for the wiki in the process, shared with every other caller of it.
+const wikiLimiter = new SourceLimiter();
+
+const search = new SearchProviderService({
+  tavilyApiKey: process.env.TAVILY_API_KEY,
+  tavily: { searchDepth: 'basic' },
+  wikipedia: {
+    enabled: true,
+    client: { name: 'MyApp', version: '1.2.0', contact: 'https://example.org/contact' },
+    limiter: wikiLimiter,
+  },
+});
+
+let sent = 0;
+const controller = new AbortController();
+try {
+  const response = await search.search('Treaty of Versailles', {
+    provider: 'wikipedia',
+    maxResults: 2,
+    signal: controller.signal,
+    onSend: () => {
+      sent += 1;
+    },
+  });
+  // response.results[0]: { title: 'Treaty of Versailles', url: 'https://en.wikipedia.org/wiki/Treaty_of_Versailles', snippet: '', position: 1 }
+} catch (error) {
+  if (error instanceof LimiterRefused) {
+    // Nothing was sent: error.reason is 'blocked', 'minute', 'wait' or 'caller'.
+  } else if (error instanceof SearchFailed) {
+    // error.provider is 'wikipedia'; error.status is the HTTP status, or null when none came.
+  }
+}
+```
+
+`search(query, { maxResults, provider, category, signal, onSend })`:
+
+- `provider` pins one provider: no other is tried and nothing falls back to DuckDuckGo. A pinned keyed provider that answers an error status throws its own `Error`. A pinned `wikipedia` search the limiter refuses throws public-sources' `LimiterRefused`, which this pack re-exports, and one that fails throws `SearchFailed`. A search pinned to `wikipedia` on a service that did not enable it throws and sends nothing.
+- `signal` ends every provider request of the search, and the search rejects with the signal's reason. Tavily's and Firecrawl's own 15-second timers run beside it, and their own timeout answers no results. Without `provider`, an abort ends the search there: no next provider is asked, and DuckDuckGo is not.
+- `onSend` is awaited once before each provider is asked, before its request is sent. When it throws, nothing is sent, no other provider is asked, and the search rejects with what it threw. For `wikipedia` it runs once the limiter has granted the request, so a search the limiter refuses never runs it. A search can end refused after `onSend` has run, with nothing sent, when a 429 or a 503 blocked the limiter meanwhile or the spacing would wait past the limiter's `waitMs`.
+
+A search with neither `signal` nor `onSend` sends the requests it sent before these options existed.
 
 ## Tools
 
@@ -62,7 +124,7 @@ Cross-check a claim across sources.
 
 ## Ranking
 
-With `multiSearch: true` (a tool input, or the pack option `defaultMultiSearch: true` for every tool), a query goes to every configured provider and DuckDuckGo in parallel. Results are merged by normalized URL and ordered by a confidence score built from how many providers returned the URL and where each placed it. The pack runs no reranking model and sends results to no reranking service.
+With `multiSearch: true` (a tool input, or the pack option `defaultMultiSearch: true` for every tool), a query goes to every configured provider (the `wikipedia` provider among them when it is enabled) and DuckDuckGo in parallel. Results are merged by normalized URL and ordered by a confidence score built from how many providers returned the URL and where each placed it. The pack runs no reranking model and sends results to no reranking service.
 
 ### Reranking with AgentOS
 
@@ -86,7 +148,7 @@ See AgentOS's [Reranking](https://github.com/framerslab/agentos/blob/c46ff754e8d
 ## Notes
 
 - Tools are read-only (no side effects).
-- Provider selection is automatic based on which keys are configured.
+- Provider selection is automatic, based on which keys are configured and whether `wikipedia` is enabled.
 
 ## License
 

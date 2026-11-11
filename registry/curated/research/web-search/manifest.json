@@ -3,14 +3,14 @@
   "id": "com.framers.research.web-search",
   "name": "Web Search Extension",
   "version": "1.3.3",
-  "description": "Multi-provider web search for AgentOS: by default the first configured provider that returns without an error, even with no results (Serper, Tavily, Brave, SerpAPI, Firecrawl, SearXNG, then DuckDuckGo); with multiSearch, every configured provider and DuckDuckGo in parallel, deduplicated by URL and ranked by cross-provider agreement; plus research aggregation and fact-checking",
+  "description": "Multi-provider web search for AgentOS: by default the first configured provider that returns without an error, even with no results (Serper, Tavily, Brave, SerpAPI, Firecrawl, SearXNG, English Wikipedia with no key when a host enables it, then DuckDuckGo); with multiSearch, every configured provider and DuckDuckGo in parallel, deduplicated by URL and ranked by cross-provider agreement; plus research aggregation and fact-checking",
   "author": {
     "name": "Frame.dev",
     "email": "support@frame.dev",
     "url": "https://github.com/framerslab"
   },
   "license": "Apache-2.0",
-  "keywords": ["search", "web", "research", "fact-check", "firecrawl", "tavily", "serper", "serpapi", "brave", "searxng", "duckduckgo"],
+  "keywords": ["search", "web", "research", "fact-check", "firecrawl", "tavily", "serper", "serpapi", "brave", "searxng", "duckduckgo", "wikipedia"],
   "agentosVersion": ">=0.10.40",
   "categories": ["productivity", "research"],
   "repository": {
