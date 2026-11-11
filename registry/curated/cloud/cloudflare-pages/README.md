@@ -95,7 +95,7 @@ Explicit options take precedence over secrets, then environment variables. `opti
 
 Activation fails if the API token or account ID is missing. It verifies the token through the Cloudflare token verification endpoint.
 
-Pages deployment creates projects, sets production environment variables, and triggers a remote build without waiting for completion. The tool ignores `projectName` and derives the name from `gitUrl`. The URL parser accepts GitHub, GitLab, and Bitbucket hosts, but project creation always sends the source type `github`. Build settings are sent when creating a project.
+Pages deployment creates projects, sets production environment variables, and triggers a remote build without waiting for completion. The tool deploys to the project named by `projectName`, or to one named after the repository in `gitUrl` when it is omitted. The URL parser accepts GitHub, GitLab, and Bitbucket hosts, but project creation always sends the source type `github`. Build settings are sent when creating a project.
 
 Project environment variables and Worker bindings use `plain_text`. Worker source is uploaded as `worker.js` with a JavaScript module content type; the service does not transpile TypeScript. Worker route setup errors are ignored.
 

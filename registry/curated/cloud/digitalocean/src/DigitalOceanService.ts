@@ -210,7 +210,9 @@ export class DigitalOceanService {
         name: opts.name,
         git: gitSource,
         build_command: opts.buildCommand,
-        output_dir: opts.outputDir ?? 'build',
+        // Unset, App Platform scans _static, dist, public and build:
+        // https://docs.digitalocean.com/products/app-platform/reference/app-spec/
+        output_dir: opts.outputDir,
         envs: envs.length > 0 ? envs : undefined,
       }];
     } else {

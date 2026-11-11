@@ -42,6 +42,7 @@ export class CfDeployPagesTool {
     try {
       const result = await this.service.deployFromGit({
         gitUrl: args.gitUrl,
+        projectName: args.projectName,
         productionBranch: args.productionBranch,
         buildCommand: args.buildCommand,
         buildOutputDirectory: args.buildOutputDirectory,

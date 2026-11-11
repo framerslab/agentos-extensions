@@ -64,6 +64,7 @@ describe('CfDeployPagesTool', () => {
 
     await tool.execute({
       gitUrl: 'https://github.com/user/repo',
+      projectName: 'repo-staging',
       productionBranch: 'main',
       buildCommand: 'npm run build',
       buildOutputDirectory: 'dist',
@@ -73,6 +74,7 @@ describe('CfDeployPagesTool', () => {
     expect(service.deployFromGit).toHaveBeenCalledWith(
       expect.objectContaining({
         gitUrl: 'https://github.com/user/repo',
+        projectName: 'repo-staging',
         productionBranch: 'main',
         buildCommand: 'npm run build',
         buildOutputDirectory: 'dist',
