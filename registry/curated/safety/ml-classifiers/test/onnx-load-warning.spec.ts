@@ -9,9 +9,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 // A plain function, not vi.fn(): vi.restoreAllMocks() in afterEach would strip a
-// vi.fn()'s rejection and leave a pipeline that loads as undefined.
+// vi.fn()'s rejection and leave a pipeline that loads as undefined. `loads` counts
+// the model loads it was asked for.
+const model = vi.hoisted(() => ({ loads: 0 }));
 vi.mock('@huggingface/transformers', () => ({
   pipeline: async () => {
+    model.loads += 1;
     throw new Error('Could not locate file: "onnx/model_quantized.onnx"');
   },
 }));
@@ -50,6 +53,23 @@ describe('an ONNX tier whose model fails to load', () => {
     expect(line).toContain('ONNX tier is unavailable');
     expect(line).toContain('Could not locate file');
     expect(line).toContain('keyword tier');
+  });
+
+  it('loads the model once and warns once when classifications start together', async () => {
+    const log = logger();
+    const guardrail = new MLClassifierGuardrail(undefined, log);
+    const before = model.loads;
+
+    const [first, second] = await Promise.all([
+      guardrail.classify('kill yourself you stupid ass idiot'),
+      guardrail.classify('What is the weather like today?'),
+    ]);
+
+    expect(first.source).toBe('keyword');
+    expect(first.flagged).toBe(true);
+    expect(second.source).toBe('keyword');
+    expect(model.loads - before).toBe(1);
+    expect(log.warn).toHaveBeenCalledTimes(1);
   });
 
   it('names the LLM tier when an llmInvoker is configured', async () => {
