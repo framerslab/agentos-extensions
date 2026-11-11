@@ -8,8 +8,8 @@
  */
 
 import type { ITool, ToolExecutionContext, ToolExecutionResult } from '@framers/agentos';
-import type { MLClassifierGuardrail } from '../MLClassifierGuardrail';
-import type { CategoryScore } from '../types';
+import type { MLClassifierGuardrail } from '../MLClassifierGuardrail.js';
+import type { CategoryScore } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Input / Output types

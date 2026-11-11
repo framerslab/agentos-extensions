@@ -33,8 +33,8 @@ import type {
 } from '@framers/agentos';
 import { GuardrailAction } from '@framers/agentos';
 
-import type { TopicalityOptions, TopicMatchResult } from './types';
-import { cosineSimilarity, topicEmbeddingCache, clearEmbeddingCache } from './embeddings';
+import type { TopicalityOptions, TopicMatchResult } from './types.js';
+import { cosineSimilarity, topicEmbeddingCache, clearEmbeddingCache } from './embeddings.js';
 
 // ---------------------------------------------------------------------------
 // Embedding helper — lazy-loaded from optional @huggingface/transformers

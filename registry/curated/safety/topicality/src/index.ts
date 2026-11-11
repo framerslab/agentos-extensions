@@ -30,9 +30,9 @@
 import type { ExtensionPack, ExtensionPackContext } from '@framers/agentos';
 import type { ExtensionDescriptor, ExtensionLifecycleContext } from '@framers/agentos';
 import { EXTENSION_KIND_GUARDRAIL, EXTENSION_KIND_TOOL } from '@framers/agentos';
-import type { TopicalityOptions } from './types';
-import { TopicalityGuardrail } from './TopicalityGuardrail';
-import { CheckTopicTool } from './tools/CheckTopicTool';
+import type { TopicalityOptions } from './types.js';
+import { TopicalityGuardrail } from './TopicalityGuardrail.js';
+import { CheckTopicTool } from './tools/CheckTopicTool.js';
 import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
@@ -46,10 +46,10 @@ import { PACKAGE_VERSION } from './packageVersion.js';
  * import { createTopicalityGuardrail, TopicalityOptions } from '@framers/agentos-ext-topicality';
  * ```
  */
-export * from './types';
-export { TopicalityGuardrail } from './TopicalityGuardrail';
-export { CheckTopicTool } from './tools/CheckTopicTool';
-export { cosineSimilarity, clearEmbeddingCache } from './embeddings';
+export * from './types.js';
+export { TopicalityGuardrail } from './TopicalityGuardrail.js';
+export { CheckTopicTool } from './tools/CheckTopicTool.js';
+export { cosineSimilarity, clearEmbeddingCache } from './embeddings.js';
 
 // ---------------------------------------------------------------------------
 // Pack factory

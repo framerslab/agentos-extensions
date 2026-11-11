@@ -12,16 +12,16 @@
 
 import type { ExtensionPack, ExtensionPackContext } from '@framers/agentos';
 import { EXTENSION_KIND_GUARDRAIL, EXTENSION_KIND_TOOL } from '@framers/agentos';
-import type { MLClassifierOptions } from './types';
-import { MLClassifierGuardrail } from './MLClassifierGuardrail';
-import { ClassifyContentTool } from './tools/ClassifyContentTool';
+import type { MLClassifierOptions } from './types.js';
+import { MLClassifierGuardrail } from './MLClassifierGuardrail.js';
+import { ClassifyContentTool } from './tools/ClassifyContentTool.js';
 import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Re-exports
 // ---------------------------------------------------------------------------
 
-export * from './types';
+export * from './types.js';
 
 // ---------------------------------------------------------------------------
 // Pack factory

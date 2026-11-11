@@ -19,8 +19,8 @@ import type {
   ToolExecutionResult,
   JSONSchemaObject,
 } from '@framers/agentos';
-import type { TopicMatchResult } from '../types';
-import type { TopicalityGuardrail } from '../TopicalityGuardrail';
+import type { TopicMatchResult } from '../types.js';
+import type { TopicalityGuardrail } from '../TopicalityGuardrail.js';
 
 // ---------------------------------------------------------------------------
 // Input type
