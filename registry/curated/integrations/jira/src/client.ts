@@ -120,6 +120,11 @@ function identifier(value: unknown): value is string {
   return word(value) && !/\s/.test(value);
 }
 
+/** A JQL string: the value in double quotes, its backslashes and double quotes escaped. */
+function jqlString(value: string): string {
+  return `"${value.replace(/[\\"]/g, '\\$&')}"`;
+}
+
 /** A site's address as its origin: HTTPS (plain HTTP at a loopback host aside), no userinfo, path, query or fragment. */
 function siteOrigin(value: unknown): string | undefined {
   if (typeof value !== 'string' || /[?#]/.test(value)) return undefined;
@@ -332,7 +337,9 @@ export class JiraClient {
   /**
    * Moves an issue to its done status: reads its transitions (`GET /issue/<key>/transitions`) and posts the available
    * one whose target status is in the done category, the one named Done first. With no such transition, an issue
-   * already done resolves (`GET /issue/<key>?fields=status`), and any other is `refused`.
+   * already done resolves, and any other, or one the search does not find, is `refused`. The status is read through
+   * the JQL search (`issue = "<key>"`, the status field alone), whose scopes the set holds: reading the issue itself
+   * (`GET /issue/<key>`) needs granular scopes outside it, which Atlassian refuses with 401.
    *
    * @param key The issue's key or id.
    */
@@ -349,7 +356,9 @@ export class JiraClient {
       await this.call('POST', `${path}/transitions`, { transition: { id: chosen.id } }, signal);
       return;
     }
-    const issue = record(await this.call('GET', `${path}?fields=status`, undefined, signal));
+    const search = record(await this.call('POST', '/search/jql', { jql: `issue = ${jqlString(key)}`, fields: ['status'], maxResults: 1 }, signal));
+    if (!Array.isArray(search.issues)) throw new TrackerFault('invalid_response');
+    const issue = record(search.issues[0]);
     if (record(record(record(issue.fields).status).statusCategory).key === 'done') return;
     throw new TrackerFault('refused');
   }

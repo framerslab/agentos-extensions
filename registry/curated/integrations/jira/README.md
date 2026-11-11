@@ -89,7 +89,7 @@ A workspace's own automation reaches Jira another way, with an API token or a se
 - `projects()` reads `GET /project/search?expand=issueTypes&action=create`, which lists the projects where the person holds the Create issues permission, 50 a page until the last page, at most 500. Each project carries its issue types that are not subtasks.
 - `assignedIssues(limit = 50)` posts `{ jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC', fields: ['summary', 'status', 'updated', 'project'], maxResults }` to `/search/jql`, reading its pages by `nextPageToken` up to the limit (1 to 100). Each issue's address is `<site>/browse/<key>`, its time ISO 8601 in UTC.
 - `createIssue({ projectId, issueTypeId, summary, description })` posts the fields to `/issue` with the description as Atlassian Document Format (`adfParagraphs`) and answers the issue's id, key and address.
-- `closeIssue(key)` reads `GET /issue/<key>/transitions` and posts the available transition whose target status is in the done category, the one named Done first. With none, an issue already in the done category resolves and any other is refused.
+- `closeIssue(key)` reads `GET /issue/<key>/transitions` and posts the available transition whose target status is in the done category, the one named Done first. With none, it reads the issue's status through `/search/jql` (`issue = "<key>"`, the status field alone): an issue already in the done category resolves, and any other is refused. The status is not read with `GET /issue/<key>`, whose granular scopes (`read:issue-meta:jira`, `read:issue-security-level:jira`, `read:issue.vote:jira`, `read:issue.changelog:jira` among them) are outside the set ([`swagger-v3.v3.json`](https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json), `getIssue`), and Atlassian answers a call whose scopes the grant lacks with 401 `Unauthorized; scope does not match` ([a report on Atlassian's developer community](https://community.developer.atlassian.com/t/oauth-2-0-3lo-granular-jira-software-scopes-present-in-token-but-rest-agile-1-0-returns-401-scope-does-not-match/100456)), which the tracker would read as an ended grant.
 
 `adfParagraphs(text)` makes one paragraph per part between blank lines and a [hard break](https://developer.atlassian.com/cloud/jira/platform/apis/document/nodes/hardBreak/) per line break inside a part, with no empty text node.
 
@@ -107,7 +107,7 @@ Every call runs on the injected `fetch` under one deadline (15 seconds unless `t
 
 ## What the pack never reads
 
-No account id, name, email or avatar of the person or of anyone else reaches a value the pack answers or a grant it keeps. The issue search asks four fields, none of which names a person; the project search expands the issue types alone, never the project lead. The documents are in [`src/client.ts`](src/client.ts).
+No account id, name, email or avatar of the person or of anyone else reaches a value the pack answers or a grant it keeps. The issue search asks four fields, none of which names a person; the project search expands the issue types alone, never the project lead.
 
 ## Stand-ins
 
