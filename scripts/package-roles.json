@@ -515,5 +515,6 @@
   "images": {
     "registry/curated/meetings/browser": { "image": "ghcr.io/framerslab/agentos-meeting-bot", "workflow": "meeting-bot-image.yml" },
     "registry/curated/tools/document-parser": { "image": "ghcr.io/framerslab/agentos-document-parser", "workflow": "document-parser-image.yml" }
-  }
+  },
+  "adopted": []
 }
