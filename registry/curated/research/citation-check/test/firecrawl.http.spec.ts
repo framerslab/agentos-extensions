@@ -205,6 +205,77 @@ describe('FirecrawlPageReader', () => {
     expect(scrapes).toHaveLength(0);
   });
 
+  it('ends at its own deadline and at the caller’s abort when the fetch it is given ignores the signal and its body stalls after the headers', async () => {
+    const stalled = (): { fetchFn: typeof fetch; cancelled: () => boolean } => {
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"success":true,"data":{"html":"<p>The harbour'));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      // A host's fetch that answers its headers and never looks at the signal.
+      const fetchFn = (async () => new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+      return { fetchFn, cancelled: () => cancelled };
+    };
+
+    const late = stalled();
+    const started = Date.now();
+    expect(await reader({ fetchFn: late.fetchFn, timeoutMs: 300 }).read('https://harbour.example.test/app', open())).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_500);
+    await until(late.cancelled);
+
+    const stopped = stalled();
+    const controller = new AbortController();
+    const reading = reader({ fetchFn: stopped.fetchFn }).read('https://harbour.example.test/app', { signal: controller.signal });
+    setTimeout(() => controller.abort(new Error('caller stopped')), 50);
+    await expect(reading).rejects.toThrow('caller stopped');
+    await until(stopped.cancelled);
+  });
+
+  it('ends at its own deadline and at the caller’s abort when the fetch it is given never answers and ignores the signal', async () => {
+    const fetchFn = (() => new Promise<Response>(() => undefined)) as typeof fetch;
+    const started = Date.now();
+    expect(await reader({ fetchFn, timeoutMs: 300 }).read('https://harbour.example.test/app', open())).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_500);
+
+    const controller = new AbortController();
+    const reading = reader({ fetchFn }).read('https://harbour.example.test/app', { signal: controller.signal });
+    setTimeout(() => controller.abort(new Error('caller stopped')), 50);
+    await expect(reading).rejects.toThrow('caller stopped');
+  });
+
+  it('answers null at once for an error answer or an answer over the cap whose body’s cancel never settles', async () => {
+    const unsettled = (init: ResponseInit): typeof fetch =>
+      (async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"success":false}'));
+            },
+            // A cancel whose promise never settles.
+            cancel: () => new Promise<void>(() => undefined),
+          }),
+          init,
+        )) as typeof fetch;
+    for (const init of [{ status: 500 }, { status: 200, headers: { 'content-type': 'application/json', 'content-length': '999999' } }]) {
+      const started = Date.now();
+      expect(await reader({ fetchFn: unsettled(init), timeoutMs: 5_000, maxBytes: 1_000 }).read('https://harbour.example.test/app', open())).toBeNull();
+      expect(Date.now() - started).toBeLessThan(1_000);
+    }
+  });
+
+  it('sends the key over https alone, or over plain http to the loopback address', () => {
+    for (const url of ['http://scrape.example.test/v2/scrape', 'http://10.0.0.8/v2/scrape', 'http://127.0.0.1.example.test/v2/scrape']) {
+      expect(() => reader({ url }), url).toThrow(TypeError);
+    }
+    for (const url of ['https://scrape.example.test/v2/scrape', 'http://127.0.0.1:3002/v2/scrape', 'http://localhost:3002/v2/scrape', 'http://[::1]:3002/v2/scrape']) {
+      expect(() => reader({ url }), url).not.toThrow();
+    }
+  });
+
   it('never shows the key: not in the reader as JSON or inspected, nor in the error a bad option throws', () => {
     const made = reader();
     expect(JSON.stringify(made)).not.toContain(KEY);
