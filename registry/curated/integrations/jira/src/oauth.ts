@@ -216,7 +216,7 @@ export class JiraOAuthFlow extends RedirectOAuthFlow {
 
   /** Throws `no_answer` once the caller's signal has aborted. */
   private active(): void {
-    if (this.signal?.aborted === true) throw new JiraFault('no_answer');
+    if (this.signal?.aborted === true) throw new JiraFault('no_answer', 'cancelled');
   }
 
   /**
@@ -283,7 +283,10 @@ export class JiraOAuthFlow extends RedirectOAuthFlow {
         body: JSON.stringify(body),
       }, { fetchImpl: this.fetchImpl, timeoutMs: this.timeoutMs, maxBytes: ANSWER_BYTES, ...(this.signal === undefined ? {} : { signal: this.signal }) });
     } catch (error) {
-      if (error instanceof CallFailed) throw new JiraFault(error.why === 'too_large' ? 'invalid_response' : 'no_answer');
+      if (error instanceof CallFailed) {
+        const why = error.why;
+        throw why === 'too_large' ? new JiraFault('invalid_response') : new JiraFault('no_answer', why);
+      }
       throw error;
     }
     let parsed: Record<string, unknown> = {};

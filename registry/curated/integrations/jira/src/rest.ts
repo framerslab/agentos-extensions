@@ -94,8 +94,8 @@ export class CallFailed extends Error {
   }
 }
 
-/** A promise that rejects once `signal` aborts, and the way to stop listening. */
-function whenAborted(signal: AbortSignal, stopped: () => CallFailed): { promise: Promise<never>; dispose: () => void } {
+/** A promise that rejects with `stopped()` once `signal` aborts, and the way to stop listening. */
+export function whenAborted(signal: AbortSignal, stopped: () => Error): { promise: Promise<never>; dispose: () => void } {
   let listener = (): void => undefined;
   const promise = new Promise<never>((_resolve, reject) => {
     listener = () => reject(stopped());
@@ -136,12 +136,12 @@ export async function send(url: string, init: RequestInit, bounds: CallBounds): 
 }
 
 /**
- * The time a 429 names, epoch milliseconds: `Retry-After` in whole seconds from now (at most a day) or as an HTTP date,
+ * The time a 429 names, epoch milliseconds: `Retry-After` in whole seconds from now (of any length, at most a day) or as an HTTP date,
  * else `X-RateLimit-Reset` as an ISO 8601 time; null when it names none.
  */
 export function retryAt(headers: Headers): number | null {
   const after = headers.get('retry-after')?.trim() ?? '';
-  if (/^\d{1,7}$/.test(after)) return Date.now() + Math.min(Number(after) * 1000, MAX_WAIT_MS);
+  if (/^\d+$/.test(after)) return Date.now() + Math.min(Number(after) * 1000, MAX_WAIT_MS);
   for (const value of [after, headers.get('x-ratelimit-reset')?.trim() ?? '']) {
     if (value === '') continue;
     const at = Date.parse(value);

@@ -11,11 +11,11 @@
  */
 
 import { OAuthGrantRefused } from '@framers/agentos/auth';
-import { TrackerFault, TrackerGrantRefused } from '@framers/agentos-ext-account-sources';
+import { TrackerFault, TrackerGrantRefused, TrackerNoAnswer, TrackerRateLimited } from '@framers/agentos-ext-account-sources';
 import { adfParagraphs } from './adf.js';
 import { JiraFault } from './faults.js';
 import { chosenEndpoints, chosenTimeout, type JiraEndpoints } from './oauth.js';
-import { isObject, jiraFetch, loopbackHost, record, type JiraTransport } from './rest.js';
+import { credential, isObject, jiraFetch, loopbackHost, record, whenAborted, type JiraTransport } from './rest.js';
 
 /** Supplies a usable access token, such as a `JiraOAuthFlow`'s `accessToken(key)` bound by the host. */
 export type JiraAccessToken = () => Promise<string>;
@@ -173,14 +173,48 @@ function transportOf(options: JiraClientOptions): JiraTransport {
   return { fetchImpl: options.fetchImpl ?? fetch, timeoutMs: chosenTimeout(options.timeoutMs) };
 }
 
-/** A usable access token from the supplier; a grant the flow could not renew is `TrackerGrantRefused`. */
-async function tokenOf(accessToken: JiraAccessToken): Promise<string> {
-  try {
-    return await accessToken();
-  } catch (error) {
-    if (error instanceof OAuthGrantRefused && (error.reason === 'refresh' || error.reason === 'missing')) throw new TrackerGrantRefused(error.status);
-    throw error;
+/**
+ * The tracker fault a failure of the token supplier reads as. A refresh Atlassian answered 429 is
+ * `TrackerRateLimited` and one it could not serve (a 5xx, or no status) a refusal that keeps the grant; any other
+ * refused or missing grant is `TrackerGrantRefused`. A `JiraFault` of the flow is the tracker fault of its reason, a
+ * token call with no answer `TrackerNoAnswer`; a tracker fault passes as it is, and anything else is the host's own
+ * error, thrown on unchanged.
+ */
+function supplierFault(error: unknown): unknown {
+  if (error instanceof TrackerFault) return error;
+  if (error instanceof JiraFault) return error.reason === 'no_answer' ? new TrackerNoAnswer(error.noAnswer ?? 'network') : new TrackerFault(error.reason);
+  if (error instanceof OAuthGrantRefused) {
+    if (error.reason === 'refresh' && error.status === 429) return new TrackerRateLimited(null, 429);
+    if (error.reason === 'refresh' && (error.status === undefined || error.status >= 500)) return new TrackerFault('refused', error.status);
+    return new TrackerGrantRefused(error.status);
   }
+  return error;
+}
+
+/**
+ * A usable access token from the supplier, waited for under the call's deadline and the caller's signal: a wait the
+ * deadline ends is `TrackerNoAnswer('timeout')`, one the signal ends `TrackerNoAnswer('cancelled')`, and a token that
+ * is not a credential `TrackerGrantRefused`. The supplier's own failures read as `supplierFault` gives.
+ */
+async function tokenOf(accessToken: JiraAccessToken, timeoutMs: number, signal: AbortSignal | undefined): Promise<string> {
+  if (signal?.aborted === true) throw new TrackerNoAnswer('cancelled');
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const joined = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
+  const aborted = whenAborted(joined, () => new TrackerNoAnswer(deadline.aborted ? 'timeout' : 'cancelled'));
+  try {
+    const token = await Promise.race([Promise.resolve().then(accessToken), aborted.promise]);
+    if (!credential(token)) throw new TrackerGrantRefused();
+    return token;
+  } catch (error) {
+    throw supplierFault(error);
+  } finally {
+    aborted.dispose();
+  }
+}
+
+/** The issue's numeric id when `issue` names one, for the search to reconcile. */
+function numericId(value: string | undefined): number | undefined {
+  return value !== undefined && /^\d{1,15}$/.test(value) ? Number(value) : undefined;
 }
 
 /** Jira Cloud's REST v3 on one site, on a person's access token. */
@@ -200,7 +234,7 @@ export class JiraClient {
   static async sites(accessToken: JiraAccessToken, options: JiraClientOptions = {}, signal?: AbortSignal): Promise<JiraSite[]> {
     const transport = transportOf(options);
     const endpoints = chosenEndpoints(options.endpoints);
-    const answer = await jiraFetch(await tokenOf(accessToken), endpoints.resources, { method: 'GET' }, transport, signal);
+    const answer = await jiraFetch(await tokenOf(accessToken, transport.timeoutMs, signal), endpoints.resources, { method: 'GET' }, transport, signal);
     if (!Array.isArray(answer)) throw new TrackerFault('invalid_response');
     const sites: JiraSite[] = [];
     for (const each of answer) {
@@ -233,7 +267,7 @@ export class JiraClient {
 
   /** One call to the site's REST API, the path under `/rest/api/3`. */
   private async call(method: 'GET' | 'POST', path: string, body: unknown, signal: AbortSignal | undefined): Promise<unknown> {
-    const token = await tokenOf(this.accessToken);
+    const token = await tokenOf(this.accessToken, this.transport.timeoutMs, signal);
     return jiraFetch(token, `${this.base}${path}`, body === undefined ? { method } : { method, body }, this.transport, signal);
   }
 
@@ -339,12 +373,18 @@ export class JiraClient {
    * one whose target status is in the done category, the one named Done first. With no such transition, an issue
    * already done resolves, and any other, or one the search does not find, is `refused`. The status is read through
    * the JQL search (`issue = "<key>"`, the status field alone), whose scopes the set holds: reading the issue itself
-   * (`GET /issue/<key>`) needs granular scopes outside it, which Atlassian refuses with 401.
+   * (`GET /issue/<key>`) needs granular scopes outside it, which Atlassian refuses with 401. The search is eventually
+   * consistent, so the issue's numeric id, when known, is passed in `reconcileIssues` for a read that follows the
+   * close which wrote the status
+   * (https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-jql-post).
    *
-   * @param key The issue's key or id.
+   * @param issue The issue's key or id, or the ref `createIssue` answered.
    */
-  async closeIssue(key: string, signal?: AbortSignal): Promise<void> {
+  async closeIssue(issue: string | Pick<JiraIssueRef, 'id' | 'key'>, signal?: AbortSignal): Promise<void> {
+    const ref: Partial<Pick<JiraIssueRef, 'id' | 'key'>> = typeof issue === 'string' ? { key: issue } : isObject(issue) ? issue : {};
+    const key = typeof ref.key === 'string' && ref.key !== '' ? ref.key : ref.id;
     if (!identifier(key)) throw new TrackerFault('configuration');
+    const id = numericId(typeof issue === 'string' ? issue : typeof ref.id === 'string' ? ref.id : undefined);
     const path = `/issue/${encodeURIComponent(key)}`;
     const answer = record(await this.call('GET', `${path}/transitions`, undefined, signal));
     if (!Array.isArray(answer.transitions)) throw new TrackerFault('invalid_response');
@@ -356,10 +396,11 @@ export class JiraClient {
       await this.call('POST', `${path}/transitions`, { transition: { id: chosen.id } }, signal);
       return;
     }
-    const search = record(await this.call('POST', '/search/jql', { jql: `issue = ${jqlString(key)}`, fields: ['status'], maxResults: 1 }, signal));
+    const query = { jql: `issue = ${jqlString(key)}`, fields: ['status'], maxResults: 1, ...(id === undefined ? {} : { reconcileIssues: [id] }) };
+    const search = record(await this.call('POST', '/search/jql', query, signal));
     if (!Array.isArray(search.issues)) throw new TrackerFault('invalid_response');
-    const issue = record(search.issues[0]);
-    if (record(record(record(issue.fields).status).statusCategory).key === 'done') return;
+    const found = record(search.issues[0]);
+    if (record(record(record(found.fields).status).statusCategory).key === 'done') return;
     throw new TrackerFault('refused');
   }
 }

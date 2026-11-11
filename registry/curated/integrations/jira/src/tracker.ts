@@ -67,9 +67,12 @@ export class JiraTracker implements IssueTracker {
     return this.client.createIssue({ projectId: draft.destinationId, issueTypeId: draft.issueTypeId, summary: draft.title, description: draft.body }, signal);
   }
 
-  /** Moves the issue to its done status by its key (its id when it has no key); an issue already done resolves. */
+  /**
+   * Moves the issue to its done status by its key (its id when it has no key); an issue already done resolves. The id
+   * reconciles the status search the close may read.
+   */
   async closeIssue(ref: Pick<IssueRef, 'id' | 'key'>, signal?: AbortSignal): Promise<void> {
-    await this.client.closeIssue(ref.key === '' ? ref.id : ref.key, signal);
+    await this.client.closeIssue({ id: ref.id, key: ref.key }, signal);
   }
 
   /** Ends the access through the host's `forget`; answers `revoked: false`, since Atlassian confirms no end. */

@@ -18,8 +18,15 @@ export type JiraFailure = 'configuration' | 'invalid_response' | 'no_answer';
 
 /** A fixed failure of the pack; its message is `jira_<reason>`. */
 export class JiraFault extends Error {
-  /** @param reason Why the pack stopped. */
-  constructor(readonly reason: JiraFailure) {
+  /**
+   * @param reason Why the pack stopped.
+   * @param noAnswer For `no_answer`, how the call ended: its deadline passed, its caller cancelled it, or the connection
+   * failed.
+   */
+  constructor(
+    readonly reason: JiraFailure,
+    readonly noAnswer?: 'timeout' | 'cancelled' | 'network',
+  ) {
     super(`jira_${reason}`);
     this.name = 'JiraFault';
   }
