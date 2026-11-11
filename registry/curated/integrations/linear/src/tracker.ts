@@ -19,6 +19,32 @@ import { isObject } from './http.js';
  */
 export type LinearRevoke = () => Promise<{ revoked: boolean }>;
 
+/**
+ * The characters that open Markdown anywhere in a line: each is escaped with a backslash, which CommonMark allows
+ * before any ASCII punctuation (https://spec.commonmark.org/0.31.2/#backslash-escapes).
+ */
+const INLINE_MARKUP = /[\\`*_~[\]<>&|]/g;
+
+/**
+ * Plain text as Markdown that shows as written, since Linear reads an issue's description as Markdown (the schema's
+ * `IssueCreateInput.description`, "The issue description in markdown format"). Lines and blank lines stay where they
+ * are. In each line, the characters that open emphasis, code, strikethrough, links, tags, entities and tables are
+ * escaped, and so are a leading `#`, `-`, `+` or `=` and the `.` or `)` after a leading number, which would open a
+ * heading, a list or an underline. A line's leading spaces and tabs are left out, since four of them open a code block.
+ *
+ * @param text The plain text.
+ */
+function markdownOf(text: string): string {
+  return text
+    .split(/\r\n|\r|\n/)
+    .map((line) => {
+      const escaped = line.replace(/^[ \t]+/, '').replace(INLINE_MARKUP, '\\$&');
+      if (/^[#+=-]/.test(escaped)) return `\\${escaped}`;
+      return escaped.replace(/^(\d{1,9})([.)])/, '$1\\$2');
+    })
+    .join('\n');
+}
+
 const DONE: ReadonlySet<string> = new Set(LINEAR_DONE_STATE_TYPES);
 
 /** An issue as the tracker interface lists it: the identifier as its key, completed, canceled or duplicate as done. */
@@ -67,12 +93,14 @@ export class LinearTracker implements IssueTracker {
   }
 
   /**
-   * Opens one issue in a team, the draft's body as its description. Throws `configuration` before any call for a draft
-   * that names an issue type, which no Linear team takes.
+   * Opens one issue in a team: the title as it is, and the draft's plain-text body as a Markdown description that shows
+   * as written. Throws `configuration` before any call for a body that is not text or a draft that names an issue type,
+   * which no Linear team takes.
    */
   async createIssue(draft: IssueDraft, signal?: AbortSignal): Promise<IssueRef> {
-    if (!isObject(draft) || draft.issueTypeId !== undefined) throw new TrackerFault('configuration');
-    const issue = await this.client.createIssue({ teamId: draft.destinationId, title: draft.title, description: draft.body }, signal);
+    if (!isObject(draft) || draft.issueTypeId !== undefined || typeof draft.body !== 'string') throw new TrackerFault('configuration');
+    const description = markdownOf(draft.body);
+    const issue = await this.client.createIssue({ teamId: draft.destinationId, title: draft.title, description }, signal);
     return { id: issue.id, key: issue.identifier, url: issue.url };
   }
 

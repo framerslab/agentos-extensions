@@ -306,7 +306,7 @@ export class LinearClient {
    * Closes an issue: it reads the issue's state and its team's completed states, and moves the issue to the completed
    * state with the lowest position, the first a team's board shows. An issue already done (completed, canceled or
    * duplicate) is left as it is, with no write. Throws `refused` for a team with no completed state or a move Linear
-   * did not make, and `not_found` when Linear answers no issue.
+   * did not make, and `not_found` when Linear finds no issue with the id.
    */
   async closeIssue(issueId: string, signal?: AbortSignal): Promise<void> {
     if (!text(issueId)) throw new TrackerFault('configuration');

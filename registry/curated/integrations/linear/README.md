@@ -56,7 +56,7 @@ npm install @framers/agentos-ext-linear @framers/agentos @framers/agentos-ext-ac
 - `closeIssue(issueId)`: moves the issue to its team's completed state with the lowest position, and writes nothing for an issue already done.
 - `linearGraphql(token, operationName, query, variables)` makes one call of a host's own document under the same deadline, cap and faults.
 
-`LinearTracker` implements `IssueTracker` on the client. Its destinations are teams, with `visibility: null`, since a team's issues are read inside the workspace and never in public, and `issueTypes: []`, since Linear has no issue types. A draft that names an issue type is refused before any call. Its `revoke` calls the function the host gives it, the flow's `forget` of the grant's key. It passes the account sources library's tracker conformance checks.
+`LinearTracker` implements `IssueTracker` on the client. Its destinations are teams, with `visibility: null`, since a team's issues are read inside the workspace and never in public, and `issueTypes: []`, since Linear has no issue types. A draft that names an issue type is refused before any call. A draft's body is plain text and Linear reads a description as Markdown, so the tracker writes the body as Markdown that shows as written: in each line it escapes the characters that open emphasis, code, links, tags and tables, and a leading `#`, `-`, `+`, `=` or numbered `1.`, with CommonMark's backslash escapes; lines and blank lines stay where they are, and a line's leading spaces and tabs are left out, since four of them open a code block. The title goes as it is. Its `revoke` calls the function the host gives it, the flow's `forget` of the grant's key. It passes the account sources library's tracker conformance checks.
 
 ## Configuration
 
@@ -95,6 +95,7 @@ Every call of the client and the tracker throws the account sources library's tr
 | 429, or an error with the code `RATELIMITED` | `TrackerRateLimited` with `retryAt` |
 | 401, an error with the code `AUTHENTICATION_ERROR`, or a grant the token supplier refused | `TrackerGrantRefused`: ask the person to connect again |
 | No answer by the deadline, a cancel or a failed connection | `TrackerNoAnswer` with `cause` `timeout`, `cancelled` or `network` |
+| An error of type `invalid input` named `Entity not found`, Linear's answer for an issue or a team id it cannot find | `TrackerFault('not_found')` with the status |
 | Any other status outside 2xx, or any other error | `TrackerFault('refused')` with the status |
 | An answer past the cap, or one without the fields the call needs | `TrackerFault('invalid_response')` |
 | A draft or a limit refused before any call | `TrackerFault('configuration')` |

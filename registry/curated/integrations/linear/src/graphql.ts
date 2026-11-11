@@ -6,12 +6,17 @@
  *   `Retry-After` (seconds), else from the reset header (epoch milliseconds) of each window whose remaining count ran
  *   out, else null;
  * - a 401, or an answer whose errors carry `AUTHENTICATION_ERROR`, is `TrackerGrantRefused`;
+ * - an answer whose errors say an id names nothing (type `invalid input`, message `Entity not found`, as Linear answers
+ *   an issue or a team it cannot find) is `TrackerFault('not_found')` with the status;
  * - no answer by the deadline, a cancel or a failed connection is `TrackerNoAnswer`;
  * - any other status outside 2xx, or any other error, is `TrackerFault('refused')` with the status;
  * - an answer past the cap, or a success without `data`, is `TrackerFault('invalid_response')`.
  *
- * Sources, read on 11 November 2026: https://linear.app/developers/rate-limiting and
- * https://linear.app/developers/oauth-2-0-authentication ("Make an API request").
+ * Sources, read on 11 November 2026: https://linear.app/developers/rate-limiting,
+ * https://linear.app/developers/oauth-2-0-authentication ("Make an API request"), and the SDK's error types and its
+ * end-to-end test of an id that names nothing ("Entity not found - Could not find referenced Issue"):
+ * https://github.com/linear/linear/blob/master/packages/sdk/src/error.ts and
+ * https://github.com/linear/linear/blob/master/packages/sdk/src/_tests/bundle.test.ts.
  * @module agentos-ext-linear/graphql
  */
 
@@ -85,6 +90,13 @@ function unauthenticated(error: unknown): boolean {
   return code === 'AUTHENTICATION_ERROR' || type === 'authentication error';
 }
 
+/** Whether an error says an id names nothing Linear holds. Its message is compared, never copied into a fault. */
+function missingEntity(error: unknown): boolean {
+  const { type } = extensionsOf(error);
+  const message = isObject(error) ? error.message : undefined;
+  return type === 'invalid input' && typeof message === 'string' && message.startsWith('Entity not found');
+}
+
 /**
  * The data of an answer, or the fault it reads as.
  *
@@ -96,6 +108,7 @@ function dataOf(answer: Answer): Record<string, unknown> {
   const errors: unknown[] = Array.isArray(body.errors) ? body.errors : [];
   if (status === 429 || errors.some(rateLimited)) throw new TrackerRateLimited(linearRetryAt(headers), status);
   if (status === 401 || errors.some(unauthenticated)) throw new TrackerGrantRefused(status);
+  if (errors.some(missingEntity) && (status === 200 || status === 400)) throw new TrackerFault('not_found', status);
   if (status < 200 || status > 299 || errors.length > 0) throw new TrackerFault('refused', status);
   if (!isObject(body.data) || Array.isArray(body.data)) throw new TrackerFault('invalid_response', status);
   return body.data;
