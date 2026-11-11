@@ -1533,7 +1533,7 @@ test('9b a latest with no tag whose document names this repository is not foreig
   assert.deepEqual(result.foreign, []);
 });
 
-// 9c-9m. An adopted package: a copy this repository takes over from the repository npm's versions name.
+// 9c-9n. An adopted package: a copy this repository takes over from the repository npm's versions name.
 
 const OTHER_TREE = 'git+https://github.com/example/other-tree.git';
 
@@ -1764,6 +1764,19 @@ test("9m a version of the other repository's whose gitHead this clone holds gets
     result.repairs.filter((record) => record.name === ALPHA),
     [{ name: ALPHA, version: '0.3.4', commit: handed, kind: 'tag' }],
   );
+});
+
+test("9n an adopted package whose handover version is tagged here and served by npm, but not listed yet, is decided from that version", async () => {
+  const { ws, table } = handover();
+  const handed = ws.head();
+  ws.tag(ALPHA, '0.3.4', handed);
+  // npm serves 0.3.4's own document, but its package document still lists the other repository's versions alone.
+  table[ALPHA].versions['0.3.4'] = { gitHead: handed, hidden: true, repository: { type: 'git', url: `git+https://github.com/${REPOSITORY}.git` } };
+
+  const result = await plan(ws, { table, releases: [`${ALPHA}@0.3.4`] });
+
+  assert.deepEqual(pick(alpha(result)), { planned: null, bump: null, newest: '0.3.4', baseCommit: handed, baseSource: 'tag' });
+  assert.deepEqual(result.repairs, []);
 });
 
 test("9h apply writes the adopted package's version, its release notes say where its earlier versions came from, and the summary names it", async () => {
