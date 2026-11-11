@@ -68,8 +68,8 @@ export class JiraTracker implements IssueTracker {
   }
 
   /**
-   * Moves the issue to its done status by its key (its id when it has no key); an issue already done resolves. The id
-   * reconciles the status search the close may read.
+   * Moves the issue to its done status by its key (its id when it has no key); an issue already done resolves and is
+   * left as it is. The id reconciles the status search the close reads.
    */
   async closeIssue(ref: Pick<IssueRef, 'id' | 'key'>, signal?: AbortSignal): Promise<void> {
     await this.client.closeIssue({ id: ref.id, key: ref.key }, signal);

@@ -51,6 +51,8 @@ function memorySite() {
   add({ id: '20003', key: 'ABC-3', projectId: '10000', summary: 'Someone else’s', description: null, category: 'new', assignee: 'someone', updated: '2026-11-10T13:00:00.000+0000' });
   add({ id: '20004', key: 'ABC-4', projectId: '10000', summary: 'Already done', description: null, category: 'done', assignee: 'me', updated: '2026-11-10T14:00:00.000+0000' });
   let made = 100;
+  /** The keys of the issues the tracker created, in order. */
+  const created: string[] = [];
   const state = { rateLimitNext: false, grantEnded: false };
   // Two statuses in the done category, as many workflows have: a status reached from Done can still be done.
   const transitions = [
@@ -111,6 +113,7 @@ function memorySite() {
       made += 1;
       const issue = { id: String(made), key: `${project.key}-${made}`, projectId: project.id, summary: body.fields.summary, description: body.fields.description, category: 'new' as const, assignee: null, updated: '2026-11-10T15:00:00.000+0000' };
       add(issue);
+      created.push(issue.key);
       return json({ id: issue.id, key: issue.key, self: `${API}/issue/${issue.id}` }, 201);
     }
     const transitionsPath = /^\/issue\/([^/]+)\/transitions$/.exec(path);
@@ -131,7 +134,7 @@ function memorySite() {
     return json({}, 404);
   };
 
-  return { projects, issues, state, route };
+  return { projects, issues, created, state, route };
 }
 
 const site = memorySite();
@@ -222,8 +225,7 @@ describe('JiraTracker', () => {
   });
 
   it('left the issue the conformance checks created and closed twice at Done, the status its first close chose', () => {
-    const made = [...site.issues.values()].filter((each) => Number(each.id) > 100);
-    expect(made.map((each) => each.status)).toEqual(['Done']);
+    expect(site.created.map((key) => site.issues.get(key)?.status)).toEqual(['Done']);
   });
 
   it('refuses an issue without an issue type before any call', async () => {

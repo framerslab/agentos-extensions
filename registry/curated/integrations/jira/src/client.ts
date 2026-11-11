@@ -369,14 +369,16 @@ export class JiraClient {
   }
 
   /**
-   * Moves an issue to its done status: reads its transitions (`GET /issue/<key>/transitions`) and posts the available
-   * one whose target status is in the done category, the one named Done first. With no such transition, an issue
-   * already done resolves, and any other, or one the search does not find, is `refused`. The status is read through
-   * the JQL search (`issue = "<key>"`, the status field alone), whose scopes the set holds: reading the issue itself
-   * (`GET /issue/<key>`) needs granular scopes outside it, which Atlassian refuses with 401. The search is eventually
-   * consistent, so the issue's numeric id, when known, is passed in `reconcileIssues` for a read that follows the
-   * close which wrote the status
-   * (https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-jql-post).
+   * Moves an issue to its done status: reads its transitions (`GET /issue/<key>/transitions`), then its status. An
+   * issue already in the done category resolves and is left as it is, since its workflow may offer a move to another
+   * done status (Done to Won't Do) or back to its own, either of which would rewrite how it was closed. Any other
+   * issue takes the available transition whose target status is in the done category, the one named Done first; with
+   * none, it is `refused`. The status is read through the JQL search (`issue = "<key>"`, the status field alone), whose
+   * scopes the set holds: reading the issue itself (`GET /issue/<key>`) needs granular scopes outside it, which
+   * Atlassian refuses with 401. The search is eventually consistent, so the issue's numeric id, when known, is passed
+   * in `reconcileIssues` for a read that follows the change which wrote the status
+   * (https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-jql-post);
+   * an issue the search does not find is read as not done.
    *
    * @param issue The issue's key or id, or the ref `createIssue` answered.
    */
@@ -388,19 +390,16 @@ export class JiraClient {
     const path = `/issue/${encodeURIComponent(key)}`;
     const answer = record(await this.call('GET', `${path}/transitions`, undefined, signal));
     if (!Array.isArray(answer.transitions)) throw new TrackerFault('invalid_response');
-    const done = answer.transitions
-      .map(record)
-      .filter((each) => identifier(each.id) && each.isAvailable !== false && record(record(each.to).statusCategory).key === 'done');
-    const chosen = done.find((each) => typeof each.name === 'string' && each.name.trim().toLowerCase() === 'done') ?? done[0];
-    if (chosen !== undefined) {
-      await this.call('POST', `${path}/transitions`, { transition: { id: chosen.id } }, signal);
-      return;
-    }
     const query = { jql: `issue = ${jqlString(key)}`, fields: ['status'], maxResults: 1, ...(id === undefined ? {} : { reconcileIssues: [id] }) };
     const search = record(await this.call('POST', '/search/jql', query, signal));
     if (!Array.isArray(search.issues)) throw new TrackerFault('invalid_response');
     const found = record(search.issues[0]);
     if (record(record(record(found.fields).status).statusCategory).key === 'done') return;
-    throw new TrackerFault('refused');
+    const done = answer.transitions
+      .map(record)
+      .filter((each) => identifier(each.id) && each.isAvailable !== false && record(record(each.to).statusCategory).key === 'done');
+    const chosen = done.find((each) => typeof each.name === 'string' && each.name.trim().toLowerCase() === 'done') ?? done[0];
+    if (chosen === undefined) throw new TrackerFault('refused');
+    await this.call('POST', `${path}/transitions`, { transition: { id: chosen.id } }, signal);
   }
 }
