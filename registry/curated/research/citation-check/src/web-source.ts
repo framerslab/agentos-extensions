@@ -195,8 +195,9 @@ export class WebPageSourceProvider implements PublicSourceProvider {
     if (url === null) return { kind: 'skipped', status: null };
     const phrase = this.phrases.get(url) ?? '';
     const { allowUrl, fallback, logger } = this.options;
+    const transport = await this.transportOf();
     const page = await readPage(url, {
-      transport: await this.transportOf(),
+      transport,
       scraper: null,
       timeoutMs: this.timeoutMs,
       maxBytes: this.maxBytes,

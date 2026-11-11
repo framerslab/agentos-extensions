@@ -638,6 +638,8 @@ async function scrape(url: string, scraper: PageScraper, options: PageReaderOpti
  * @param options - How to read it.
  */
 export async function readPage(url: string, options: PageReaderOptions): Promise<PageRead> {
+  // A signal that has already fired never fires again, so a transport waiting on it would wait for good.
+  options.signal?.throwIfAborted();
   const first = await attempt(url, options);
   if (first.kind === 'read') return first.page;
   if (first.failure === 'no_text' && first.status === 200 && options.fallback !== undefined) {
