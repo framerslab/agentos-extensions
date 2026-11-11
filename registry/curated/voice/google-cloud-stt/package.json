@@ -29,7 +29,7 @@
     "@google-cloud/speech": "^6.0.0"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.15.81",
+    "@framers/agentos": "^0.16.0",
     "@google-cloud/speech": "^6.0.0",
     "typescript": "^6.0.3",
     "vitest": "^5.1.0"
