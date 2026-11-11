@@ -8,7 +8,7 @@
  */
 import {
   isTrackerKindWord, TrackerFault, TrackerRateLimited,
-  type IssueTracker, type TrackerDestination, type TrackerIssue,
+  type IssueDraft, type IssueTracker, type TrackerDestination, type TrackerIssue,
 } from './trackers.js';
 
 /** A tracker over a fixture, and what the fixture holds. */
@@ -21,8 +21,12 @@ export interface TrackerHarness {
     kind: string;
     /** The ids of at least two destinations the fixture lists, the first one taking a new issue. */
     destinationIds: readonly string[];
-    /** The keys of the open issues the fixture assigns to the person, at least one. */
+    /** All open assigned keys, newest change first: at least two distinct keys with distinct update times, fitting in the default page. */
     assignedIssueKeys: readonly string[];
+    /** At least one open issue assigned to someone else, present in the fixture but excluded from the assigned listing. */
+    otherIssueKeys: readonly string[];
+    /** At least one done issue assigned to the person, present in the fixture but excluded from the assigned listing. */
+    doneIssueKeys: readonly string[];
     /** The issue type to open with in the first destination, where the tracker asks for one. */
     issueTypeId?: string;
     /** Whether the tracker has a way to end its access (a revocation endpoint), so its revoke must end the grant. */
@@ -32,10 +36,12 @@ export interface TrackerHarness {
   issueState: (ref: { id: string; key: string }) => Promise<'open' | 'done' | undefined>;
   /** Reads the id of the destination an issue is in from the fixture's own record, never through the tracker, so an issue opened elsewhere fails. */
   issueDestination: (ref: { id: string; key: string }) => Promise<string | undefined>;
+  /** Reads the stored title and body from the fixture, decoding vendor markup to plain text with paragraph breaks intact. */
+  issueText: (ref: { id: string; key: string }) => Promise<Pick<IssueDraft, 'title' | 'body'> | undefined>;
   /** Reads from the fixture's own record whether the grant was ended there, never through the tracker, so a revoke that claims an end it never made fails. */
   grantEnded: () => Promise<boolean>;
-  /** Makes the fixture answer a rate limit to the next call; left out where the fixture cannot. */
-  rateLimitNext?: () => void;
+  /** Arms a rate limit and returns its expected epoch-millisecond retry time, or null when absent. Fix the clock for relative delays. */
+  rateLimitNext?: () => number | null;
 }
 
 /** One check: its name, and a run that throws an `Error` starting with that name when the tracker breaks the contract. */
@@ -132,6 +138,16 @@ function wholeIssue(each: TrackerIssue): boolean {
 export function trackerConformance(harness: TrackerHarness): ConformanceCheck[] {
   const { tracker, fixture } = harness;
   const made: { id: string; key: string } = { id: '', key: '' };
+  const draft = (failure: Failure): IssueDraft => {
+    const destinationId = fixture.destinationIds[0];
+    if (destinationId === undefined) throw failure('the fixture names no destination');
+    return {
+      destinationId,
+      title: 'Send the slides to the board',
+      body: 'From a meeting.\n\nOpened with a conformance check.',
+      ...(fixture.issueTypeId === undefined ? {} : { issueTypeId: fixture.issueTypeId }),
+    };
+  };
   return [
     check("the kind is a known tracker kind or the tracker's own word", async (failure) => {
       if (tracker.kind !== fixture.kind) throw failure(`kind ${tracker.kind}`);
@@ -145,31 +161,44 @@ export function trackerConformance(harness: TrackerHarness): ConformanceCheck[] 
       for (const each of destinations) if (!wholeDestination(each)) throw failure(`destination ${String(each?.id)}`);
     }),
     check("the assigned issues are the fixture's open ones, each with an absolute address", async (failure) => {
+      const assigned = new Set(fixture.assignedIssueKeys);
+      if (assigned.size < 2 || assigned.size !== fixture.assignedIssueKeys.length) {
+        throw failure('the fixture needs at least two distinct assigned issues');
+      }
+      if (fixture.otherIssueKeys.length === 0 || fixture.doneIssueKeys.length === 0) {
+        throw failure('the fixture needs other people’s and done issues');
+      }
+      for (const key of [...fixture.otherIssueKeys, ...fixture.doneIssueKeys]) {
+        if (assigned.has(key)) throw failure('the fixture includes an excluded issue among its assigned keys');
+      }
       const issues = await tracker.assignedIssues();
       if (!Array.isArray(issues)) throw failure('no list');
       const keys = issues.map((each) => each?.key);
       for (const key of fixture.assignedIssueKeys) if (!keys.includes(key)) throw failure(`missing ${key}`);
       for (const each of issues) if (!wholeIssue(each)) throw failure(`issue ${String(each?.key)}`);
+      for (const key of keys) if (!assigned.has(key)) throw failure(`unexpected issue ${String(key)}`);
+      if (keys.length !== fixture.assignedIssueKeys.length || keys.some((key, index) => key !== fixture.assignedIssueKeys[index])) {
+        throw failure('assigned issue order differs from the fixture');
+      }
       const first = await tracker.assignedIssues({ limit: 1 });
       if (!Array.isArray(first)) throw failure('no list');
       if (first.length > 1) throw failure(`limit 1 answered ${first.length}`);
+      if (first.length !== 1 || !wholeIssue(first[0]) || first[0].key !== fixture.assignedIssueKeys[0]) {
+        throw failure('limit 1 did not answer the newest assigned issue');
+      }
     }),
     check('an issue created in the first destination has an id, a key and an absolute address', async (failure) => {
-      const destinationId = fixture.destinationIds[0];
-      if (destinationId === undefined) throw failure('the fixture names no destination');
-      const ref = await tracker.createIssue({
-        destinationId,
-        title: 'Send the slides to the board',
-        body: 'From a meeting.\n\nOpened with a conformance check.',
-        ...(fixture.issueTypeId === undefined ? {} : { issueTypeId: fixture.issueTypeId }),
-      });
+      const input = draft(failure);
+      const ref = await tracker.createIssue(input);
       if (!text(ref?.id) || !text(ref.key) || !absolute(ref.url)) {
         throw failure(`ref ${JSON.stringify({ id: ref?.id, key: ref?.key })}`);
       }
       made.id = ref.id;
       made.key = ref.key;
       const opened = await harness.issueDestination(made);
-      if (opened !== destinationId) throw failure(`opened in ${String(opened)}`);
+      if (opened !== input.destinationId) throw failure(`opened in ${String(opened)}`);
+      const stored = await harness.issueText(made);
+      if (stored === undefined || stored.title !== input.title || stored.body !== input.body) throw failure('stored draft text differs');
     }),
     check('closing the created issue leaves it done in the fixture, and closing it again resolves', async (failure) => {
       if (made.id === '') throw failure('no issue was created; run the create check first');
@@ -181,8 +210,12 @@ export function trackerConformance(harness: TrackerHarness): ConformanceCheck[] 
       if (second !== 'done') throw failure(String(second));
     }),
     check('an unknown destination is refused with not_found or refused', async (failure) => {
+      // Keep every other field identical to the accepted draft, including a required issue type.
+      const input = draft(failure);
+      let destinationId = 'no-such-destination';
+      while (fixture.destinationIds.includes(destinationId)) destinationId += '-missing';
       try {
-        await tracker.createIssue({ destinationId: 'no-such-destination', title: 'x', body: '' });
+        await tracker.createIssue({ ...input, destinationId });
       } catch (error) {
         if (error instanceof TrackerFault && (error.reason === 'not_found' || error.reason === 'refused')) return;
         throw failure(thrownName(error));
@@ -191,11 +224,15 @@ export function trackerConformance(harness: TrackerHarness): ConformanceCheck[] 
     }),
     check('a rate-limited call throws TrackerRateLimited with a retry time or null', async (failure) => {
       if (harness.rateLimitNext === undefined) return;
-      harness.rateLimitNext();
+      const retryAt = harness.rateLimitNext();
+      if (retryAt !== null && !Number.isFinite(retryAt)) throw failure('the fixture names no valid retry time');
       try {
         await tracker.destinations();
       } catch (error) {
-        if (error instanceof TrackerRateLimited && (error.retryAt === null || Number.isFinite(error.retryAt))) return;
+        if (error instanceof TrackerRateLimited && (error.retryAt === null || Number.isFinite(error.retryAt))) {
+          if (error.retryAt !== retryAt) throw failure('retry time differs from the fixture');
+          return;
+        }
         throw failure(thrownName(error));
       }
       throw failure('resolved');

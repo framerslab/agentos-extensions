@@ -33,7 +33,13 @@ A call that does not go through throws a `TrackerFault` with a fixed `reason` (`
 
 A tracker is reached in one of two ways, both behind this interface: a person's OAuth grant, and a workspace's own automation, such as Linear's client credentials grant or an Atlassian API token or service account. A pack's client takes its credential from a supplier, so a pack adds the second way as a constructor when a host needs it, and no caller changes.
 
-A tracker pack's tests run `trackerConformance` over its tracker on a fixture: eight checks of the kind, the destinations and the fields each carries, the assigned issues, their fields and their `limit`, a create in the destination the draft names, a close, the refusal of an unknown destination, a rate limit and the revocation. The harness names what the fixture holds, with `revocable`, whether the tracker has a way to end its access, and gives three reads of the fixture's own record, never through the tracker: `issueState`, so a close that changes nothing fails, `issueDestination`, so an issue opened in another destination fails, and `grantEnded`, so a revoke that claims an end the fixture never saw, or leaves a revocable grant in place, fails. Each check is a `name` and a `run` that throws an `Error` starting with the name, also when one of the tracker's calls rejects: that failure names what was thrown by its name alone and keeps it as the `cause`. `run` binds nothing, so any runner calls it. The close check closes the issue the create check made, so run them in order:
+A tracker pack's tests run `trackerConformance` over its tracker on a fixture: eight checks of the kind, destinations, assigned issues, creation, closure, unknown-destination refusal, rate limits and revocation. The fixture holds at least two distinct open issues assigned to the person, with distinct update times and all fitting in the default page. List their keys in `assignedIssueKeys` newest first. Also seed at least one open issue assigned to someone else (`otherIssueKeys`) and one done issue assigned to the person (`doneIssueKeys`); neither belongs in the assigned listing. The check compares the complete list and its order, then requires `limit: 1` to return the newest whole issue.
+
+The harness reads the fixture's own record, never through the tracker: `issueState` confirms closure, `issueDestination` confirms where the issue was opened, `issueText` confirms its title and plain-text body (decode vendor markup with paragraph breaks intact), and `grantEnded` confirms revocation. Set `fixture.revocable` to whether the service has a way to end access. A revocable grant must end, and the returned `revoked` value must match the fixture even when there is no revocation endpoint.
+
+The unknown-destination draft keeps the valid draft's title, body and optional issue type, changing only its destination. `rateLimitNext`, when supplied, arms the fixture's response and returns its expected retry time in epoch milliseconds, or null only when the response gives no time. Use a fixed clock for relative delays so the check can compare the exact instant; seconds or a missing time fail when the fixture supplies milliseconds.
+
+Each check is a `name` and a `run` that throws an `Error` starting with the name, also when one of the tracker's calls rejects: that failure names what was thrown by its name alone and keeps it as the `cause`. `run` binds nothing, so any runner calls it. The close check closes the issue the create check made, so run them in order:
 
 ```ts
 import { trackerConformance } from '@framers/agentos-ext-account-sources';
@@ -41,11 +47,16 @@ import { trackerConformance } from '@framers/agentos-ext-account-sources';
 describe('the tracker', () => {
   for (const check of trackerConformance({
     tracker,                       // the pack's tracker on a grant the fixture accepts
-    fixture: { kind: 'linear', destinationIds: ['team-1', 'team-2'], assignedIssueKeys: ['ENG-1'], revocable: true },
+    fixture: {
+      kind: 'linear', destinationIds: ['team-1', 'team-2'], revocable: true,
+      assignedIssueKeys: ['ENG-1', 'OPS-1'], // newest change first
+      otherIssueKeys: ['ENG-OTHER'], doneIssueKeys: ['ENG-DONE'],
+    },
     issueState: (ref) => stub.issueState(ref),
     issueDestination: (ref) => stub.issueDestination(ref),
+    issueText: (ref) => stub.issueText(ref),
     grantEnded: () => stub.grantEnded(),
-    rateLimitNext: () => stub.limitNextCall(),   // leave it out where the fixture cannot limit
+    rateLimitNext: () => stub.limitNextCall(), // returns expected epoch milliseconds or null; omit if unsupported
   })) it(check.name, check.run);
 });
 ```
