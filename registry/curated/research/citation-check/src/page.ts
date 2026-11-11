@@ -1,8 +1,8 @@
 /**
  * @file page.ts
  * @description One page as a document and passages. A request goes out once per page, with a browser-like User-Agent
- * from the web scraper pack, a deadline and a size cap, through Node's fetch (redirects followed) or through AgentOS's
- * checked egress (every address and every redirect checked against a policy). Given rules, the reader checks the first
+ * from the web scraper pack, a deadline and a size cap, through Node's fetch or through AgentOS's checked egress (every
+ * address and every redirect checked against a policy), each following up to five redirects. Given rules, the reader checks the first
  * address against the host's rule and the origin's robots.txt before it is requested, and the transport checks every
  * redirect target the same way before its request. The answer is read by its content type: HTML and XML through
  * public-sources' `htmlToBlocks` in page mode, other text by paragraphs, a PDF or another binary not at all; its
@@ -86,7 +86,7 @@ export class PageRefusal extends Error {
   }
 }
 
-/** The most redirects a request through checked egress follows. */
+/** The most redirects a request follows, through either transport. */
 const MAX_REDIRECTS = 5;
 /** Failures a browser or a second request may mend; a 404 or a 410 is never retried. */
 const MENDABLE: ReadonlySet<PageFailure> = new Set(['timeout', 'network', 'status', 'no_text']);
@@ -212,20 +212,24 @@ function redirectTarget(location: string, from: string): string {
 }
 
 /**
- * Requests through a `fetch`, the body streamed up to the cap. With no rules, `fetch` follows the redirects itself;
- * given rules, up to five redirects are followed one at a time, each target checked before its request and one that
- * is not http or https refused (`scheme`).
+ * Requests through a `fetch`, the body streamed up to the cap, up to five redirects followed one at a time and a sixth
+ * the failure `redirects`; given rules, each target is checked before its request. A target that is not http or https
+ * is refused (`scheme`). Node's fetch hands back a redirect asked for with `redirect: 'manual'` as it came
+ * (https://github.com/nodejs/undici/issues/1193); with no rules, a `fetch` that hides it, as a browser's does, is asked
+ * again to follow its redirects itself.
  */
 export function fetchTransport(fetchFn: typeof globalThis.fetch, userAgent?: string): Transport {
   const transport: Transport = async (url, signal, rules) => {
-    if (!hasRules(rules)) {
-      const response = await fetchFn(url, { method: 'GET', redirect: 'follow', headers: requestHeaders(userAgent, null), signal });
-      return fetchAnswer(response, response.url || url);
-    }
+    const checked = hasRules(rules) ? rules : null;
+    const headers = requestHeaders(userAgent, null);
     let current = url;
     for (let hop = 0; ; hop += 1) {
-      await checkAddress(current, rules, transport, signal);
-      const response = await fetchFn(current, { method: 'GET', redirect: 'manual', headers: requestHeaders(userAgent, null), signal });
+      if (checked !== null) await checkAddress(current, checked, transport, signal);
+      const response = await fetchFn(current, { method: 'GET', redirect: 'manual', headers, signal });
+      if (response.type === 'opaqueredirect' && checked === null) {
+        const followed = await fetchFn(current, { method: 'GET', redirect: 'follow', headers, signal });
+        return fetchAnswer(followed, followed.url || current);
+      }
       const location = response.headers.get('location');
       if (response.status >= 300 && response.status < 400 && location !== null) {
         await response.body?.cancel().catch(() => undefined);
@@ -348,9 +352,16 @@ function isPdf(bytes: Uint8Array): boolean {
   return bytes.length >= 5 && Buffer.from(bytes.subarray(0, 5)).toString('latin1') === '%PDF-';
 }
 
-/** What the first bytes of a body say it is, for one that came with no content type or as plain text. */
+/**
+ * What the first bytes of a body say it is, for one that came with no content type or as plain text. A body with a
+ * UTF-16 byte order mark is read in that charset first: its NUL bytes are its ASCII characters' high bytes.
+ */
 function sniff(bytes: Uint8Array): 'html' | 'text' | 'binary' {
-  const head = Buffer.from(bytes.subarray(0, 1024)).toString('latin1');
+  const bom = bomCharset(bytes);
+  const head =
+    bom === 'utf-16le' || bom === 'utf-16be'
+      ? new TextDecoder(bom).decode(bytes.subarray(0, 2048))
+      : Buffer.from(bytes.subarray(0, 1024)).toString('latin1');
   if (/<(?:!doctype html|html|head|body|p|div|article)[\s>]/iu.test(head)) return 'html';
   return head.includes('\u0000') ? 'binary' : 'text';
 }
