@@ -49,8 +49,12 @@ export interface CheckTopicInput {
  * and keyword matching.
  */
 export class CheckTopicTool implements ITool {
+  /** Canonical tool identifier. */
+  readonly id = 'check_topic';
   /** Canonical tool name registered in the tool list. */
   readonly name = 'check_topic';
+  /** Human-readable display name. */
+  readonly displayName = 'Check Topic';
 
   /** Human-readable description shown to agents discovering this tool. */
   readonly description =
@@ -117,7 +121,7 @@ export class CheckTopicTool implements ITool {
         confidence: 1.0,
         detectedTopic: 'allowed',
       };
-      return { output: result };
+      return { success: true, output: result };
     }
 
     // Extract the metadata from the guardrail result
@@ -128,6 +132,6 @@ export class CheckTopicTool implements ITool {
       detectedTopic: typeof meta?.detectedTopic === 'string' ? meta.detectedTopic : 'unknown',
     };
 
-    return { output: result };
+    return { success: true, output: result };
   }
 }
