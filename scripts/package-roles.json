@@ -57,6 +57,7 @@
     "registry/curated/integrations/clearbit": "pack",
     "registry/curated/integrations/github": "pack",
     "registry/curated/integrations/jira": "library",
+    "registry/curated/integrations/linear": "library",
     "registry/curated/integrations/notion": "library",
     "registry/curated/integrations/telegram": "pack",
     "registry/curated/media/giphy": "pack",
@@ -145,6 +146,13 @@
       "JiraTracker",
       "JiraFault",
       "adfParagraphs"
+    ],
+    "registry/curated/integrations/linear": [
+      "LinearOAuthFlow",
+      "LinearClient",
+      "LinearTracker",
+      "LinearFault",
+      "linearGraphql"
     ],
     "registry/curated/integrations/notion": [
       "NotionOAuthFlow",

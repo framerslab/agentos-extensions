@@ -39,9 +39,10 @@ Messaging platform integrations.
 - **[@framers/agentos-ext-telegram](integrations/telegram/)**: Telegram Bot API integration
 - **[@framers/agentos-ext-telegram-bot](communications/telegram-bot/)**: Telegram bot communications handler
 
-### Integrations
-Connectors to a person's accounts in other products.
+### 🧩 Integrations
+Services a person connects with their own account.
 - **[@framers/agentos-ext-jira](integrations/jira/)**: Jira Cloud OAuth 2.0 (3LO), a REST client and the issue tracker interface (library)
+- **[@framers/agentos-ext-linear](integrations/linear/)**: Linear OAuth 2.0, a GraphQL client and the issue tracker interface (library)
 
 ### 🖥️ System
 System-level utilities.
