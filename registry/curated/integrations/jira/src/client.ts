@@ -399,8 +399,10 @@ export class JiraClient {
    * scopes the set holds: reading the issue itself (`GET /issue/<key>`) needs granular scopes outside it, which
    * Atlassian refuses with 401. The search is eventually consistent, so the issue's numeric id, when known, is passed
    * in `reconcileIssues` for a read that follows the change which wrote the status
-   * (https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-jql-post);
-   * an issue the search does not find is read as not done.
+   * (https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-jql-post).
+   * An issue the search does not find, or finds with no status category, is not moved: its status is unknown, and an
+   * issue the index has not caught up with may already be done. That close is `not_found` (or `invalid_response`),
+   * and passing the issue's id lets the search reconcile it.
    *
    * @param issue The issue's key or id, or the ref `createIssue` answered.
    */
@@ -415,8 +417,10 @@ export class JiraClient {
     const query = { jql: `issue = ${jqlString(key)}`, fields: ['status'], maxResults: 1, ...(id === undefined ? {} : { reconcileIssues: [id] }) };
     const search = record(await this.call('POST', '/search/jql', query, signal));
     if (!Array.isArray(search.issues)) throw new TrackerFault('invalid_response');
-    const found = record(search.issues[0]);
-    if (record(record(record(found.fields).status).statusCategory).key === 'done') return;
+    if (search.issues.length === 0) throw new TrackerFault('not_found');
+    const category = record(record(record(record(search.issues[0]).fields).status).statusCategory).key;
+    if (typeof category !== 'string') throw new TrackerFault('invalid_response');
+    if (category === 'done') return;
     const done = answer.transitions
       .map(record)
       .filter((each) => identifier(each.id) && each.isAvailable !== false && record(record(each.to).statusCategory).key === 'done');
