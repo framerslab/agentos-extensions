@@ -90,6 +90,17 @@ function repositoryAddress(apiBase: string, repository: string): string {
   return `${apiBase}/repos/${repository}`;
 }
 
+/**
+ * Refuses a token that is not a string or is empty or blank, before any request. GitHub answers such a bearer with
+ * 401, which a call on the person's token reads as `GitHubGrantGoneError`; a missing token is the caller's own fault,
+ * never the person's revocation.
+ *
+ * @throws TypeError for a token that is not a string or holds nothing but whitespace.
+ */
+function requireToken(token: string): void {
+  if (typeof token !== 'string' || token.trim() === '') throw new TypeError("a call on a person's token needs the token");
+}
+
 /** A call on the person's token: its bearer, its deadline, and its refusals thrown as the errors of a person's call. */
 function personRequest(token: string, timeoutMs: number | undefined): GitHubRequest {
   return { token, timeoutMs, refusedAs: personRefusal };
@@ -115,14 +126,15 @@ function personRequest(token: string, timeoutMs: number | undefined): GitHubRequ
  * @param token The person's user access token.
  * @param input The repositories to ask, and how many issues of each.
  * @param options Where calls go.
- * @throws TypeError before any request when a repository is not written `owner/name` or `perPage` is not a whole
- * number from 1 to 100.
+ * @throws TypeError before any request when the token is empty or blank, a repository is not written `owner/name` or
+ * `perPage` is not a whole number from 1 to 100.
  */
 export async function listAssignedIssues(
   token: string,
   input: ListAssignedIssuesInput,
   { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
 ): Promise<AssignedIssue[]> {
+  requireToken(token);
   const perPage = input.perPage ?? MAX_PER_PAGE;
   if (!Number.isInteger(perPage) || perPage < 1 || perPage > MAX_PER_PAGE) throw new TypeError('perPage is a whole number from 1 to 100');
   const asked = input.repositories.map((repository) => ({ repository, address: repositoryAddress(apiBase, repository) }));
@@ -176,8 +188,10 @@ function takesIssues(installation: Record<string, unknown>): boolean {
  *
  * @param token The person's user access token.
  * @param options Where calls go.
+ * @throws TypeError before any request when the token is empty or blank.
  */
 export async function issueTargets(token: string, { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {}): Promise<IssueTarget[]> {
+  requireToken(token);
   const request = personRequest(token, timeoutMs);
   const installations = await pages(fetchImpl, `${apiBase}/user/installations?per_page=${MAX_PER_PAGE}`, request, (page) =>
     itemsOf(page, 'installations', 'a page of installations'),
@@ -211,13 +225,14 @@ export async function issueTargets(token: string, { fetchImpl = fetch, apiBase =
  * @param token The person's user access token.
  * @param input The repository, the title and the body.
  * @param options Where calls go.
- * @throws TypeError before any request when the repository is not written `owner/name`.
+ * @throws TypeError before any request when the token is empty or blank or the repository is not written `owner/name`.
  */
 export async function createIssueAsUser(
   token: string,
   input: CreateIssueInput,
   { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
 ): Promise<CreatedIssue> {
+  requireToken(token);
   const address = repositoryAddress(apiBase, input.repository);
   const body = JSON.stringify({ title: input.title, body: input.body });
   const created = objectOf(await githubFetch(fetchImpl, `${address}/issues`, { ...personRequest(token, timeoutMs), method: 'POST', body }), 'an issue');
@@ -235,14 +250,15 @@ export async function createIssueAsUser(
  * @param token The person's user access token.
  * @param input The repository and the issue's number.
  * @param options Where calls go.
- * @throws TypeError before any request when the repository is not written `owner/name` or the number is not a
- * positive integer.
+ * @throws TypeError before any request when the token is empty or blank, the repository is not written `owner/name`
+ * or the number is not a positive integer.
  */
 export async function closeIssueAsUser(
   token: string,
   input: CloseIssueInput,
   { fetchImpl = fetch, apiBase = GITHUB_API_BASE, timeoutMs }: GitHubApiOptions = {},
 ): Promise<void> {
+  requireToken(token);
   const address = repositoryAddress(apiBase, input.repository);
   if (!Number.isSafeInteger(input.number) || input.number <= 0) throw new TypeError('an issue number is a positive integer');
   const answer = await githubSend(fetchImpl, `${address}/issues/${input.number}`, {

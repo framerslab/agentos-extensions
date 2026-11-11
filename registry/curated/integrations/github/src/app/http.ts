@@ -58,6 +58,7 @@ export interface GitHubRequest {
    * What a refusal is thrown as, from what it said; a {@link GitHubApiError} of its status and timing when absent. A
    * call that sets it has the message of a 403 or a 429 read whenever the answer carries no `retry-after` that can be
    * read, whatever its other headers say, since the message is what tells a secondary rate limit from the primary one.
+   * Where the headers already tell a rate limit, a message that stalls or breaks leaves the refusal told by them.
    */
   refusedAs?: (refusal: GitHubRefusal) => Error;
 }
@@ -342,10 +343,12 @@ function retryAfterAt(header: string | null, now: number): number | null {
 
 /**
  * What an answer outside 2xx said: its status, whether it was a rate limit, when to try again, and whether the limit
- * was a secondary one. A 403 whose headers do not tell a rate limit is read on to its body, under the call's deadline;
- * so is a 403 or a 429 without a `retry-after` that can be read when the call asks which limit it met
- * (`tellsSecondary`), whatever its other headers say. Any other refusal is told by its status and headers at once, its
- * body released without waiting on its cancel.
+ * was a secondary one. A 403 whose headers do not tell a rate limit is read on to its body, under the call's deadline,
+ * and a body that stops before its end throws the call's {@link GitHubNoAnswer}. A 403 or a 429 without a
+ * `retry-after` that can be read is read on to its body as well when the call asks which limit it met
+ * (`tellsSecondary`), whatever its other headers say; when those headers already tell a rate limit, a body that stops
+ * leaves the refusal told by them, its time `x-ratelimit-reset` or a minute on. Any other refusal is told by its
+ * status and headers at once, its body released without waiting on its cancel.
  */
 async function refusalOf(response: Response, deadline: CallDeadline, tellsSecondary: boolean): Promise<GitHubRefusal> {
   const now = Date.now();
@@ -355,8 +358,15 @@ async function refusalOf(response: Response, deadline: CallDeadline, tellsSecond
   const limitStatus = response.status === 403 || response.status === 429;
   const toldByHeaders = response.status === 429 || (response.status === 403 && (retryAfter !== null || exhausted));
   let named: 'secondary' | 'rate' | null = null;
-  if ((response.status === 403 && !toldByHeaders) || (tellsSecondary && limitStatus && retryAfter === null)) named = await limitNamed(response, deadline);
-  else discardBody(response);
+  if (response.status === 403 && !toldByHeaders) named = await limitNamed(response, deadline);
+  else if (tellsSecondary && limitStatus && retryAfter === null) {
+    try {
+      named = await limitNamed(response, deadline);
+    } catch {
+      // The headers already tell a rate limit and its time; the message would only have told which limit it was.
+      named = null;
+    }
+  } else discardBody(response);
   const rateLimited = toldByHeaders || named !== null;
   let retryAt = retryAfter;
   if (retryAt === null && rateLimited) {
