@@ -710,4 +710,21 @@ describe("a person's call under its deadline", () => {
       expect(late).toMatchObject({ reason: 'timeout' });
     }
   });
+
+  it('gives each request its own deadline, so a listing of several requests, each in time, answers past `timeoutMs` in all', async () => {
+    // Each answer comes 150 ms after its request: the person and two repositories, 450 ms or more in all.
+    github = await startGitHub(async (request) => {
+      await pause(150);
+      if (request.path === '/user') return { status: 200, body: { login: 'test-person', id: 501 } };
+      const name = request.path.split('/')[3] ?? '';
+      return { status: 200, body: [issue(`acme-team/${name}`, 7, `An issue in ${name}`, '2026-11-10T09:00:00Z')] };
+    });
+    const started = Date.now();
+
+    const issues = await listAssignedIssues(TOKEN, { repositories: ['acme-team/planner', 'acme-team/handbook'] }, { apiBase: github.base, timeoutMs: 300 });
+
+    expect(Date.now() - started).toBeGreaterThan(300);
+    expect(issues.map((found) => found.repository)).toEqual(['acme-team/planner', 'acme-team/handbook']);
+    expect(github.received.map((request) => request.path)).toEqual(['/user', '/repos/acme-team/planner/issues', '/repos/acme-team/handbook/issues']);
+  });
 });
