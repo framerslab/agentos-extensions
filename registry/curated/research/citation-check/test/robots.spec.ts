@@ -117,7 +117,7 @@ describe('readRobots through a transport', () => {
     expect(robotsAllows(file, RULE.token, `${ORIGIN}/a`)).toBe(false);
   });
 
-  it('refuses everything when the request fails, when its own deadline passes, or when a hop of it is refused', async () => {
+  it('refuses everything when the request fails, when its own deadline passes, or when the host’s rule refuses a hop of it', async () => {
     const broken = stubTransport(() => new TypeError('connection refused'));
     expect(await readRobots(`${ORIGIN}/a`, { transport: broken.transport, robots: RULE })).toEqual({ kind: 'disallow-all' });
 
@@ -194,14 +194,36 @@ describe('readRobots through a transport', () => {
   });
 
   it('throws the caller’s own cancellation and keeps nothing for it', async () => {
-    const stalled: Transport = (_url, signal) =>
-      new Promise((_resolve, reject) => {
+    // The first request waits for the signal; the second answers rules under which /a is allowed, which a kept
+    // disallow-all would refuse.
+    const answers = stubTransport(() => ({ status: 200, body: 'User-agent: *\nDisallow: /x\n', headers: { 'content-type': 'text/plain' } }));
+    let calls = 0;
+    const transport: Transport = (url, signal, rules) => {
+      calls += 1;
+      if (calls > 1) return answers.transport(url, signal, rules);
+      return new Promise((_resolve, reject) => {
         signal.addEventListener('abort', () => reject(signal.reason), { once: true });
       });
+    };
     const controller = new AbortController();
-    const reading = readRobots(`${ORIGIN}/a`, { transport: stalled, robots: RULE, signal: controller.signal });
+    const reading = readRobots(`${ORIGIN}/a`, { transport, robots: RULE, signal: controller.signal });
     controller.abort(new Error('caller stopped'));
     await expect(reading).rejects.toThrow('caller stopped');
+
+    const file = await readRobots(`${ORIGIN}/a`, { transport, robots: RULE });
+    expect(calls).toBe(2);
+    expect(robotsAllows(file, RULE.token, `${ORIGIN}/a`)).toBe(true);
+    expect(robotsAllows(file, RULE.token, `${ORIGIN}/x/1`)).toBe(false);
+  });
+
+  it('throws a refusal of the egress policy, the policy’s answer and not the site’s, and keeps nothing for it', async () => {
+    let refuse = true;
+    const stub = stubTransport(() => (refuse ? new PageRefusal('refused', 'scheme') : { status: 200, body: 'User-agent: *\nDisallow: /x\n', headers: { 'content-type': 'text/plain' } }));
+    await expect(readRobots(`${ORIGIN}/a`, { transport: stub.transport, robots: RULE })).rejects.toMatchObject({ name: 'PageRefusal', failure: 'refused', detail: 'scheme' });
+    refuse = false;
+    const file = await readRobots(`${ORIGIN}/a`, { transport: stub.transport, robots: RULE });
+    expect(robotsAllows(file, RULE.token, `${ORIGIN}/a`)).toBe(true);
+    expect(stub.urls()).toHaveLength(2);
   });
 
   it('asks the transport to apply the host rule to the file’s own hops', async () => {

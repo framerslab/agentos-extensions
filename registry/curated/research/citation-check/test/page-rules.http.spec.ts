@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { egressTransport, fetchTransport, readPage, UNREAD_LICENCE, type PageReaderOptions, type RobotsRule, type Transport } from '../src/index';
+import { egressTransport, fetchTransport, PageRefusal, readPage, UNREAD_LICENCE, type PageReaderOptions, type RobotsRule, type Transport } from '../src/index';
 import { guardNetwork, outsideAttempts } from './support';
 import { htmlPage, stubTransport } from './stub-transport';
 
@@ -71,6 +71,8 @@ beforeAll(async () => {
         return { status: 301, headers: { location: '/private/page' } };
       case '/icon.png':
         return { status: 302, headers: { location: `${second.origin}/icon.png` } };
+      case '/to-data':
+        return { status: 302, headers: { location: 'data:text/plain,Made up' } };
       case '/private/icon.png':
       case '/private/page':
         return { status: 200, headers: { 'content-type': 'image/png' }, body: PNG };
@@ -134,6 +136,13 @@ describe('the rules before the first request, through a transport that counts', 
     expect(page.status.outcome).toBe('read');
   });
 
+  it('ends a page with the egress policy’s own reason when the policy refuses its robots.txt, never as refused by robots', async () => {
+    const stub = stubTransport((url) => (url.endsWith('/robots.txt') ? new PageRefusal('refused', 'scheme') : ARTICLE));
+    const page = await readPage(`${ORIGIN}/article`, options(stub.transport, { robots: RULE }));
+    expect(page.status).toMatchObject({ outcome: 'unreachable', failure: 'refused', detail: 'scheme', status: null, finalUrl: null });
+    expect(stub.urls()).toEqual([`${ORIGIN}/robots.txt`]);
+  });
+
   it('hands the transport both rules for the hops it follows', async () => {
     const stub = stubTransport((url) => (url.endsWith('/robots.txt') ? { status: 404 } : ARTICLE));
     const allowUrl = (): boolean => true;
@@ -174,6 +183,17 @@ describe.each(TRANSPORTS)('every redirect hop through %s', (_name, make) => {
     expect(first.paths).toEqual(['/robots.txt', '/to-private']);
   });
 
+  it('ends a redirect to an address that is not http or https as refused for its scheme, as fetch ends one, under either rule', async () => {
+    const transport = await make();
+    const byHost = await readPage(`${first.origin}/to-data`, options(transport, { allowUrl: (url) => !new URL(url).hostname.endsWith('.internal') }));
+    expect(byHost.status).toMatchObject({ outcome: 'unreachable', failure: 'refused', detail: 'scheme', via: null });
+    expect(byHost.document).toBeNull();
+    const robots = await readPage(`${first.origin}/to-data`, options(transport, { robots: RULE }));
+    expect(robots.status).toMatchObject({ outcome: 'unreachable', failure: 'refused', detail: 'scheme', via: null });
+    expect(robots.document).toBeNull();
+    expect(first.paths).toEqual(['/to-data', '/robots.txt', '/to-data']);
+  });
+
   it('applies the rules to a binary read through the transport itself, such as an icon', async () => {
     const transport = await make();
     const allowUrl = (url: string): boolean => url.startsWith(first.origin);
@@ -186,6 +206,19 @@ describe.each(TRANSPORTS)('every redirect hop through %s', (_name, make) => {
     const icon = await transport(`${second.origin}/icon.png`, AbortSignal.timeout(2_000), { robots: RULE, allowUrl: () => true });
     expect(icon.status).toBe(200);
     expect(Buffer.from((await icon.read(1_000)) ?? new Uint8Array(0))).toEqual(PNG);
+  });
+});
+
+describe('a refusal of the egress policy under the rules', () => {
+  it('ends a page the hosted policy refuses with the policy’s reason, robots.txt and the page never requested', async () => {
+    // The hosted policy reaches https on port 443 alone, so it refuses the loopback origin's robots.txt before a byte
+    // is sent; the page ends as it does with no robots rule, with the policy's reason.
+    const transport = await egressTransport('hosted', { timeoutMs: 2_000, maxBytes: 2_000_000 });
+    const plain = await readPage(`${first.origin}/page`, options(transport));
+    const ruled = await readPage(`${first.origin}/page`, options(transport, { robots: RULE }));
+    expect(plain.status).toMatchObject({ outcome: 'unreachable', failure: 'refused', detail: 'scheme' });
+    expect(ruled.status).toMatchObject({ outcome: 'unreachable', failure: 'refused', detail: 'scheme' });
+    expect(first.paths).toEqual([]);
   });
 });
 

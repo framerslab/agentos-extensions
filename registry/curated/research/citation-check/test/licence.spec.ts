@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { readLicence } from '../src/index';
+import { scanMarkup } from '../src/meta';
 
 // The licence a page states: a link or an anchor marked rel="license", a JSON-LD `license`, or an anchor to a Creative
 // Commons deed anywhere in the page, named from the deeds' table by its address.
@@ -80,6 +81,42 @@ describe('readLicence', () => {
     const script = [
       `import { readLicence } from ${JSON.stringify(dist)};`,
       `const html = '<p>Text.</p>' + '<a x'.repeat(100000) + '<meta content="'.repeat(50000) + '<script type="application/ld+json">'.repeat(20000);`,
+      `process.stdout.write(JSON.stringify(readLicence(html, ${JSON.stringify(BASE)})));`,
+    ].join('\n');
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 5_000 });
+    expect(run.signal).toBeNull();
+    expect(JSON.parse(run.stdout)).toBeNull();
+  });
+
+  it('keeps only the links and anchors a licence is read from, at most 1,000 of each kind, and the text of a rel="license" anchor alone', () => {
+    const deed = '<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>';
+    expect(scanMarkup('<a>'.repeat(100_000), BASE).anchors.length).toBe(0);
+    const other = scanMarkup('<a href="/page">Page</a><link rel="stylesheet" href="/site.css">'.repeat(2_000), BASE);
+    expect([other.anchors.length, other.links.length]).toEqual([0, 0]);
+    expect(scanMarkup('<link rel="license" href="/terms">'.repeat(1_500), BASE).links.length).toBe(1_000);
+    expect(scanMarkup('<a rel="license" href="/terms">Terms</a>'.repeat(1_500), BASE).anchors.length).toBe(1_000);
+    const deeds = scanMarkup(deed.repeat(1_500), BASE).anchors;
+    expect(deeds.length).toBe(1_000);
+    expect(deeds[0]?.text).toBe('');
+  });
+
+  it('reads a footer deed after thousands of other anchors, and a deed a page on Creative Commons’ own site links by path', () => {
+    const footer = page('', `${'<a href="/page">Page</a>'.repeat(5_000)}<footer><a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a></footer>`);
+    expect(readLicence(footer, BASE)).toEqual({ name: 'CC BY 4.0', url: 'https://creativecommons.org/licenses/by/4.0/' });
+    expect(readLicence(page('', '<a href="/licenses/by-sa/4.0/">CC BY-SA</a>'), 'https://creativecommons.org/about/')).toEqual({
+      name: 'CC BY-SA 4.0',
+      url: 'https://creativecommons.org/licenses/by-sa/4.0/',
+    });
+  });
+
+  it('reads a 5,000,000-byte page of empty anchors and links at once, in the built package', () => {
+    // Each anchor was once kept with a search of up to 2,000 characters past it for its end: about 3.3 billion
+    // characters searched and every anchor held until the read ended, so the built package runs in a child process
+    // under a deadline.
+    const dist = new URL('../dist/index.js', import.meta.url).href;
+    const script = [
+      `import { readLicence } from ${JSON.stringify(dist)};`,
+      `const html = '<a>'.repeat(1666666) + '<link>'.repeat(833333);`,
       `process.stdout.write(JSON.stringify(readLicence(html, ${JSON.stringify(BASE)})));`,
     ].join('\n');
     const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 5_000 });
