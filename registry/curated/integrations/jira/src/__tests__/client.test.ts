@@ -185,27 +185,64 @@ describe('JiraClient', () => {
     );
   });
 
-  it('closes an issue through the transition whose target is the done category, preferring the one named Done, and resolves on an issue already done', async () => {
-    const transitions = [
+  const transitions = [
+    { id: '21', name: 'In Progress', to: { statusCategory: { key: 'indeterminate' } } },
+    { id: '41', name: "Won't do", to: { statusCategory: { key: 'done' } } },
+    { id: '31', name: 'Done', to: { statusCategory: { key: 'done' } } },
+  ];
+
+  /**
+   * A site whose issue ABC-7 (id 10001) the search reads in the status category `category` (null: the search does not
+   * find it), offering the transitions `offered` from its status. Reading the issue itself needs granular scopes
+   * outside the set, which Atlassian answers with 401.
+   */
+  const siteWith = (category: string | null, offered: unknown[]) => standIn((request) => {
+    const path = new URL(request.url).pathname;
+    if (path.endsWith('/transitions')) return request.method === 'GET' ? json({ transitions: offered }) : new Response(null, { status: 204 });
+    if (request.method === 'POST' && path.endsWith('/search/jql')) return json({ issues: category === null ? [] : [{ id: '10001', key: 'ABC-7', fields: { status: { statusCategory: { key: category } } } }], isLast: true });
+    return json({ code: 401, message: 'Unauthorized; scope does not match' }, 401);
+  });
+
+  it('closes an open issue through the transition whose target is the done category, preferring the one named Done', async () => {
+    const open = siteWith('new', transitions);
+    await new JiraClient(token, site, { fetchImpl: open.fetchImpl }).closeIssue('ABC-7');
+    expect(open.seen.map(line)).toEqual([
+      'GET /ex/jira/cloud-1/rest/api/3/issue/ABC-7/transitions',
+      'POST /ex/jira/cloud-1/rest/api/3/search/jql',
+      'POST /ex/jira/cloud-1/rest/api/3/issue/ABC-7/transitions',
+    ]);
+    expect(JSON.parse(open.seen[2]?.body ?? '{}')).toEqual({ transition: { id: '31' } });
+    const unnamed = siteWith('indeterminate', [transitions[0], { ...transitions[1], isAvailable: false }, { id: '51', name: 'Closed', to: { statusCategory: { key: 'done' } } }]);
+    await new JiraClient(token, site, { fetchImpl: unnamed.fetchImpl }).closeIssue('ABC-7');
+    expect(JSON.parse(unnamed.seen.at(-1)?.body ?? '{}')).toEqual({ transition: { id: '51' } });
+    // A search that does not find the issue yet reads it as not done.
+    const unindexed = siteWith(null, transitions);
+    await new JiraClient(token, site, { fetchImpl: unindexed.fetchImpl }).closeIssue('ABC-7');
+    expect(JSON.parse(unindexed.seen.at(-1)?.body ?? '{}')).toEqual({ transition: { id: '31' } });
+  });
+
+  it('leaves an issue already done as it is, though its workflow offers a move to another done status or back to its own', async () => {
+    // From Done, a workflow where every status reaches every other offers To Do, In Progress and Won't do: posting
+    // Won't do would rewrite how the issue was closed.
+    const fromDone = [
+      { id: '11', name: 'To Do', to: { statusCategory: { key: 'new' } } },
       { id: '21', name: 'In Progress', to: { statusCategory: { key: 'indeterminate' } } },
       { id: '41', name: "Won't do", to: { statusCategory: { key: 'done' } } },
-      { id: '31', name: 'Done', to: { statusCategory: { key: 'done' } } },
     ];
-    const open = standIn((request) => (request.method === 'GET' ? json({ transitions }) : new Response(null, { status: 204 })));
-    await new JiraClient(token, site, { fetchImpl: open.fetchImpl }).closeIssue('ABC-7');
-    expect(open.seen.map(line)).toEqual(['GET /ex/jira/cloud-1/rest/api/3/issue/ABC-7/transitions', 'POST /ex/jira/cloud-1/rest/api/3/issue/ABC-7/transitions']);
-    expect(JSON.parse(open.seen[1]?.body ?? '{}')).toEqual({ transition: { id: '31' } });
-    const unnamed = standIn((request) => (request.method === 'GET' ? json({ transitions: [transitions[0], { ...transitions[1], isAvailable: false }, { id: '51', name: 'Closed', to: { statusCategory: { key: 'done' } } }] }) : new Response(null, { status: 204 })));
-    await new JiraClient(token, site, { fetchImpl: unnamed.fetchImpl }).closeIssue('ABC-7');
-    expect(JSON.parse(unnamed.seen[1]?.body ?? '{}')).toEqual({ transition: { id: '51' } });
-    // With no done transition the status is read through the JQL search, whose scopes the set holds; reading the issue
-    // itself needs granular scopes outside it, which Atlassian answers with 401.
-    const statusOf = (key: string | null) => standIn((request) => {
-      const path = new URL(request.url).pathname;
-      if (path.endsWith('/transitions')) return json({ transitions: [transitions[0]] });
-      if (request.method === 'POST' && path.endsWith('/search/jql')) return json({ issues: key === null ? [] : [{ id: '10001', key: 'ABC-7', fields: { status: { statusCategory: { key } } } }], isLast: true });
-      return json({ code: 401, message: 'Unauthorized; scope does not match' }, 401);
-    });
+    const done = siteWith('done', fromDone);
+    await new JiraClient(token, site, { fetchImpl: done.fetchImpl }).closeIssue({ id: '10001', key: 'ABC-7' });
+    expect(done.seen.map(line)).toEqual(['GET /ex/jira/cloud-1/rest/api/3/issue/ABC-7/transitions', 'POST /ex/jira/cloud-1/rest/api/3/search/jql']);
+    expect(JSON.parse(done.seen[1]?.body ?? '{}')).toEqual({ jql: 'issue = "ABC-7"', fields: ['status'], maxResults: 1, reconcileIssues: [10001] });
+    // A global transition to Done offered on an issue already in Done is not posted either.
+    const looped = siteWith('done', [fromDone[0], { id: '31', name: 'Done', to: { statusCategory: { key: 'done' } } }]);
+    await new JiraClient(token, site, { fetchImpl: looped.fetchImpl }).closeIssue('ABC-7');
+    expect(looped.seen.filter((each) => each.method === 'POST').map(line)).toEqual(['POST /ex/jira/cloud-1/rest/api/3/search/jql']);
+  });
+
+  it('with no done transition, reads the status through the JQL search: done resolves, anything else is refused', async () => {
+    // The status is read through the JQL search, whose scopes the set holds; reading the issue itself needs granular
+    // scopes outside it, which Atlassian answers with 401.
+    const statusOf = (category: string | null) => siteWith(category, [transitions[0]]);
     // The search is eventually consistent, so the issue's id is reconciled for a read after the close that wrote it.
     const done = statusOf('done');
     await new JiraClient(token, site, { fetchImpl: done.fetchImpl }).closeIssue({ id: '10001', key: 'ABC-7' });

@@ -1,11 +1,10 @@
 /**
  * @fileoverview The account sources' tracker conformance checks over `JiraTracker`, on a REST stand-in that keeps a
  * Jira Cloud site in memory: two projects that take a Task, the person's open and done issues and someone else's,
- * issues created into a map with their descriptions in Atlassian Document Format, transitions to the other status
- * categories, a search index that follows a change only when the search reconciles the issue, an issue's own read
- * refused as Atlassian refuses a scope the grant lacks, a
- * rate limit armed on demand, and the grant ended by the host's `forget` of a real `JiraOAuthFlow`, which has no
- * revocation endpoint to call.
+ * issues created into a map with their descriptions in Atlassian Document Format, transitions to every other status
+ * with two statuses in the done category, a search index that follows a change only when the search reconciles the
+ * issue, an issue's own read refused as Atlassian refuses a scope the grant lacks, a rate limit armed on demand, and the
+ * grant ended by the host's `forget` of a real `JiraOAuthFlow`, which has no revocation endpoint to call.
  */
 
 import { trackerConformance, TrackerFault } from '@framers/agentos-ext-account-sources';
@@ -29,6 +28,8 @@ interface SiteIssue {
   projectId: string;
   summary: string;
   description: unknown;
+  /** The status's name; `category` is its status category. */
+  status: string;
   category: Category;
   /** The category the search index holds, which follows a change only when a search reconciles the issue's id. */
   indexed: Category;
@@ -43,17 +44,20 @@ function memorySite() {
     { id: '10010', key: 'OPS', name: 'Operations', issueTypes: [{ id: '10001', name: 'Task', subtask: false }] },
   ];
   const issues = new Map<string, SiteIssue>();
-  const add = (issue: Omit<SiteIssue, 'indexed'>) => issues.set(issue.key, { ...issue, indexed: issue.category });
+  const statusNamed: Record<Category, string> = { new: 'To Do', indeterminate: 'In Progress', done: 'Done' };
+  const add = (issue: Omit<SiteIssue, 'indexed' | 'status'>) => issues.set(issue.key, { ...issue, status: statusNamed[issue.category], indexed: issue.category });
   add({ id: '20001', key: 'ABC-1', projectId: '10000', summary: 'Send the slides', description: null, category: 'new', assignee: 'me', updated: '2026-11-10T12:00:00.000+0000' });
   add({ id: '20002', key: 'OPS-2', projectId: '10010', summary: 'Book the room', description: null, category: 'indeterminate', assignee: 'me', updated: '2026-11-09T12:00:00.000+0000' });
   add({ id: '20003', key: 'ABC-3', projectId: '10000', summary: 'Someone else’s', description: null, category: 'new', assignee: 'someone', updated: '2026-11-10T13:00:00.000+0000' });
   add({ id: '20004', key: 'ABC-4', projectId: '10000', summary: 'Already done', description: null, category: 'done', assignee: 'me', updated: '2026-11-10T14:00:00.000+0000' });
   let made = 100;
   const state = { rateLimitNext: false, grantEnded: false };
+  // Two statuses in the done category, as many workflows have: a status reached from Done can still be done.
   const transitions = [
-    { id: '11', name: 'To Do', to: { statusCategory: { key: 'new' } } },
-    { id: '21', name: 'In Progress', to: { statusCategory: { key: 'indeterminate' } } },
-    { id: '31', name: 'Done', to: { statusCategory: { key: 'done' } } },
+    { id: '11', name: 'To Do', to: { name: 'To Do', statusCategory: { key: 'new' } } },
+    { id: '21', name: 'In Progress', to: { name: 'In Progress', statusCategory: { key: 'indeterminate' } } },
+    { id: '31', name: 'Done', to: { name: 'Done', statusCategory: { key: 'done' } } },
+    { id: '41', name: "Won't Do", to: { name: "Won't Do", statusCategory: { key: 'done' } } },
   ];
   const byIdOrKey = (idOrKey: string) => issues.get(idOrKey) ?? [...issues.values()].find((each) => each.id === idOrKey);
   const projectOf = (issue: SiteIssue) => projects.find((each) => each.id === issue.projectId)!;
@@ -105,7 +109,7 @@ function memorySite() {
       if (project === undefined) return json({ errorMessages: [], errors: { project: 'valid project is required' } }, 400);
       if (!project.issueTypes.some((type) => type.id === body.fields?.issuetype?.id && !type.subtask)) return json({ errors: { issuetype: 'invalid' } }, 400);
       made += 1;
-      const issue: SiteIssue = { id: String(made), key: `${project.key}-${made}`, projectId: project.id, summary: body.fields.summary, description: body.fields.description, category: 'new', indexed: 'new', assignee: null, updated: '2026-11-10T15:00:00.000+0000' };
+      const issue = { id: String(made), key: `${project.key}-${made}`, projectId: project.id, summary: body.fields.summary, description: body.fields.description, category: 'new' as const, assignee: null, updated: '2026-11-10T15:00:00.000+0000' };
       add(issue);
       return json({ id: issue.id, key: issue.key, self: `${API}/issue/${issue.id}` }, 201);
     }
@@ -113,10 +117,12 @@ function memorySite() {
     if (transitionsPath !== null) {
       const issue = byIdOrKey(decodeURIComponent(transitionsPath[1]!));
       if (issue === undefined) return json({ errorMessages: ['Issue does not exist'] }, 404);
-      // As Jira lists them: the transitions to a status of another category than the issue's own.
-      if (request.method === 'GET') return json({ transitions: transitions.filter((each) => each.to.statusCategory.key !== issue.category) });
+      // As Jira lists them in a workflow where every status reaches every other: the transitions to each status but
+      // the issue's own, done-category ones among them when the issue is done.
+      if (request.method === 'GET') return json({ transitions: transitions.filter((each) => each.to.name !== issue.status) });
       const chosen = transitions.find((each) => each.id === body.transition?.id);
       if (chosen === undefined) return json({ errorMessages: ['no transition'] }, 400);
+      issue.status = chosen.to.name;
       issue.category = chosen.to.statusCategory.key as Category;
       return new Response(null, { status: 204 });
     }
@@ -204,7 +210,7 @@ describe('JiraTracker', () => {
     expect(JSON.stringify(issues)).not.toContain('account-');
   });
 
-  it('closes an issue already done, which Jira offers no done transition for, by reading its status through the search', async () => {
+  it('leaves an issue already done as it is, though Jira offers a transition to another done status, by reading its status through the search', async () => {
     const before = seen.length;
     await plain.closeIssue({ id: '20004', key: 'ABC-4' });
     expect(seen.slice(before).map((each) => `${each.method} ${new URL(each.url).pathname}`)).toEqual([
@@ -212,7 +218,12 @@ describe('JiraTracker', () => {
       `POST ${new URL(API).pathname}/search/jql`,
     ]);
     expect(JSON.parse(seen.at(-1)?.body ?? '{}').reconcileIssues).toEqual([20004]);
-    expect(site.issues.get('ABC-4')?.category).toBe('done');
+    expect(site.issues.get('ABC-4')?.status).toBe('Done');
+  });
+
+  it('left the issue the conformance checks created and closed twice at Done, the status its first close chose', () => {
+    const made = [...site.issues.values()].filter((each) => Number(each.id) > 100);
+    expect(made.map((each) => each.status)).toEqual(['Done']);
   });
 
   it('refuses an issue without an issue type before any call', async () => {
