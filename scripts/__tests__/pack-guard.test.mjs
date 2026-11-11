@@ -1320,6 +1320,8 @@ test('every publishable pack built in the workspace reports its own package vers
     }
   }
   t.diagnostic(`${checked} packs constructed from the workspace build`);
+  // CI builds every pack, so a run in which none constructs checked no version at all.
+  assert.ok(checked > 0 || !process.env.CI, 'no pack constructed from the workspace build, so no version was checked');
   assert.deepEqual(stale, [], `packs reporting a version other than their package's:\n${stale.join('\n')}`);
 });
 
