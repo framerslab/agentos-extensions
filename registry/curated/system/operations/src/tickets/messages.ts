@@ -98,9 +98,21 @@ export function messageView(row: MessageRow, pictures: readonly PictureRow[]): O
 const LAST_AT: Readonly<Record<NewMessage['sender'], string>> = { person: 'last_person_at', staff: 'last_staff_at', system: 'last_system_at' };
 
 /**
- * Writes `message` through `writer` and moves the request's pointer for its sender and
- * `updated_at`; answers the new row's id. The body is cleaned of control characters here; the
- * caller cut its links (D19, D26).
+ * What a sender's message does to `first_unanswered_at`, the time of the person's first message
+ * after the team's latest one: the person's sets it when nothing of theirs waits yet, staff's clears
+ * it, the system's leaves it, since nobody owes an answer to an event.
+ */
+const FIRST_UNANSWERED: Readonly<Record<NewMessage['sender'], string>> = {
+  person: ', first_unanswered_at = COALESCE(first_unanswered_at, ?)',
+  staff: ', first_unanswered_at = NULL',
+  system: '',
+};
+
+/**
+ * Writes `message` through `writer` and moves the request's pointer for its sender,
+ * `first_unanswered_at` and `updated_at` in one statement, inside the caller's transaction, which
+ * holds the request's row locked on PostgreSQL; answers the new row's id. The body is cleaned of
+ * control characters here; the caller cut its links (D19, D26).
  */
 export async function insertMessage(writer: StorageAdapter, tables: TicketTables, message: NewMessage): Promise<string> {
   const id = newId('msg');
@@ -122,7 +134,11 @@ export async function insertMessage(writer: StorageAdapter, tables: TicketTables
       message.at,
     ],
   );
-  await writer.run(`UPDATE ${tables.tickets} SET ${LAST_AT[message.sender]} = ?, updated_at = ? WHERE id = ?`, [message.at, message.at, message.ticketId]);
+  const first = FIRST_UNANSWERED[message.sender];
+  await writer.run(
+    `UPDATE ${tables.tickets} SET ${LAST_AT[message.sender]} = ?${first}, updated_at = ? WHERE id = ?`,
+    message.sender === 'person' ? [message.at, message.at, message.at, message.ticketId] : [message.at, message.at, message.ticketId],
+  );
   return id;
 }
 

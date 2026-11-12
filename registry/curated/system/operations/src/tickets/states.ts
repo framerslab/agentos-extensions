@@ -32,6 +32,8 @@ export interface TicketRow {
   readonly last_staff_at: number | string | null;
   readonly last_system_at: number | string | null;
   readonly last_mail_at: number | string | null;
+  /** The person's first message after the team's latest one, null when the team spoke last or nobody has written (migration 0005). */
+  readonly first_unanswered_at: number | string | null;
   readonly resolved_at: number | string | null;
   readonly closed_at: number | string | null;
   readonly created_at: number | string;
@@ -107,6 +109,7 @@ export function personTicket(row: TicketRow): OpsTicket {
     updatedAt: numberOf(row.updated_at),
     lastPersonAt: timeOf(row.last_person_at),
     lastStaffAt: lastStaff,
+    firstUnansweredAt: timeOf(row.first_unanswered_at),
     unread: lastStaff !== null && (read === null || lastStaff > read),
   };
 }
