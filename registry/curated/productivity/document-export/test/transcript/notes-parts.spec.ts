@@ -98,6 +98,14 @@ describe('the note bundle in parts', () => {
     expect(planNoteBundle(named, { notes: NOTE_BUNDLE_LIMITS.notes, bytes: 10_000, readBytes: 8000 })).toHaveLength(1);
   });
 
+  it('refuses a read bound that is not a number of bytes, in the plan and in the write', async () => {
+    const one = snapshot([note(1, 'x')]);
+    for (const readBytes of [Number.NaN, -1]) {
+      expect(() => planNoteBundle(one, { notes: NOTE_BUNDLE_LIMITS.notes, bytes: NOTE_BUNDLE_LIMITS.bytes, readBytes })).toThrow(RangeError);
+      await expect(writeNoteBundlePart(one, planNoteBundle(one), 0, { readBytes })).rejects.toBeInstanceOf(RangeError);
+    }
+  });
+
   it("refuses to write a part whose manifest, the snapshot's own id and time among it, would pass the read's bound", async () => {
     // The plan does not hold the snapshot's id, so the writer checks the part as it writes it, escaped characters counted.
     for (const id of ['x'.repeat(2000), '"'.repeat(1000)]) {

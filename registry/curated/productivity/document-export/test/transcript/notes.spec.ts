@@ -204,6 +204,25 @@ describe('the note bundle, named for any file system and read strictly', () => {
     expect(read.notes.map((note) => note.block)).toEqual(snapshot.notes.map((note) => note.block));
   });
 
+  it('gives two sibling folders of one name, whatever its case, two paths, so their notes stay apart when the archive is extracted', async () => {
+    const snapshot: BundleSnapshot = {
+      ...SNAPSHOT,
+      folders: [
+        { id: WORK, name: 'Work', parentId: null },
+        { id: RESEARCH, name: 'work', parentId: null },
+      ],
+      notes: [
+        { ...SNAPSHOT.notes[0]!, title: 'A', folderId: WORK },
+        { ...SNAPSHOT.notes[1]!, title: 'A', folderId: RESEARCH },
+      ],
+    };
+    const names = noteFileNames(snapshot);
+    expect(names.get('1'.repeat(32))).toBe('Work/A.md');
+    expect(names.get('2'.repeat(32))).toBe('work (2)/A.md');
+    const read = await readNoteBundle(await writeNoteBundlePart(snapshot, planNoteBundle(snapshot), 0), { worker: false });
+    expect(read.notes.map((note) => note.folderId)).toEqual([WORK, RESEARCH]);
+  });
+
   it('refuses two notes of one id before it names, plans or writes them', async () => {
     const twins: BundleSnapshot = { ...SNAPSHOT, notes: [SNAPSHOT.notes[0]!, { ...SNAPSHOT.notes[1]!, id: SNAPSHOT.notes[0]!.id }] };
     expect(() => noteFileNames(twins)).toThrow(RangeError);
