@@ -16,10 +16,33 @@ const ARCHIVE_ERRORS = '../archive/errors.js';
 /** The Markdown body text helper, which the entry re-exports and which imports nothing either. */
 const MARKDOWN_TEXT = '../text/markdown.js';
 
+/**
+ * The archive entry's reader, which the note bundle's reader alone may import, to read a bundle one entry at a time
+ * under a bound; what it reaches stays inside the archive folder, the import's path check and fflate.
+ */
+const ARCHIVE_READER = '../archive/openArchive.js';
+const ARCHIVE_READER_FROM = 'notes.ts';
+
 /** The modules a source file imports or re-exports values from; a type-only import is left out. */
 function valueImports(file: string): string[] {
   const source = readFileSync(file, 'utf8');
   return [...source.matchAll(/(?:import|export)\s(?!type\s)[^;]*?\sfrom\s+['"]([^'"]+)['"]/g)].map((match) => match[1]);
+}
+
+/** Every source file a module reaches through its value imports, itself included, and every package it names. */
+function reached(file: string): { files: Set<string>; packages: Set<string> } {
+  const files = new Set<string>();
+  const packages = new Set<string>();
+  const walk = (at: string): void => {
+    if (files.has(at)) return;
+    files.add(at);
+    for (const from of valueImports(at)) {
+      if (from.startsWith('.')) walk(resolve(dirname(at), from.replace(/\.js$/, '.ts')));
+      else packages.add(from);
+    }
+  };
+  walk(file);
+  return { files, packages };
 }
 
 /** What the entry exports, typed from its source. */
@@ -33,7 +56,10 @@ const FUNCTIONS = [
   'cueText',
   'cueTime',
   'markdownText',
+  'noteFileNames',
+  'planNoteBundle',
   'readArchive',
+  'readNoteBundle',
   'toDocx',
   'toHtml',
   'toJson',
@@ -43,15 +69,17 @@ const FUNCTIONS = [
   'toVtt',
   'vttText',
   'writeArchive',
+  'writeNoteBundlePart',
   'xmlText',
 ];
 
 describe('the transcript entry', () => {
-  it("imports nothing but its own files, fflate, the archive's refusal and the Markdown text helper, which import nothing", () => {
+  it("imports nothing but its own files, fflate, the archive's refusal and the Markdown text helper, which import nothing, and the archive reader from the note bundle alone", () => {
     const outside: string[] = [];
     for (const file of readdirSync(folder)) {
       for (const from of valueImports(join(folder, file))) {
-        if (!from.startsWith('./') && from !== 'fflate' && from !== ARCHIVE_ERRORS && from !== MARKDOWN_TEXT) {
+        const reader = from === ARCHIVE_READER && file === ARCHIVE_READER_FROM;
+        if (!from.startsWith('./') && from !== 'fflate' && from !== ARCHIVE_ERRORS && from !== MARKDOWN_TEXT && !reader) {
           outside.push(`${file}: ${from}`);
         }
       }
@@ -61,6 +89,13 @@ describe('the transcript entry', () => {
     // reaches nothing more through it.
     expect(valueImports(resolve(folder, ARCHIVE_ERRORS.replace(/\.js$/, '.ts')))).toEqual([]);
     expect(valueImports(resolve(folder, MARKDOWN_TEXT.replace(/\.js$/, '.ts')))).toEqual([]);
+    // The note bundle's reader reaches the archive folder, the import's path check (which imports nothing) and fflate.
+    const src = resolve(packRoot, 'src');
+    const { files, packages } = reached(resolve(folder, ARCHIVE_READER.replace(/\.js$/, '.ts')));
+    const beyond = [...files].map((file) => file.slice(src.length + 1)).filter((file) => !file.startsWith('archive/') && file !== 'import/paths.ts');
+    expect(beyond).toEqual([]);
+    expect([...packages]).toEqual(['fflate']);
+    expect(valueImports(resolve(src, 'import/paths.ts'))).toEqual([]);
   });
 
   it('is published as the build the exports map names, with every function, and writes a zip through fflate', async () => {
