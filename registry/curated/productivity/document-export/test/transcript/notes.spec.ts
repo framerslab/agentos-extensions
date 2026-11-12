@@ -242,7 +242,8 @@ describe('the note bundle, named for any file system and read strictly', () => {
     const counted = { ...manifest, part: { index: 1, count: 3 } };
     const numbered = { ...manifest, parts: [{ ...manifest.parts[0]!, index: 2 }] };
     const listed = { ...manifest, parts: [{ ...manifest.parts[0]!, noteIds: [manifest.notes[0]!.id] }] };
-    for (const each of [counted, numbered, listed]) {
+    const doubled = { ...manifest, parts: [{ ...manifest.parts[0]!, noteIds: [manifest.notes[0]!.id, manifest.notes[0]!.id, manifest.notes[1]!.id] }] };
+    for (const each of [counted, numbered, listed, doubled]) {
       await refused(zipSync({ 'notes.json': json(each), 'Work/Research/Plan.md': research, 'Plan.md': plan }));
     }
   });

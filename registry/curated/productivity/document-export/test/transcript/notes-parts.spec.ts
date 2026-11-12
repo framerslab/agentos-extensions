@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { NOTE_BUNDLE_LIMITS, NOTE_BUNDLE_MAX_NOTE_BYTES, planNoteBundle, readNoteBundle, writeNoteBundlePart, type BundleNote, type BundleSnapshot } from '../../src/transcript/notes.js';
+import { readArchive } from '../../src/transcript/archive.js';
+import { NOTE_BUNDLE_LIMITS, NOTE_BUNDLE_MAX_NOTE_BYTES, NOTE_BUNDLE_READ_BYTES, planNoteBundle, readNoteBundle, writeNoteBundlePart, type BundleNote, type BundleSnapshot } from '../../src/transcript/notes.js';
 
 const encoder = new TextEncoder();
 
@@ -74,10 +75,27 @@ describe('the note bundle in parts', () => {
     const plan = planNoteBundle(whole, { notes: NOTE_BUNDLE_LIMITS.notes, bytes: withoutPaths + 1 });
     expect(plan.map((part) => part.noteIds.length)).toEqual([1, 1]);
     for (const [i, part] of plan.entries()) {
-      const read = await readNoteBundle(await writeNoteBundlePart(whole, plan, i), { worker: false });
-      const written = read.manifest.notes.reduce((sum, entry, j) => sum + encoder.encode(read.notes[j]!.block).length + encoder.encode(JSON.stringify(entry)).length, 0);
-      expect(part.bytes).toBeGreaterThanOrEqual(written);
+      // The part as written: its notes' files and the entries of notes.json's notes array, as the writer formats them.
+      const files = readArchive(await writeNoteBundlePart(whole, plan, i));
+      const raw = new TextDecoder().decode(files.find((file) => file.path === 'notes.json')!.data);
+      const open = '"notes": [\n';
+      const entries = raw.slice(raw.indexOf(open) + open.length, raw.lastIndexOf('\n  ]'));
+      const blocks = files.filter((file) => file.path !== 'notes.json').reduce((sum, file) => sum + file.data.length, 0);
+      // Each entry is counted with the comma and line break after it, so the planned bytes hold the last one's two more.
+      expect(part.bytes).toBe(blocks + encoder.encode(entries).length + 2);
     }
+  });
+
+  it("refuses a plan one of whose parts would pass the bound a read keeps, the manifest's folders and part list counted", () => {
+    expect(NOTE_BUNDLE_READ_BYTES).toBe(67_108_864);
+    // Bounds that put three notes in one part past the read's bound.
+    const three = snapshot([1, 2, 3].map((n) => note(n, 'r'.repeat(400))));
+    expect(() => planNoteBundle(three, { notes: NOTE_BUNDLE_LIMITS.notes, bytes: 10_000, readBytes: 1000 })).toThrow(RangeError);
+    // One small note whose manifest's folders pass the read's bound.
+    const folders = Array.from({ length: 20 }, (_, i) => ({ id: (i + 1).toString(16).padStart(32, 'e'), name: 'n'.repeat(100), parentId: null }));
+    const named: BundleSnapshot = { ...snapshot([note(1, 'x')]), folders };
+    expect(() => planNoteBundle(named, { notes: NOTE_BUNDLE_LIMITS.notes, bytes: 10_000, readBytes: 1500 })).toThrow(RangeError);
+    expect(planNoteBundle(named, { notes: NOTE_BUNDLE_LIMITS.notes, bytes: 10_000, readBytes: 8000 })).toHaveLength(1);
   });
 
   it("refuses a note past NOTE_BUNDLE_MAX_NOTE_BYTES, and reads one just under it back under the reader's default bound", async () => {
