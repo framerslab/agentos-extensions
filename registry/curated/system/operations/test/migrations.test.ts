@@ -12,7 +12,7 @@ const COLUMNS: Readonly<Record<string, readonly string[]>> = {
   tickets: [
     'id', 'account_id', 'anonymous_id', 'subject', 'category', 'priority', 'state', 'source', 'claimed_by', 'share_identity',
     'identity_opened_at', 'consent_at', 'consent_version', 'plan_at_open', 'person_read_at', 'staff_read_at', 'last_person_at', 'last_staff_at',
-    'last_system_at', 'last_mail_at', 'resolved_at', 'closed_at', 'created_at', 'updated_at',
+    'last_system_at', 'last_mail_at', 'resolved_at', 'closed_at', 'created_at', 'updated_at', 'first_unanswered_at',
   ],
   messages: [
     'id', 'ticket_id', 'sender', 'sender_account_id', 'body', 'system_key', 'system_params', 'source_event_type', 'source_event_id',
@@ -42,7 +42,7 @@ const COLUMNS: Readonly<Record<string, readonly string[]>> = {
 };
 
 /** The package's migrations in number order. */
-const MIGRATIONS = ['0001_operations.sql', '0002_partial_indexes.sql', '0003_lifecycle_outbox.sql', '0004_discord_outbox.sql'];
+const MIGRATIONS = ['0001_operations.sql', '0002_partial_indexes.sql', '0003_lifecycle_outbox.sql', '0004_discord_outbox.sql', '0005_first_unanswered.sql'];
 
 /** The primary keys, by table. */
 const PRIMARY: Readonly<Record<string, readonly string[]>> = {
@@ -245,6 +245,10 @@ describe('the shipped SQL', () => {
       // The fourth adds the Discord outbox alone, its unique key an index too.
       expect(migrations[3]?.sql.match(/CREATE TABLE IF NOT EXISTS acme_ops_/g)).toEqual(['CREATE TABLE IF NOT EXISTS acme_ops_']);
       expect(migrations[3]?.sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS acme_ops_discord_outbox_dedup_key ON acme_ops_discord_outbox (dedup_key);');
+      // The fifth adds one column to the requests and fills it, and no table or index.
+      expect(migrations[4]?.sql).not.toContain('CREATE ');
+      expect(migrations[4]?.sql).toMatch(/ALTER TABLE acme_ops_tickets ADD COLUMN (?:IF NOT EXISTS )?first_unanswered_at (?:BIGINT|INTEGER);/);
+      expect(migrations[4]?.sql).toContain('UPDATE acme_ops_tickets SET first_unanswered_at = ');
     }
     expect(operationsMigrations('postgres', 'a')[0]?.sql).not.toBe(operationsMigrations('postgres', 'b')[0]?.sql);
     expect(operationsMigrations('postgres', 'a')[1]?.sql).not.toBe(operationsMigrations('postgres', 'b')[1]?.sql);

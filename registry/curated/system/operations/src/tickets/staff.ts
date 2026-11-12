@@ -475,6 +475,7 @@ export function createStaff(core: TicketsCore) {
       const resolved = await db.get<{ n: number | string | null }>(`SELECT COUNT(*) AS n FROM ${tables.tickets} WHERE resolved_at IS NOT NULL AND resolved_at >= ?`, [
         Math.floor(now / DAY_MS) * DAY_MS,
       ]);
+      const oldest = await db.get<{ at: number | string | null }>(`SELECT MIN(first_unanswered_at) AS at FROM ${tables.tickets} WHERE ${waitingTeamSql()}`);
       const byState: Record<OpsDerivedState, number> = { waiting_team: 0, waiting_person: 0, resolved: 0, closed: 0 };
       const byPriority: Record<OpsTicketPriority, number> = { normal: 0, urgent: 0 };
       // A null prototype: a category named like a property of Object.prototype (constructor) counts as its own key, never the inherited value.
@@ -492,7 +493,7 @@ export function createStaff(core: TicketsCore) {
           if (row.priority === 'urgent') urgent += n;
         }
       }
-      return { open, waiting: byState.waiting_team, urgent, resolvedToday: Number(resolved?.n ?? 0), byState, byPriority, byCategory };
+      return { open, waiting: byState.waiting_team, urgent, resolvedToday: Number(resolved?.n ?? 0), oldestUnansweredAt: timeOf(oldest?.at), byState, byPriority, byCategory };
     },
   };
 }

@@ -939,6 +939,13 @@ export interface OpsTicket {
   readonly updatedAt: number;
   readonly lastPersonAt: number | null;
   readonly lastStaffAt: number | null;
+  /**
+   * The time of the person's first message after the team's latest message, null when the team
+   * spoke last or nobody has written: how long the request has waited on the team, which
+   * `lastPersonAt` restarts with each message of a person who writes again before an answer.
+   * A system message moves neither.
+   */
+  readonly firstUnansweredAt: number | null;
   readonly unread: boolean;
 }
 
@@ -1039,12 +1046,14 @@ export interface OpsStaffFilter {
 
 /**
  * The request counts `tickets.stats` answers staff: open, waiting on the team, urgent and open, and
- * resolved today; then every request by its derived state, by its priority, and by the categories
- * that hold one.
+ * resolved today; the earliest `firstUnansweredAt` among the requests waiting on the team, null when
+ * none waits; then every request by its derived state, by its priority, and by the categories that
+ * hold one.
  */
 export interface OpsTicketStats {
   readonly open: number;
   readonly waiting: number;
+  readonly oldestUnansweredAt: number | null;
   readonly urgent: number;
   readonly resolvedToday: number;
   readonly byState: Readonly<Record<OpsDerivedState, number>>;
