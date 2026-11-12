@@ -2,11 +2,14 @@
  * @fileoverview The self-harm referral guard: an input and output guardrail that answers a self-harm expression with
  * crisis lines and reports each referral to its host.
  *
- * On a person's message (input) or an agent's final reply (output) it matches the reviewed keyword list over the
- * normalised text; a match goes to the judge when one is configured, and a match the judge does not clear is answered
+ * Reply delivery (the default): on a person's message (input) or an agent's final reply (output), it matches the
+ * reviewed keyword list over the normalised text; a match goes to the judge when one is configured, and a match the judge does not clear is answered
  * with the referral: a BLOCK whose `replacementText` (and `reason`) is the referral's text, so the topic does not go
  * on, and a `referral_sent` event for the host to count. The guard fails toward the referral: a judge that throws,
  * times out, answers nothing usable or clears a match with too little confidence leaves the referral standing.
+ *
+ * Private delivery requires a judge, evaluates input alone and returns FLAG: a confirmed match carries a referral
+ * for the host to deliver to the speaker alone; an unconfirmed match carries no referral.
  *
  * @module @framers/agentos-ext-self-harm-referral/SelfHarmReferralGuardrail
  */
@@ -27,7 +30,7 @@ import {
 } from '@framers/agentos/safety/guardrails';
 
 import { REPLY_PHRASES, SELF_HARM_PHRASES, SELF_HARM_PHRASES_VERSION } from './phrases.js';
-import { REFERRAL_TABLE, buildReferral, resolvePlace, type PlaceHint } from './referrals.js';
+import { REFERRAL_TABLE, buildReferral, privateReferralFor, resolvePlace, type PlaceHint, type ReferralPlace } from './referrals.js';
 import type {
   DetectionMethod,
   JudgeOutcome,
@@ -42,6 +45,12 @@ export const DEFAULT_GUARDRAIL_ID = 'self-harm-referral';
 
 /** The reason code on every referral verdict. */
 export const REFERRAL_REASON_CODE = 'SELF_HARM_REFERRAL';
+
+/** The reason code of a `private`-mode match that sent no referral: the judge was unsure, failed, or nobody could be named to send it to. */
+export const UNCONFIRMED_REASON_CODE = 'SELF_HARM_UNCONFIRMED';
+
+/** The codes the guard answers with, for its `config.reasonCodes`. */
+const REASON_CODES: readonly string[] = Object.freeze([REFERRAL_REASON_CODE, UNCONFIRMED_REASON_CODE]);
 
 /** The judge's confidence at or above which its clearing of a match counts, when the host sets none. */
 export const DEFAULT_JUDGE_THRESHOLD = 0.7;
@@ -72,6 +81,15 @@ const FINAL_RESPONSE = 'final_response';
 /** A logger that writes nothing, for a guard built with none. */
 const SILENT: ILogger = { info() {}, warn() {}, error() {} };
 
+/** Who a private referral is for: the room message's sender when the context names one, else the user the call runs for. */
+function recipientOf(context: GuardrailContext | undefined): string | undefined {
+  // Read without the type of a newer core, so the pack builds and runs on every core its peer floor names
+  const sender = (context as { moderation?: { sender?: { id?: unknown } } } | undefined)?.moderation?.sender?.id;
+  if (typeof sender === 'string' && sender.length > 0) return sender;
+  const userId = context?.userId;
+  return typeof userId === 'string' && userId.length > 0 ? userId : undefined;
+}
+
 /** What the judge decided about a match, and whether the referral stands. */
 interface JudgeResult {
   refer: boolean;
@@ -80,7 +98,8 @@ interface JudgeResult {
 }
 
 /**
- * The guard. Build it with {@link SelfHarmReferralOptions}. It runs in AgentOS's first, sequential phase, so its BLOCK
+ * The guard. Build it with {@link SelfHarmReferralOptions}. Private delivery flags input for the host to handle.
+ * Reply delivery runs in AgentOS's first, sequential phase, so its BLOCK
  * ends the turn before any classifier runs; register it first, since a sanitizer registered before it that blocks
  * answers in its place.
  */
@@ -90,17 +109,19 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
   /** The stages it evaluates. */
   readonly stages: ReadonlyArray<ReferralStage>;
   /**
-   * Final replies only. `canSanitize` puts the guard in AgentOS's first phase, though it never returns SANITIZE: guards
-   * in that phase run one at a time and a BLOCK there ends the evaluation, while the second phase runs every classifier
-   * and answers with the first BLOCK in registration order, which could take the answer from a referral the guard had
-   * already reported. An ordinary text costs nothing there: the list reads it and the guard returns null. `failClosed`
-   * turns an unexpected throw into a block; the guard's own judge deadline keeps a slow judge from reaching it.
+   * In `reply` mode: final replies only. `canSanitize` puts the guard in AgentOS's first phase, though it never returns
+   * SANITIZE: guards in that phase run one at a time and a BLOCK there ends the evaluation, while the second phase runs
+   * every classifier and answers with the first BLOCK in registration order, which could take the answer from a
+   * referral the guard had already reported. An ordinary text costs nothing there: the list reads it and the guard
+   * returns null. `failClosed` turns an unexpected throw into a block; the guard's own judge deadline keeps a slow
+   * judge from reaching it.
+   *
+   * In `private` mode it never answers the turn, so it needs no first phase, and a fault inside it never refuses a
+   * room message: `canSanitize` and `failClosed` are false.
    */
-  readonly config: GuardrailConfig = {
-    canSanitize: true,
-    evaluateStreamingChunks: false,
-    failClosed: true,
-  };
+  readonly config: GuardrailConfig;
+  /** How a referral reaches the person: `reply` or `private`. */
+  readonly delivery: 'reply' | 'private';
 
   private readonly table: ReferralTable;
   private readonly judge: PhraseJudge | undefined;
@@ -118,11 +139,27 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
    * @param options - How the host wants it; every field is optional.
    * @throws Error when the table names no lines for its `always` country, when a phrase does not compile, or when
    * `judgeModel` pins a provider other than `openai` with no model: a host hears of each when it builds the guard, not
-   * on a person's message.
+   * on a person's message. Private delivery also requires a judge and forbids the output stage.
    */
   constructor(private readonly options: SelfHarmReferralOptions = {}) {
     this.id = options.id ?? DEFAULT_GUARDRAIL_ID;
-    this.stages = [...(options.stages ?? ['input', 'output'])];
+    this.delivery = options.delivery ?? 'reply';
+    if (this.delivery !== 'reply' && this.delivery !== 'private') {
+      throw new Error(`${this.id}: delivery must be "reply" or "private"`);
+    }
+    if (this.delivery === 'private') {
+      // No judge, no confirmation, and in a room no referral without one
+      if (!options.judge && !options.judgeModel) {
+        throw new Error(`${this.id}: private delivery needs a judge or a judgeModel; it sends no referral without a judge's confirmation`);
+      }
+      if (options.stages?.includes('output')) {
+        throw new Error(`${this.id}: private delivery evaluates a person's message alone; its stages cannot name output`);
+      }
+    }
+    this.stages = [...(options.stages ?? (this.delivery === 'private' ? ['input'] : ['input', 'output']))];
+    this.config = this.delivery === 'private'
+      ? { canSanitize: false, evaluateStreamingChunks: false, failClosed: false, reasonCodes: REASON_CODES }
+      : { canSanitize: true, evaluateStreamingChunks: false, failClosed: true, reasonCodes: REASON_CODES };
     this.table = options.table ?? REFERRAL_TABLE;
     if (!this.table.countries[this.table.always]) {
       throw new Error(`${this.id}: the referral table names no lines for its "always" country ${this.table.always}`);
@@ -152,18 +189,20 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
     return this.sent;
   }
 
-  /** Answers a person's message that calls for a referral with the referral, in place of the agent's turn. */
+  /** Evaluates a person's message: a replacement in reply mode, or a flag in private mode. */
   async evaluateInput(payload: GuardrailInputPayload): Promise<GuardrailEvaluationResult | null> {
     if (!this.stages.includes('input')) return null;
     const text = payload?.input?.textInput;
     if (typeof text !== 'string' || !text.trim()) return null;
     const context = payload.context;
-    return this.evaluate('input', text, this.inputPhrases, context, [
+    const hints: PlaceHint[] = [
       { country: context?.metadata?.country },
       { locale: context?.metadata?.locale },
       { locale: payload.input.languageHint },
       ...this.defaultPlace(),
-    ]);
+    ];
+    if (this.delivery === 'private') return this.evaluatePrivately(text, context, hints);
+    return this.evaluate('input', text, this.inputPhrases, context, hints);
   }
 
   /** Replaces an agent's final reply that carries the topic on with the referral. */
@@ -189,19 +228,20 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
   private emit(event: ReferralSentEvent): void {
     const onEvent = this.options.onEvent;
     if (!onEvent) return;
-    const failed = (error: unknown) =>
+    // A callback controls its error name as well as its message; neither belongs in a log.
+    const failed = () =>
       this.log('warn', 'self-harm-referral: the host event handler failed; the referral is sent', {
         guardrailId: this.id,
         stage: event.stage,
-        errorName: error instanceof Error ? error.name : typeof error,
+        errorName: 'unknown',
       });
     try {
       const pending = onEvent(event);
       if (pending && typeof (pending as PromiseLike<void>).then === 'function') {
         (pending as PromiseLike<void>).then(undefined, failed);
       }
-    } catch (error) {
-      failed(error);
+    } catch {
+      failed();
     }
   }
 
@@ -245,19 +285,21 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
     const judgeContext: GuardrailContext = context ?? { userId: '', sessionId: '' };
     const timedOut = Symbol('timed out');
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // In reply mode an unanswered judge leaves the referral standing; in private mode it sends none
+    const after = this.delivery === 'private' ? 'no referral is sent' : 'the referral stands';
     try {
       const deadline = new Promise<typeof timedOut>((resolve) => {
         timer = setTimeout(() => resolve(timedOut), this.judgeTimeoutMs);
       });
       const verdict = await Promise.race([this.judge.judge(text, matched, judgeContext), deadline]);
       if (verdict === timedOut) {
-        this.log('warn', 'self-harm-referral: judge timed out; the referral stands', { guardrailId: this.id, stage, timeoutMs: this.judgeTimeoutMs });
+        this.log('warn', `self-harm-referral: judge timed out; ${after}`, { guardrailId: this.id, stage, timeoutMs: this.judgeTimeoutMs });
         return { refer: true, method: 'keyword_and_judge', outcome: 'failed' };
       }
       const usable =
         verdict && typeof verdict.block === 'boolean' && typeof verdict.confidence === 'number' && Number.isFinite(verdict.confidence);
       if (!usable) {
-        this.log('warn', 'self-harm-referral: judge gave no usable answer; the referral stands', { guardrailId: this.id, stage });
+        this.log('warn', `self-harm-referral: judge gave no usable answer; ${after}`, { guardrailId: this.id, stage });
         return { refer: true, method: 'keyword_and_judge', outcome: 'failed' };
       }
       if (verdict.block) return { refer: true, method: 'keyword_and_judge', outcome: 'confirmed' };
@@ -271,12 +313,12 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
         confidence: verdict.confidence,
       });
       return { refer: false, method: 'keyword_and_judge', outcome: 'none' };
-    } catch (error) {
-      // The error's name only: a judge's or a provider's message can repeat the text it was given.
-      this.log('warn', 'self-harm-referral: judge failed; the referral stands', {
+    } catch {
+      // Both the error's name and message can repeat the text given to the judge or provider.
+      this.log('warn', `self-harm-referral: judge failed; ${after}`, {
         guardrailId: this.id,
         stage,
-        errorName: error instanceof Error ? error.name : typeof error,
+        errorName: 'unknown',
       });
       return { refer: true, method: 'keyword_and_judge', outcome: 'failed' };
     } finally {
@@ -332,6 +374,66 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
         lineIds: [...lineIds],
         event: type,
         phraseListVersion: SELF_HARM_PHRASES_VERSION,
+      },
+    };
+  }
+
+  /**
+   * `private` mode: a keyword match goes to the judge. Confirmed: a FLAG carrying the private reply for the speaker,
+   * and the event. Cleared: null. Unsure, failed or timed out: no referral, and a FLAG a host puts before a person.
+   * Never a BLOCK and never a hold: the message itself is decided by the host's other guards.
+   */
+  private async evaluatePrivately(text: string, context: GuardrailContext | undefined, hints: PlaceHint[]): Promise<GuardrailEvaluationResult | null> {
+    const matched = phraseMatches(this.inputPhrases, text);
+    if (matched.length === 0) return null;
+    const verdict = await this.ask(text, matched, context, 'input');
+    if (!verdict.refer) return null;
+    if (verdict.outcome !== 'confirmed') return this.unconfirmed(verdict.outcome);
+    const recipientId = recipientOf(context);
+    // Confirmed, but nobody can be named to send it to: nothing is sent, and a person reads the item
+    if (recipientId === undefined) return this.unconfirmed('confirmed');
+    return this.referPrivately(context, hints, verdict, recipientId);
+  }
+
+  /** The verdict of a match that sent no referral, and its one line. */
+  private unconfirmed(judgeOutcome: JudgeOutcome): GuardrailEvaluationResult {
+    this.log('info', 'self-harm-referral: unconfirmed match; no referral sent', { guardrailId: this.id, stage: 'input', judgeOutcome });
+    return {
+      action: GuardrailAction.FLAG,
+      reasonCode: UNCONFIRMED_REASON_CODE,
+      metadata: { guardrailId: this.id, stage: 'input', judgeOutcome, phraseListVersion: SELF_HARM_PHRASES_VERSION },
+    };
+  }
+
+  /** Builds the private referral for the turn's place, counts it, logs it, reports it, and returns the FLAG that carries it. */
+  private referPrivately(context: GuardrailContext | undefined, hints: PlaceHint[], verdict: JudgeResult, recipientId: string): GuardrailEvaluationResult {
+    const place: ReferralPlace = resolvePlace(this.table, hints);
+    const sessionId = context?.sessionId;
+    const conversationId = context?.conversationId;
+    const referral = privateReferralFor(this.table, place, {
+      recipientId,
+      guardrailId: this.id,
+      method: verdict.method,
+      sessionId: typeof sessionId === 'string' && sessionId ? sessionId : null,
+      conversationId: typeof conversationId === 'string' && conversationId ? conversationId : null,
+      occurredAt: new Date(this.now()).toISOString(),
+    });
+    this.sent += 1;
+    // One line per referral, with no words of the person's
+    this.log('info', 'self-harm-referral: referral_sent', {
+      guardrailId: this.id, stage: 'input', country: place.country, method: verdict.method, judgeOutcome: verdict.outcome, delivery: 'private',
+    });
+    this.emit(referral.event);
+    const { type, ...fields } = referral.event;
+    return {
+      action: GuardrailAction.FLAG,
+      reasonCode: REFERRAL_REASON_CODE,
+      metadata: {
+        ...fields,
+        lineIds: [...referral.lineIds],
+        event: type,
+        phraseListVersion: SELF_HARM_PHRASES_VERSION,
+        privateReply: { recipientId, text: referral.text, lineIds: [...referral.lineIds] },
       },
     };
   }
