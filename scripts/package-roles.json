@@ -65,7 +65,6 @@
     "registry/curated/media/letterboxd": "pack",
     "registry/curated/media/omdb": "pack",
     "registry/curated/media/voice-synthesis": "pack",
-    "registry/curated/media/wildweave-film": "pack",
     "registry/curated/meetings/browser": "pack",
     "registry/curated/memory/postgres-memory": "pack",
     "registry/curated/memory/relationship-memory": "pack",
@@ -504,11 +503,6 @@
       "./remote": ["createRemote"],
       "./worker": ["createEdgeWatcher"],
       "./analytics": ["analyticsQuery", "readAnalytics", "englishAnalyticsWords", "formatValue"]
-    },
-    "registry/curated/media/wildweave-film": {
-      "./client": ["WildweaveStudioClient"],
-      "./schemas": ["toolJsonSchema", "toolResult"],
-      "./mcp": ["createWildweaveMcpServer", "createWildweaveMcpHandler", "serveWildweaveHttp", "serveWildweaveStdio"]
     }
   },
   "entryExemptions": {
