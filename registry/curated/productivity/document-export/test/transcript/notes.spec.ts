@@ -4,7 +4,7 @@
  * time; a newer version is refused whole; the write reports each note and stops on its signal with no archive handed
  * back.
  */
-import { strToU8, zipSync } from 'fflate';
+import { Zip, ZipPassThrough, strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 
 import { ArchiveError } from '../../src/archive/index.js';
@@ -129,5 +129,121 @@ describe('the note bundle', () => {
     });
     await expect(writing).rejects.toBeInstanceOf(ArchiveError);
     expect(seen).toEqual([1]);
+  });
+});
+
+/** A ZIP of the entries in their order, two of one name kept as two records, as a crafted file may hold them. */
+function zipOf(entries: [string, Uint8Array][]): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    const zip = new Zip((error, chunk, final) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      chunks.push(chunk);
+      if (!final) return;
+      const out = new Uint8Array(chunks.reduce((sum, each) => sum + each.length, 0));
+      let at = 0;
+      for (const each of chunks) {
+        out.set(each, at);
+        at += each.length;
+      }
+      resolve(out);
+    });
+    for (const [name, data] of entries) {
+      const file = new ZipPassThrough(name);
+      zip.add(file);
+      file.push(data, true);
+    }
+    zip.end();
+  });
+}
+
+describe('the note bundle, named for any file system and read strictly', () => {
+  it("marks a name Windows keeps for a device, drops a name's trailing dots and spaces, and keeps a name within 200 bytes of UTF-8 with no character split", () => {
+    const snapshot: BundleSnapshot = {
+      ...SNAPSHOT,
+      folders: [
+        { id: WORK, name: 'aux', parentId: null },
+        { id: RESEARCH, name: 'Notes. ', parentId: WORK },
+      ],
+      notes: [
+        { ...SNAPSHOT.notes[0]!, title: 'CON' },
+        { ...SNAPSHOT.notes[1]!, title: 'nul.txt' },
+        { ...SNAPSHOT.notes[1]!, id: '3'.repeat(32), title: 'LPT1' },
+        { ...SNAPSHOT.notes[1]!, id: '4'.repeat(32), title: '\u{1F600}'.repeat(120) },
+      ],
+    };
+    const names = noteFileNames(snapshot);
+    expect(names.get('1'.repeat(32))).toBe('_aux/Notes/_CON.md');
+    expect(names.get('2'.repeat(32))).toBe('_nul.txt.md');
+    expect(names.get('3'.repeat(32))).toBe('_LPT1.md');
+    // Fifty of a four-byte character are 200 bytes; the fifty-first would pass the bound.
+    expect(names.get('4'.repeat(32))).toBe(`${'\u{1F600}'.repeat(50)}.md`);
+  });
+
+  it('reserves every folder path and the manifest before naming a note, so no file and folder share a path', async () => {
+    const snapshot: BundleSnapshot = {
+      ...SNAPSHOT,
+      folders: [
+        { id: WORK, name: 'Plan.md', parentId: null },
+        { id: RESEARCH, name: 'notes.json', parentId: null },
+      ],
+      notes: [
+        { ...SNAPSHOT.notes[1]!, title: 'Plan' },
+        { ...SNAPSHOT.notes[0]!, title: 'Child', folderId: WORK },
+        { ...SNAPSHOT.notes[1]!, id: '3'.repeat(32), title: 'A', folderId: RESEARCH },
+      ],
+    };
+    const names = noteFileNames(snapshot);
+    expect(names.get('2'.repeat(32))).toBe('Plan (2).md');
+    expect(names.get('1'.repeat(32))).toBe('Plan.md/Child.md');
+    expect(names.get('3'.repeat(32))).toBe('notes.json (2)/A.md');
+    const read = await readNoteBundle(await writeNoteBundlePart(snapshot, planNoteBundle(snapshot), 0), { worker: false });
+    expect(read.notes.map((note) => note.block)).toEqual(snapshot.notes.map((note) => note.block));
+  });
+
+  it('refuses two notes of one id before it names, plans or writes them', async () => {
+    const twins: BundleSnapshot = { ...SNAPSHOT, notes: [SNAPSHOT.notes[0]!, { ...SNAPSHOT.notes[1]!, id: SNAPSHOT.notes[0]!.id }] };
+    expect(() => noteFileNames(twins)).toThrow(RangeError);
+    expect(() => planNoteBundle(twins)).toThrow(RangeError);
+    await expect(writeNoteBundlePart(twins, [{ index: 0, noteIds: [SNAPSHOT.notes[0]!.id], bytes: 0 }], 0)).rejects.toBeInstanceOf(RangeError);
+  });
+
+  it('keeps a block that begins with a byte order mark, character for character', async () => {
+    const block = '﻿## Plan\nA second plan.';
+    const marked: BundleSnapshot = { ...SNAPSHOT, notes: [{ ...SNAPSHOT.notes[1]!, block }] };
+    const read = await readNoteBundle(await writeNoteBundlePart(marked, planNoteBundle(marked), 0), { worker: false });
+    expect(read.notes[0]!.block).toBe(block);
+  });
+
+  it('refuses as bad_manifest a note named for the manifest, a file held twice, a note file that is not UTF-8, and part accounting that disagrees', async () => {
+    const manifest = (await readNoteBundle(await writeNoteBundlePart(SNAPSHOT, planNoteBundle(SNAPSHOT), 0), { worker: false })).manifest;
+    const json = (value: unknown): Uint8Array => strToU8(JSON.stringify(value));
+    const research = strToU8(SNAPSHOT.notes[0]!.block);
+    const plan = strToU8(SNAPSHOT.notes[1]!.block);
+    const refused = async (bytes: Uint8Array): Promise<void> => {
+      await expect(readNoteBundle(bytes, { worker: false })).rejects.toEqual(new NoteBundleError('bad_manifest'));
+    };
+
+    // A note whose path is the manifest's would read the manifest's own JSON as its block.
+    const second = manifest.notes[1]!;
+    const self = { ...manifest, notes: [{ ...second, path: 'notes.json' }], parts: [{ ...manifest.parts[0]!, noteIds: [second.id] }] };
+    await refused(zipSync({ 'notes.json': json(self) }));
+
+    // Two records of one note file, with different texts, leave the note's block in doubt.
+    await refused(await zipOf([['notes.json', json(manifest)], ['Work/Research/Plan.md', research], ['Plan.md', plan], ['Plan.md', strToU8('## Plan\nAnother text.')]]));
+
+    // A note file whose bytes are not UTF-8 would come back with replacement characters in place of its text.
+    await refused(zipSync({ 'notes.json': json(manifest), 'Work/Research/Plan.md': research, 'Plan.md': new Uint8Array([0xff, 0xfe, 0x41]) }));
+
+    // The part list must hold `count` parts numbered from 1, and this part's entry must list this part's notes.
+    const counted = { ...manifest, part: { index: 1, count: 3 } };
+    const numbered = { ...manifest, parts: [{ ...manifest.parts[0]!, index: 2 }] };
+    const listed = { ...manifest, parts: [{ ...manifest.parts[0]!, noteIds: [manifest.notes[0]!.id] }] };
+    for (const each of [counted, numbered, listed]) {
+      await refused(zipSync({ 'notes.json': json(each), 'Work/Research/Plan.md': research, 'Plan.md': plan }));
+    }
   });
 });

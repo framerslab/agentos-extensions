@@ -5,7 +5,9 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { NOTE_BUNDLE_LIMITS, planNoteBundle, readNoteBundle, writeNoteBundlePart, type BundleNote, type BundleSnapshot } from '../../src/transcript/notes.js';
+import { NOTE_BUNDLE_LIMITS, NOTE_BUNDLE_MAX_NOTE_BYTES, planNoteBundle, readNoteBundle, writeNoteBundlePart, type BundleNote, type BundleSnapshot } from '../../src/transcript/notes.js';
+
+const encoder = new TextEncoder();
 
 /** A note of the given text, with the id its number makes. */
 function note(n: number, text: string): BundleNote {
@@ -59,6 +61,33 @@ describe('the note bundle in parts', () => {
     const ids = parts.flatMap((part) => part.notes.map((each) => each.id));
     expect(new Set(ids).size).toBe(ids.length);
     expect(parts.flatMap((part) => part.notes)).toEqual(notes);
+  });
+
+  it("counts each note as its file and its manifest entry as written, its path among the entry's fields, so a part keeps the byte bound", async () => {
+    // Five folders of 101 characters deep: each note's path is over 500 bytes of its manifest entry.
+    const folderId = (i: number): string => (i + 10).toString(16).padStart(32, 'f');
+    const folders = Array.from({ length: 5 }, (_, i) => ({ id: folderId(i), name: `${'f'.repeat(100)}${i}`, parentId: i === 0 ? null : folderId(i - 1) }));
+    const notes = [1, 2].map((n) => ({ ...note(n, 'v'.repeat(1000)), folderId: folderId(4) }));
+    const whole: BundleSnapshot = { ...snapshot(notes), folders };
+    // Counted as its block and its entry without the path, both notes fit a bound one byte above the two.
+    const withoutPaths = notes.reduce((sum, { block, ...entry }) => sum + encoder.encode(block).length + encoder.encode(JSON.stringify(entry)).length, 0);
+    const plan = planNoteBundle(whole, { notes: NOTE_BUNDLE_LIMITS.notes, bytes: withoutPaths + 1 });
+    expect(plan.map((part) => part.noteIds.length)).toEqual([1, 1]);
+    for (const [i, part] of plan.entries()) {
+      const read = await readNoteBundle(await writeNoteBundlePart(whole, plan, i), { worker: false });
+      const written = read.manifest.notes.reduce((sum, entry, j) => sum + encoder.encode(read.notes[j]!.block).length + encoder.encode(JSON.stringify(entry)).length, 0);
+      expect(part.bytes).toBeGreaterThanOrEqual(written);
+    }
+  });
+
+  it("refuses a note past NOTE_BUNDLE_MAX_NOTE_BYTES, and reads one just under it back under the reader's default bound", async () => {
+    expect(NOTE_BUNDLE_MAX_NOTE_BYTES).toBe(33_554_432);
+    expect(() => planNoteBundle(snapshot([note(1, 'q'.repeat(NOTE_BUNDLE_MAX_NOTE_BYTES))]))).toThrow(RangeError);
+    const largest = note(2, 'q'.repeat(NOTE_BUNDLE_MAX_NOTE_BYTES - 1000));
+    const whole = snapshot([largest]);
+    const plan = planNoteBundle(whole);
+    const read = await readNoteBundle(await writeNoteBundlePart(whole, plan, 0), { worker: false });
+    expect(read.notes[0]!.block.length).toBe(largest.block.length);
   });
 
   it('plans an empty snapshot as one empty part, which reads back with no note', async () => {
