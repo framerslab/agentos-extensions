@@ -126,21 +126,21 @@ describe('private delivery in a room', () => {
     expect(guard.referralsSent).toBe(0);
   });
 
-  it('keeps judge and callback error names out of private delivery logs', async () => {
+  it.each(['reply', 'private'] as const)('keeps judge and callback error names out of %s delivery logs', async (delivery) => {
     for (const failing of ['judge', 'callback']) {
       const lines: unknown[] = [];
       const keep = (message: string, metadata?: Record<string, unknown>) => void lines.push([message, metadata]);
       const fail = () => { throw Object.assign(new Error('ZZMARK_QX'), { name: 'ZzmarkQxError' }); };
       const guard = new SelfHarmReferralGuardrail({
-        delivery: 'private', judge: failing === 'judge' ? { judge: async () => fail() } : confirming,
+        delivery, judge: failing === 'judge' ? { judge: async () => fail() } : confirming,
         onEvent: failing === 'callback' ? fail : undefined,
         logger: { info: keep, warn: keep, error: keep },
       });
       const decision = await moderateContent({ text: 'i want to die' }, { guards: [guard], context: room() });
       expect(lines.length).toBeGreaterThan(0);
       expect(JSON.stringify(lines).toLowerCase()).not.toContain('zzmark');
-      expect(decision).toMatchObject({ outcome: 'flag', unavailable: false });
-      expect(Boolean(replyOf(decision))).toBe(failing === 'callback');
+      expect(decision).toMatchObject({ outcome: delivery === 'private' ? 'flag' : 'refuse', unavailable: false });
+      expect(Boolean(replyOf(decision))).toBe(delivery === 'private' && failing === 'callback');
     }
   });
 
