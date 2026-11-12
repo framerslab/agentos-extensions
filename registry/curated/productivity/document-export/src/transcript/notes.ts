@@ -25,6 +25,8 @@ export const NOTE_BUNDLE_LIMITS = { notes: 2000, bytes: 10_485_760 } as const;
  * manifest reads back under the reader's default bound of 64 MiB.
  */
 export const NOTE_BUNDLE_MAX_NOTE_BYTES = 33_554_432;
+/** The bound a read keeps when the caller names none, the manifest and the notes' files together: 64 MiB. */
+export const NOTE_BUNDLE_READ_BYTES = 67_108_864;
 
 /** A folder as the bundle keeps it: its id, its name (null when the copy could not open it) and its parent's id. */
 export interface BundleFolder {
@@ -229,14 +231,45 @@ function noteBytes(note: BundleNote, path: string): number {
   return encoder.encode(note.block).length + encoder.encode(written).length + ENTRY_FRAME;
 }
 
+/** What a plan is bounded by: one part's notes and bytes, and the bytes a read of one part keeps (`NOTE_BUNDLE_READ_BYTES` unless named). */
+export interface NoteBundleLimits {
+  notes: number;
+  bytes: number;
+  readBytes?: number;
+}
+
+/** Room for the snapshot's id and time, which the plan does not hold, in a manifest's count. */
+const SNAPSHOT_ROOM = 256;
+
+/**
+ * The bytes of a part's `notes.json` before its notes' entries: the format, the version, the snapshot and the part, the
+ * index of every part and the snapshot's folders, formatted as the writer formats them, with room for the snapshot's
+ * id and time.
+ */
+function manifestBytes(folders: readonly BundleFolder[], parts: readonly BundlePartPlan[]): number {
+  const skeleton: BundleManifest = {
+    format: NOTE_BUNDLE_FORMAT,
+    version: NOTE_BUNDLE_VERSION,
+    snapshot: { id: '', at: '', copy: 'browser' },
+    part: { index: parts.length, count: parts.length },
+    parts: parts.map((each, i) => ({ index: i + 1, noteIds: each.noteIds, bytes: each.bytes })),
+    folders: folders.map((folder) => ({ id: folder.id, name: folder.name, parentId: folder.parentId })),
+    notes: [],
+  };
+  return encoder.encode(JSON.stringify(skeleton, null, 2)).length + SNAPSHOT_ROOM;
+}
+
 /**
  * The snapshot's parts: notes in the snapshot's order, a part closed before a note would pass either bound, and a note
  * whose own bytes pass the byte bound alone in a part of its own. A note counts as its file and its manifest entry as
- * written, its path among the entry's fields. An empty snapshot is one empty part.
+ * written, its path among the entry's fields. Every part, with its manifest's index of the parts and the snapshot's
+ * folders, stays within the bytes a read keeps, so each part the plan makes reads back under the reader's bound. An
+ * empty snapshot is one empty part.
  *
- * @throws {RangeError} When two notes share one id, or a note counts more than `NOTE_BUNDLE_MAX_NOTE_BYTES`.
+ * @throws {RangeError} When two notes share one id, a note counts more than `NOTE_BUNDLE_MAX_NOTE_BYTES`, or a part
+ * with its manifest would pass `limits.readBytes`.
  */
-export function planNoteBundle(snapshot: Pick<BundleSnapshot, 'folders' | 'notes'>, limits: { notes: number; bytes: number } = NOTE_BUNDLE_LIMITS): BundlePartPlan[] {
+export function planNoteBundle(snapshot: Pick<BundleSnapshot, 'folders' | 'notes'>, limits: NoteBundleLimits = NOTE_BUNDLE_LIMITS): BundlePartPlan[] {
   const names = noteFileNames(snapshot);
   const parts: BundlePartPlan[] = [];
   let open: BundlePartPlan = { index: 0, noteIds: [], bytes: 0 };
@@ -252,6 +285,11 @@ export function planNoteBundle(snapshot: Pick<BundleSnapshot, 'folders' | 'notes
     open.bytes += bytes;
   }
   if (open.noteIds.length > 0 || parts.length === 0) parts.push(open);
+  const readBytes = limits.readBytes ?? NOTE_BUNDLE_READ_BYTES;
+  const manifest = manifestBytes(snapshot.folders, parts);
+  for (const part of parts) {
+    if (part.bytes + manifest > readBytes) throw new RangeError(`note bundle: a part of ${part.bytes + manifest} bytes with its manifest passes the ${readBytes} a read keeps`);
+  }
   return parts;
 }
 
@@ -314,8 +352,8 @@ export interface ReadNoteBundleOptions {
   signal?: AbortSignal;
 }
 
-/** The bound a read keeps when the caller names none: 64 MiB, a part's one largest note (`NOTE_BUNDLE_MAX_NOTE_BYTES`) and its manifest. */
-const MAX_INFLATED_BYTES = 64 * 1024 * 1024;
+/** The bound a read keeps when the caller names none, which every part a plan makes stays within. */
+const MAX_INFLATED_BYTES = NOTE_BUNDLE_READ_BYTES;
 
 const isText = (value: unknown): value is string => typeof value === 'string';
 const isTextOrNull = (value: unknown): value is string | null => value === null || typeof value === 'string';
@@ -373,8 +411,9 @@ function manifestOf(value: unknown): BundleManifest {
   if (new Set(kept.map((note) => note.id)).size !== kept.length || new Set(kept.map((note) => note.path)).size !== kept.length) throw new NoteBundleError('bad_manifest');
   const listed = readParts as BundleManifest['parts'];
   if (listed.length !== count || listed.some((each, i) => each.index !== i + 1)) throw new NoteBundleError('bad_manifest');
-  const own = new Set((listed[index - 1] as BundleManifest['parts'][number]).noteIds);
-  if (own.size !== kept.length || kept.some((note) => !own.has(note.id))) throw new NoteBundleError('bad_manifest');
+  const ownIds = (listed[index - 1] as BundleManifest['parts'][number]).noteIds;
+  const own = new Set(ownIds);
+  if (ownIds.length !== kept.length || own.size !== ownIds.length || kept.some((note) => !own.has(note.id))) throw new NoteBundleError('bad_manifest');
   return {
     format: NOTE_BUNDLE_FORMAT,
     version,
