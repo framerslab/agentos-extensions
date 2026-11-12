@@ -114,6 +114,36 @@ describe('private delivery in a room', () => {
     expect(() => new SelfHarmReferralGuardrail({ delivery: 'private', judge: confirming, stages: ['input', 'output'] })).toThrow(/output/);
   });
 
+  it('flags a confirmed match without a recipient, without reporting a referral', async () => {
+    const { guard, events } = build(confirming);
+    const decision = await moderateContent({ text: 'i want to die' }, {
+      guards: [guard], context: { userId: '', sessionId: 'session-1' },
+    });
+    expect(decision).toMatchObject({ outcome: 'flag', unavailable: false });
+    expect(ofGuard(decision)).toMatchObject({ reasonCode: UNCONFIRMED_REASON_CODE, metadata: { judgeOutcome: 'confirmed' } });
+    expect(replyOf(decision)).toBeUndefined();
+    expect(events).toEqual([]);
+    expect(guard.referralsSent).toBe(0);
+  });
+
+  it('keeps judge and callback error names out of private delivery logs', async () => {
+    for (const failing of ['judge', 'callback']) {
+      const lines: unknown[] = [];
+      const keep = (message: string, metadata?: Record<string, unknown>) => void lines.push([message, metadata]);
+      const fail = () => { throw Object.assign(new Error('ZZMARK_QX'), { name: 'ZzmarkQxError' }); };
+      const guard = new SelfHarmReferralGuardrail({
+        delivery: 'private', judge: failing === 'judge' ? { judge: async () => fail() } : confirming,
+        onEvent: failing === 'callback' ? fail : undefined,
+        logger: { info: keep, warn: keep, error: keep },
+      });
+      const decision = await moderateContent({ text: 'i want to die' }, { guards: [guard], context: room() });
+      expect(lines.length).toBeGreaterThan(0);
+      expect(JSON.stringify(lines).toLowerCase()).not.toContain('zzmark');
+      expect(decision).toMatchObject({ outcome: 'flag', unavailable: false });
+      expect(Boolean(replyOf(decision))).toBe(failing === 'callback');
+    }
+  });
+
   it('runs open, on input alone, and lists its codes', () => {
     const { guard } = build(confirming);
     expect(guard.stages).toEqual(['input']);
