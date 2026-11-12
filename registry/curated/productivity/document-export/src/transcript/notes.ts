@@ -301,14 +301,18 @@ export interface WritePartOptions {
   signal?: AbortSignal;
   /** The version written in the manifest; this build's when absent. */
   version?: number;
+  /** The most bytes the part's manifest and files may hold together, the bound a read of it keeps; `NOTE_BUNDLE_READ_BYTES` when absent. */
+  readBytes?: number;
 }
 
 /**
  * One part as a ZIP: its notes' Markdown files, then `notes.json`. The write goes entry by entry, and a stop rejects
  * with the archive writer's `ArchiveError` (reason `stopped`), handing back no archive. The parts are numbered from 1 in
- * the plan's order, and the part's entry lists the notes its files hold.
+ * the plan's order, and the part's entry lists the notes its files hold. The part as written, its manifest with the
+ * snapshot's own id and time and its notes' files, stays within `readBytes`, so a read under that bound takes it whole.
  *
- * @throws {RangeError} When the plan holds no part of that index, or two notes share one id.
+ * @throws {RangeError} When the plan holds no part of that index, two notes share one id, or the part as written would
+ * pass `readBytes`.
  */
 export async function writeNoteBundlePart(snapshot: BundleSnapshot, plan: readonly BundlePartPlan[], index: number, options: WritePartOptions = {}): Promise<Uint8Array> {
   const part = plan[index];
@@ -325,7 +329,12 @@ export async function writeNoteBundlePart(snapshot: BundleSnapshot, plan: readon
     folders: snapshot.folders.map((folder) => ({ id: folder.id, name: folder.name, parentId: folder.parentId })),
     notes: notes.map((note) => manifestEntry(note, names.get(note.id) as string)),
   };
-  const entries: ArchiveEntry[] = [...notes.map((note) => ({ path: names.get(note.id) as string, data: note.block })), { path: NOTE_BUNDLE_MANIFEST, data: JSON.stringify(manifest, null, 2) }];
+  const written = JSON.stringify(manifest, null, 2);
+  const readBytes = options.readBytes ?? NOTE_BUNDLE_READ_BYTES;
+  let total = encoder.encode(written).length;
+  for (const note of notes) total += encoder.encode(note.block).length;
+  if (total > readBytes) throw new RangeError(`note bundle: part ${index + 1} would hold ${total} bytes, past the ${readBytes} a read keeps`);
+  const entries: ArchiveEntry[] = [...notes.map((note) => ({ path: names.get(note.id) as string, data: note.block })), { path: NOTE_BUNDLE_MANIFEST, data: written }];
   return writeArchive(entries, {
     onEntry: (i) => {
       if (i < notes.length) options.onNote?.(i + 1, notes.length);
