@@ -152,13 +152,16 @@ function safeName(title: string): string {
 }
 
 /**
- * Each folder's path from the top, a folder with no name named by its id's first eight characters, and a folder at the
- * top named for the manifest renamed `notes.json (2)`. A chain that meets a folder twice (a damaged copy) stops there,
- * so every path is finite.
+ * Each folder's path from the top, a folder with no name named by its id's first eight characters, each unique within
+ * the archive whatever its case by a numbered suffix (`Work (2)`), so two sibling folders of one name keep their notes
+ * apart, and a folder at the top named for the manifest renamed `notes.json (2)`. A chain that meets a folder twice (a
+ * damaged copy) stops there, so every path is finite.
  */
 function folderPaths(folders: readonly BundleFolder[]): Map<string, string> {
   const byId = new Map(folders.map((folder) => [folder.id, folder]));
   const paths = new Map<string, string>();
+  // Each path taken, by its lower case, with the folder that holds it; the manifest's name is no folder's.
+  const taken = new Map<string, string | null>([[NOTE_BUNDLE_MANIFEST, null]]);
   const walking = new Set<string>();
   const pathOf = (id: string): string => {
     const known = paths.get(id);
@@ -169,7 +172,14 @@ function folderPaths(folders: readonly BundleFolder[]): Map<string, string> {
     const own = folder.name === null ? safeName(id.slice(0, 8)) : safeName(folder.name);
     const parent = folder.parentId === null ? '' : pathOf(folder.parentId);
     walking.delete(id);
-    const path = parent === '' ? (own.toLowerCase() === NOTE_BUNDLE_MANIFEST ? `${own} (2)` : own) : `${parent}/${own}`;
+    let path = '';
+    for (let n = 1; ; n += 1) {
+      const name = n === 1 ? own : `${own} (${n})`;
+      path = parent === '' ? name : `${parent}/${name}`;
+      const holder = taken.get(path.toLowerCase());
+      if (holder === undefined || holder === id) break;
+    }
+    taken.set(path.toLowerCase(), id);
     paths.set(id, path);
     return path;
   };
@@ -266,8 +276,8 @@ function manifestBytes(folders: readonly BundleFolder[], parts: readonly BundleP
  * folders, stays within the bytes a read keeps, so each part the plan makes reads back under the reader's bound. An
  * empty snapshot is one empty part.
  *
- * @throws {RangeError} When two notes share one id, a note counts more than `NOTE_BUNDLE_MAX_NOTE_BYTES`, or a part
- * with its manifest would pass `limits.readBytes`.
+ * @throws {RangeError} When two notes share one id, a note counts more than `NOTE_BUNDLE_MAX_NOTE_BYTES`, a part
+ * with its manifest would pass `limits.readBytes`, or that bound is not zero or more.
  */
 export function planNoteBundle(snapshot: Pick<BundleSnapshot, 'folders' | 'notes'>, limits: NoteBundleLimits = NOTE_BUNDLE_LIMITS): BundlePartPlan[] {
   const names = noteFileNames(snapshot);
@@ -286,6 +296,7 @@ export function planNoteBundle(snapshot: Pick<BundleSnapshot, 'folders' | 'notes
   }
   if (open.noteIds.length > 0 || parts.length === 0) parts.push(open);
   const readBytes = limits.readBytes ?? NOTE_BUNDLE_READ_BYTES;
+  if (!(readBytes >= 0)) throw new RangeError(`note bundle: readBytes must be zero or more, not ${readBytes}`);
   const manifest = manifestBytes(snapshot.folders, parts);
   for (const part of parts) {
     if (part.bytes + manifest > readBytes) throw new RangeError(`note bundle: a part of ${part.bytes + manifest} bytes with its manifest passes the ${readBytes} a read keeps`);
@@ -311,8 +322,8 @@ export interface WritePartOptions {
  * the plan's order, and the part's entry lists the notes its files hold. The part as written, its manifest with the
  * snapshot's own id and time and its notes' files, stays within `readBytes`, so a read under that bound takes it whole.
  *
- * @throws {RangeError} When the plan holds no part of that index, two notes share one id, or the part as written would
- * pass `readBytes`.
+ * @throws {RangeError} When the plan holds no part of that index, two notes share one id, the part as written would
+ * pass `readBytes`, or that bound is not zero or more.
  */
 export async function writeNoteBundlePart(snapshot: BundleSnapshot, plan: readonly BundlePartPlan[], index: number, options: WritePartOptions = {}): Promise<Uint8Array> {
   const part = plan[index];
@@ -331,6 +342,7 @@ export async function writeNoteBundlePart(snapshot: BundleSnapshot, plan: readon
   };
   const written = JSON.stringify(manifest, null, 2);
   const readBytes = options.readBytes ?? NOTE_BUNDLE_READ_BYTES;
+  if (!(readBytes >= 0)) throw new RangeError(`note bundle: readBytes must be zero or more, not ${readBytes}`);
   let total = encoder.encode(written).length;
   for (const note of notes) total += encoder.encode(note.block).length;
   if (total > readBytes) throw new RangeError(`note bundle: part ${index + 1} would hold ${total} bytes, past the ${readBytes} a read keeps`);
