@@ -79,9 +79,11 @@ The verdict's `metadata` carries the same fields, the session and conversation i
 
 Set `delivery: 'private'` when the host needs a referral for the speaker of a room message. A `judge` or `judgeModel` is required. The guard evaluates input alone; configuring an output stage throws.
 
-A keyword match the judge confirms returns `FLAG` with reason code `SELF_HARM_REFERRAL`. Its `metadata.privateReply` contains `{ recipientId, text, lineIds }`. The recipient is `context.moderation.sender.id`, falling back to `context.userId`. The host sends the text to that person alone and files its review item; the guard itself performs no delivery. Never broadcast the private reply to the room. The `referral_sent` event also carries `delivery: 'private'` and `recipientId`.
+A keyword match the judge confirms with a confidence at or above `judgeThreshold` returns `FLAG` with reason code `SELF_HARM_REFERRAL`. Its `metadata.privateReply` contains `{ recipientId, text, lineIds }`. The recipient is `context.moderation.sender.id`; when the context names no sender, the writer is the user the call runs for (as AgentOS's `ModerationContext` defines `sender`), and the recipient is `context.userId`. The host sends the text to that person alone and files its review item; the guard itself performs no delivery. Never broadcast the private reply to the room. The `referral_sent` event also carries `delivery: 'private'` and `recipientId`.
 
-An unsure judge, a failed request or a timeout sends no referral. Instead the guard returns `FLAG` with `SELF_HARM_UNCONFIRMED` and `metadata.judgeOutcome` (`unsure` or `failed`), for the host to put before a person. A confirmed match with neither recipient id also returns this flag, with `judgeOutcome: 'confirmed'`. A match the judge clears passes. The guard never blocks or holds a room message and fails open on an unexpected fault; the host's other guards decide the message itself. Both delivery modes list the two reason codes in `config.reasonCodes`.
+An unsure judge (a clearing or a confirmation below `judgeThreshold`), a failed request or a timeout sends no referral. Instead the guard returns `FLAG` with `SELF_HARM_UNCONFIRMED` and `metadata.judgeOutcome` (`unsure` or `failed`), for the host to put before a person. A confirmed match with no person to send it to also returns this flag, with `judgeOutcome: 'confirmed'`: a sender whose `kind` is `agent`, a sender with no usable id (the guard never falls back to `context.userId` once a sender is named), or no id at all. A match the judge clears passes. The guard never blocks or holds a room message and fails open on an unexpected fault; the host's other guards decide the message itself. Both delivery modes list the two reason codes in `config.reasonCodes`.
+
+The guard names its own deadline in this mode: `config.timeoutMs` is `judgeTimeoutMs` plus one second. A `moderateContent()` call gives a guard with no deadline of its own the call's `timeoutMs` (8 seconds by default) and drops a guard that runs open when it passes, so without its own deadline a slow judge would let the item pass with no flag. With it, the judge's deadline always ends first and the guard flags the item. Set `judgeTimeoutMs` to bound how long the guard can take.
 
 ```ts
 import { moderateContent } from '@framers/agentos';
@@ -192,8 +194,8 @@ Passed as `createExtensionPack({ options })` or `new SelfHarmReferralGuardrail(o
 | `stages` | `['input', 'output']` in `reply`; `['input']` in `private` | the stages it evaluates; private delivery rejects `output` |
 | `judge` | none | a `PhraseJudge` the host built |
 | `judgeModel` | none | `{ provider, model, apiKey?, baseUrl? }` for a judge on the host's provider; a provider other than `openai` needs a model |
-| `judgeThreshold` | `0.7` | the confidence at or above which the judge's clearing counts |
-| `judgeTimeoutMs` | `6000` | the judge's deadline; expiry sends a referral in `reply`, and flags without one in `private` |
+| `judgeThreshold` | `0.7` | the confidence at or above which the judge's clearing counts; in `private`, its confirmation too |
+| `judgeTimeoutMs` | `6000` | the judge's deadline; expiry sends a referral in `reply`, and flags without one in `private`, where the guard's own `config.timeoutMs` is this plus one second |
 | `country`, `locale` | none | the place used when the turn names no country |
 | `table` | the shipped table | a table of the same shape |
 | `extraPhrases` | none | AgentOS `PhraseEntry` items added on both stages |
