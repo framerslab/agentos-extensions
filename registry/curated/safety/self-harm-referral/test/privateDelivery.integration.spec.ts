@@ -6,7 +6,7 @@
  * createPrivateReferral() builds the same referral for a message another classifier confirmed.
  */
 import { moderateContent, type GuardrailContext } from '@framers/agentos';
-import { GuardrailAction, type PhraseJudge, type PhraseJudgeVerdict } from '@framers/agentos/safety/guardrails';
+import { GuardrailAction, type GuardrailInputPayload, type PhraseJudge, type PhraseJudgeVerdict } from '@framers/agentos/safety/guardrails';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -124,6 +124,50 @@ describe('private delivery in a room', () => {
     expect(replyOf(decision)).toBeUndefined();
     expect(events).toEqual([]);
     expect(guard.referralsSent).toBe(0);
+  });
+
+  it('flags a judge that outlasts the call deadline instead of letting the item pass', async () => {
+    const events: ReferralSentEvent[] = [];
+    const guard = new SelfHarmReferralGuardrail({ delivery: 'private', judge: never, judgeTimeoutMs: 300, onEvent: (event) => void events.push(event) });
+    // the call's deadline is shorter than the judge's; the guard's own deadline must still answer
+    const decision = await moderateContent({ text: 'i want to die' }, { guards: [guard], context: room(), timeoutMs: 100 });
+    expect(decision).toMatchObject({ outcome: 'flag', unavailable: false });
+    expect(ofGuard(decision)).toMatchObject({ reasonCode: UNCONFIRMED_REASON_CODE, metadata: { judgeOutcome: 'failed' } });
+    expect(replyOf(decision)).toBeUndefined();
+    expect(events).toEqual([]);
+  });
+
+  it('treats a confirmation below the threshold as unsure and sends nothing', async () => {
+    const { guard, events } = build({ judge: async () => ({ block: true, confidence: 0.2, reason: 'maybe' }) });
+    const decision = await moderateContent({ text: 'how do I die in this level' }, { guards: [guard], context: room() });
+    expect(decision).toMatchObject({ outcome: 'flag', unavailable: false });
+    expect(ofGuard(decision)).toMatchObject({ reasonCode: UNCONFIRMED_REASON_CODE, metadata: { judgeOutcome: 'unsure' } });
+    expect(replyOf(decision)).toBeUndefined();
+    expect(events).toEqual([]);
+    expect(guard.referralsSent).toBe(0);
+  });
+
+  it('sends nothing to an agent sender, nor to the account the call runs for when the sender is unusable', async () => {
+    const agent = build(confirming);
+    const fromAgent = await moderateContent({ text: 'i want to die' }, {
+      guards: [agent.guard],
+      context: { ...room(), moderation: { surface: 'public_room', roomId: 'r1', sender: { id: 'agent-7', kind: 'agent' } } },
+    });
+    expect(fromAgent).toMatchObject({ outcome: 'flag', unavailable: false });
+    expect(ofGuard(fromAgent)).toMatchObject({ reasonCode: UNCONFIRMED_REASON_CODE, metadata: { judgeOutcome: 'confirmed' } });
+    expect(replyOf(fromAgent)).toBeUndefined();
+    expect(agent.events).toEqual([]);
+    expect(agent.guard.referralsSent).toBe(0);
+
+    // a core before the typed context checks nothing: the guard is called as such a core calls it
+    const unusable = build(confirming);
+    const verdict = await unusable.guard.evaluateInput({
+      context: { ...room(), moderation: { surface: 'public_room', sender: { id: '' } } },
+      input: { userId: 'moderation-account', sessionId: 'session-1', textInput: 'i want to die' },
+    } as GuardrailInputPayload);
+    expect(verdict).toMatchObject({ action: GuardrailAction.FLAG, reasonCode: UNCONFIRMED_REASON_CODE, metadata: { judgeOutcome: 'confirmed' } });
+    expect((verdict?.metadata as { privateReply?: unknown } | undefined)?.privateReply).toBeUndefined();
+    expect(unusable.events).toEqual([]);
   });
 
   it.each(['reply', 'private'] as const)('keeps judge and callback error names out of %s delivery logs', async (delivery) => {
