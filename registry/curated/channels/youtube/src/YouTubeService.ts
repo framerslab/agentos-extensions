@@ -87,6 +87,42 @@ export interface ChannelAnalytics {
   likeCount?: number;
 }
 
+/**
+ * One video's fields as `videos.list` returned them, untouched: a caller judges a value's type itself.
+ * A field the API left out is absent from the row, and so is a part that is not an object.
+ */
+export interface VideoStatusRow {
+  id: string;
+  snippet?: { channelId?: unknown; channelTitle?: unknown; title?: unknown; description?: unknown };
+  status?: { embeddable?: unknown; madeForKids?: unknown; privacyStatus?: unknown };
+  contentDetails?: { caption?: unknown; duration?: unknown; contentRating?: unknown };
+}
+
+/** The fields of each part that {@link YouTubeService.getVideosStatus} keeps in a row. */
+const VIDEO_STATUS_FIELDS = {
+  snippet: ['channelId', 'channelTitle', 'title', 'description'],
+  status: ['embeddable', 'madeForKids', 'privacyStatus'],
+  contentDetails: ['caption', 'duration', 'contentRating'],
+} as const;
+
+/** The ids one call of `videos.list` reads in {@link YouTubeService.getVideosStatus}. */
+const VIDEOS_PER_CALL = 50;
+
+/** Copies the fields a row keeps from one item of `videos.list`, each value as it came. */
+function videoStatusRow(item: Record<string, any>): VideoStatusRow {
+  const row: VideoStatusRow = { id: item.id };
+  for (const [part, fields] of Object.entries(VIDEO_STATUS_FIELDS)) {
+    const source = item[part];
+    if (source === null || typeof source !== 'object' || Array.isArray(source)) continue;
+    const kept: Record<string, unknown> = {};
+    for (const field of fields) {
+      if (Object.prototype.hasOwnProperty.call(source, field)) kept[field] = source[field];
+    }
+    (row as Record<string, unknown>)[part] = kept;
+  }
+  return row;
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -336,6 +372,35 @@ export class YouTubeService {
     if (!item) throw new Error(`Video ${videoId} not found`);
 
     return this.mapVideoResult(item);
+  }
+
+  /**
+   * The status of a batch of videos: one call of `videos.list` (parts `snippet`, `status` and `contentDetails`)
+   * for each fifty ids, one quota unit a call. Works with an API key alone.
+   *
+   * The rows come in the order of the ids asked for; an id asked twice is read once and has one row. An id the
+   * API returns nothing for (a removed or private video) has no row. An empty list makes no call. A failed call,
+   * a refused quota among them, rejects with the API's own error. Nothing is stored or logged.
+   *
+   * @param videoIds The ids of the videos to read.
+   * @returns One {@link VideoStatusRow} for each video the API returned.
+   */
+  async getVideosStatus(videoIds: string[]): Promise<VideoStatusRow[]> {
+    const client = this.requirePublicClient();
+    const asked = [...new Set(videoIds)];
+    const found = new Map<string, VideoStatusRow>();
+
+    for (let start = 0; start < asked.length; start += VIDEOS_PER_CALL) {
+      const response = await client.videos.list({
+        part: ['snippet', 'status', 'contentDetails'],
+        id: asked.slice(start, start + VIDEOS_PER_CALL),
+      });
+      for (const item of response.data.items ?? []) {
+        if (typeof item?.id === 'string') found.set(item.id, videoStatusRow(item));
+      }
+    }
+
+    return asked.filter((id) => found.has(id)).map((id) => found.get(id)!);
   }
 
   async getChannelStatistics(channelId?: string): Promise<ChannelAnalytics> {
