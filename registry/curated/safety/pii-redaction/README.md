@@ -1,20 +1,7 @@
 # @framers/agentos-ext-pii-redaction
 
-This extension has been promoted to a **core extension** and is maintained at the
-monorepo root:
+This package is maintained in another repository and published to npm from there. This folder holds no source.
 
-```
-packages/agentos-ext-pii-redaction/
-```
+The published package and its README are on npm: [@framers/agentos-ext-pii-redaction](https://www.npmjs.com/package/@framers/agentos-ext-pii-redaction). The README describes the entity types it detects, the two contact types (`STREET_ADDRESS` and `SOCIAL_HANDLE`) it detects only when `entityTypes` names them, and its refuse mode (`onDetect: 'refuse'`), which blocks with `PII_PRESENT` and returns no rewritten text.
 
-The canonical source lives at:
-- **Repository**: `voice-chat-assistant/packages/agentos-ext-pii-redaction/`
-- **npm**: [`@framers/agentos-ext-pii-redaction`](https://www.npmjs.com/package/@framers/agentos-ext-pii-redaction)
-- **CI/CD**: Independent semantic-release via `.github/workflows/`
-
-This directory previously contained a duplicate copy. It has been removed to
-avoid drift between the two locations. Install the package from npm or reference
-the root-level source directly.
-
-See the [two-tier extension pattern](../../README.md#two-tier-extension-pattern)
-in the main README for details.
+See the [two-tier extension pattern](../../../../README.md#two-tier-extension-pattern) in the main README.
