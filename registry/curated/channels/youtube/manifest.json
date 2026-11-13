@@ -27,6 +27,7 @@
     "Search videos, channels, and playlists",
     "Discover trending videos by region and category",
     "Track channel and video analytics (views, likes, subscribers)",
+    "Read the status of a batch of videos (embedding, audience, privacy, captions, duration)",
     "Create and manage playlists",
     "Schedule video publishing with privacy status transitions",
     "Thread-based comment replies"

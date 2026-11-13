@@ -10,7 +10,7 @@
  */
 
 import type { ExtensionContext, ExtensionPack } from '@framers/agentos';
-import { YouTubeService, type YouTubeConfig } from './YouTubeService';
+import { YouTubeService, type YouTubeConfig, type VideoStatusRow } from './YouTubeService';
 import { YouTubeChannelAdapter } from './YouTubeChannelAdapter';
 import { YouTubeUploadTool } from './tools/upload';
 import { YouTubeShortTool } from './tools/short';
@@ -129,5 +129,5 @@ export {
   YouTubePlaylistTool,
   YouTubeScheduleTool,
 };
-export type { YouTubeConfig };
+export type { YouTubeConfig, VideoStatusRow };
 export default createExtensionPack;
