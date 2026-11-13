@@ -59,8 +59,9 @@ export type DetectionMethod = 'keyword' | 'keyword_and_judge' | 'classifier';
 
 /**
  * What the judge said about a keyword match that led to a referral: `none` when no judge is configured, `confirmed`
- * when it found the text calls for one, `unsure` when it cleared the text below the threshold, `failed` when it threw,
- * timed out or answered nothing usable.
+ * when it found the text calls for one, `unsure` when it cleared the text below the threshold (in `private` delivery,
+ * also when it found the text calls for one below the threshold), `failed` when it threw, timed out or answered
+ * nothing usable.
  */
 export type JudgeOutcome = 'none' | 'confirmed' | 'unsure' | 'failed';
 
@@ -117,8 +118,9 @@ export interface SelfHarmReferralOptions {
   stages?: ReferralStage[];
   /**
    * `reply` (default): the guard answers the turn itself with the referral, as before. `private`: for rooms. A keyword
-   * match goes to the judge, which is required; a confirmed match is a FLAG carrying `metadata.privateReply` for the
-   * host to send to the speaker alone; an unconfirmed one sends nothing and is flagged for a person. The guard never
+   * match goes to the judge, which is required; a match it confirms at or above `judgeThreshold` is a FLAG carrying
+   * `metadata.privateReply` for the host to send to the speaker alone; any other match it does not clear sends nothing
+   * and is flagged for a person, as is a confirmed one whose sender is an agent or has no usable id. The guard never
    * blocks, evaluates input alone, and fails open.
    */
   delivery?: 'reply' | 'private';
@@ -126,9 +128,15 @@ export interface SelfHarmReferralOptions {
   judge?: PhraseJudge;
   /** A model judge on the host's provider, built with AgentOS's `createLlmPhraseJudge`. */
   judgeModel?: JudgeModelOptions;
-  /** The judge's confidence at or above which its clearing of a match counts. Default 0.7. */
+  /**
+   * The judge's confidence at or above which its clearing of a match counts; in private delivery its confirmation
+   * too. Default 0.7.
+   */
   judgeThreshold?: number;
-  /** The judge deadline. Default 6000 ms; expiry refers in reply mode and flags without a referral in private mode. */
+  /**
+   * The judge deadline. Default 6000 ms; expiry refers in reply mode and flags without a referral in private mode,
+   * where the guard's own `config.timeoutMs` is this plus one second.
+   */
   judgeTimeoutMs?: number;
   /** The country (ISO 3166-1 alpha-2) whose lines a referral names when the turn names no country. */
   country?: string;

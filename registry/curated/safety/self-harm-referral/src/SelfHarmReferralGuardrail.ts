@@ -46,7 +46,10 @@ export const DEFAULT_GUARDRAIL_ID = 'self-harm-referral';
 /** The reason code on every referral verdict. */
 export const REFERRAL_REASON_CODE = 'SELF_HARM_REFERRAL';
 
-/** The reason code of a `private`-mode match that sent no referral: the judge was unsure, failed, or nobody could be named to send it to. */
+/**
+ * The reason code of a `private`-mode match that sent no referral: the judge was unsure (a clearing or a confirmation
+ * below the threshold), failed, or no person could be named to send it to.
+ */
 export const UNCONFIRMED_REASON_CODE = 'SELF_HARM_UNCONFIRMED';
 
 /** The codes the guard answers with, for its `config.reasonCodes`. */
@@ -57,6 +60,13 @@ export const DEFAULT_JUDGE_THRESHOLD = 0.7;
 
 /** How long the judge may take, when the host sets no limit. */
 export const DEFAULT_JUDGE_TIMEOUT_MS = 6_000;
+
+/**
+ * In `private` delivery the guard's own deadline (`config.timeoutMs`) is the judge's plus this margin, so the judge's
+ * deadline always ends first and the guard answers its flag: a moderation call's shorter default deadline would
+ * otherwise drop a guard that runs open, and the item would pass with no flag for a person.
+ */
+const PRIVATE_DEADLINE_MARGIN_MS = 1_000;
 
 /**
  * What the model judge is asked to decide about a keyword match. The judge blocks (`block: true`) when the text calls
@@ -81,11 +91,19 @@ const FINAL_RESPONSE = 'final_response';
 /** A logger that writes nothing, for a guard built with none. */
 const SILENT: ILogger = { info() {}, warn() {}, error() {} };
 
-/** Who a private referral is for: the room message's sender when the context names one, else the user the call runs for. */
+/**
+ * Who a private referral is for: the room message's sender when the context names one, else the user the call runs
+ * for. A context that names a sender has said the writer is not that user, so a sender that is an agent or has no
+ * usable id gives no recipient, never the user.
+ */
 function recipientOf(context: GuardrailContext | undefined): string | undefined {
   // Read without the type of a newer core, so the pack builds and runs on every core its peer floor names
-  const sender = (context as { moderation?: { sender?: { id?: unknown } } } | undefined)?.moderation?.sender?.id;
-  if (typeof sender === 'string' && sender.length > 0) return sender;
+  const sender = (context as { moderation?: { sender?: { id?: unknown; kind?: unknown } | null } } | undefined)?.moderation?.sender;
+  if (sender !== undefined && sender !== null) {
+    if (sender.kind === 'agent') return undefined;
+    const id = sender.id;
+    return typeof id === 'string' && id.length > 0 ? id : undefined;
+  }
   const userId = context?.userId;
   return typeof userId === 'string' && userId.length > 0 ? userId : undefined;
 }
@@ -117,7 +135,8 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
    * judge from reaching it.
    *
    * In `private` mode it never answers the turn, so it needs no first phase, and a fault inside it never refuses a
-   * room message: `canSanitize` and `failClosed` are false.
+   * room message: `canSanitize` and `failClosed` are false. Its `timeoutMs` is the judge's deadline plus a second, so
+   * a caller's shorter deadline never drops it before its judge's deadline makes it flag the item.
    */
   readonly config: GuardrailConfig;
   /** How a referral reaches the person: `reply` or `private`. */
@@ -157,8 +176,11 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
       }
     }
     this.stages = [...(options.stages ?? (this.delivery === 'private' ? ['input'] : ['input', 'output']))];
+    const judgeTimeoutMs = options.judgeTimeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS;
+    // A deadline that outlasts the judge's, so the guard answers its flag before a caller's deadline drops it
+    const ownDeadline = Number.isFinite(judgeTimeoutMs) && judgeTimeoutMs >= 0 ? { timeoutMs: judgeTimeoutMs + PRIVATE_DEADLINE_MARGIN_MS } : {};
     this.config = this.delivery === 'private'
-      ? { canSanitize: false, evaluateStreamingChunks: false, failClosed: false, reasonCodes: REASON_CODES }
+      ? { canSanitize: false, evaluateStreamingChunks: false, failClosed: false, ...ownDeadline, reasonCodes: REASON_CODES }
       : { canSanitize: true, evaluateStreamingChunks: false, failClosed: true, reasonCodes: REASON_CODES };
     this.table = options.table ?? REFERRAL_TABLE;
     if (!this.table.countries[this.table.always]) {
@@ -170,11 +192,11 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
         ? createLlmPhraseJudge({
             ...options.judgeModel,
             criteria: SELF_HARM_JUDGE_CRITERIA,
-            timeoutMs: options.judgeTimeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS,
+            timeoutMs: judgeTimeoutMs,
           })
         : undefined);
     this.judgeThreshold = options.judgeThreshold ?? DEFAULT_JUDGE_THRESHOLD;
-    this.judgeTimeoutMs = options.judgeTimeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS;
+    this.judgeTimeoutMs = judgeTimeoutMs;
     const extra = options.extraPhrases ?? [];
     this.inputPhrases = [...SELF_HARM_PHRASES, ...extra];
     this.outputPhrases = [...SELF_HARM_PHRASES, ...REPLY_PHRASES, ...extra];
@@ -302,7 +324,11 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
         this.log('warn', `self-harm-referral: judge gave no usable answer; ${after}`, { guardrailId: this.id, stage });
         return { refer: true, method: 'keyword_and_judge', outcome: 'failed' };
       }
-      if (verdict.block) return { refer: true, method: 'keyword_and_judge', outcome: 'confirmed' };
+      if (verdict.block) {
+        // In private mode the threshold bounds a confirmation as it bounds a clearing: a weak one sends nothing
+        const weak = this.delivery === 'private' && verdict.confidence < this.judgeThreshold;
+        return { refer: true, method: 'keyword_and_judge', outcome: weak ? 'unsure' : 'confirmed' };
+      }
       if (verdict.confidence < this.judgeThreshold) return { refer: true, method: 'keyword_and_judge', outcome: 'unsure' };
       // A clearing withholds a referral and leaves no event, so this line is what there is to audit. The judge's reason
       // is left out, since it can repeat the text it was given.
@@ -379,9 +405,10 @@ export class SelfHarmReferralGuardrail implements IGuardrailService {
   }
 
   /**
-   * `private` mode: a keyword match goes to the judge. Confirmed: a FLAG carrying the private reply for the speaker,
-   * and the event. Cleared: null. Unsure, failed or timed out: no referral, and a FLAG a host puts before a person.
-   * Never a BLOCK and never a hold: the message itself is decided by the host's other guards.
+   * `private` mode: a keyword match goes to the judge. Confirmed at or above the threshold: a FLAG carrying the
+   * private reply for the speaker, and the event. Cleared: null. Unsure, failed or timed out, or no person to send it
+   * to: no referral, and a FLAG a host puts before a person. Never a BLOCK and never a hold: the message itself is
+   * decided by the host's other guards.
    */
   private async evaluatePrivately(text: string, context: GuardrailContext | undefined, hints: PlaceHint[]): Promise<GuardrailEvaluationResult | null> {
     const matched = phraseMatches(this.inputPhrases, text);
