@@ -16,6 +16,7 @@ import { DOListResourcesTool } from './tools/listResources.js';
 import { DODeployAppTool } from './tools/deployApp.js';
 import { DOManageDnsTool } from './tools/manageDns.js';
 import { DODeleteResourceTool } from './tools/deleteResource.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -77,7 +78,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-cloud-digitalocean',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'doCreateApp', kind: 'tool', priority: 40, payload: createAppTool },
       { id: 'doCreateDroplet', kind: 'tool', priority: 40, payload: createDropletTool },

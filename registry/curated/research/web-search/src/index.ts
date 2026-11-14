@@ -14,6 +14,8 @@ import { WebSearchTool } from './tools/webSearch.js';
 import { ResearchAggregatorTool } from './tools/researchAggregator.js';
 import { FactCheckTool } from './tools/factCheck.js';
 import { SearchProviderService } from './services/searchProvider.js';
+import type { SearchProviderConfig } from './services/searchProvider.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 /**
  * Extension configuration options
@@ -31,6 +33,16 @@ export interface WebSearchExtensionOptions {
   firecrawlApiKey?: string;
   /** SearXNG instance URL (e.g. http://searxng:8080 or http://localhost:8888) */
   searxngUrl?: string;
+  /** English Wikipedia through public-sources: no key; off until `enabled`; a `client` and the process's `limiter` */
+  wikipedia?: SearchProviderConfig['wikipedia'];
+  /** Serper's search endpoint; https://google.serper.dev/search when left out */
+  serperUrl?: string;
+  /** Tavily's search endpoint; https://api.tavily.com/search when left out */
+  tavilyUrl?: string;
+  /** Firecrawl's search endpoint; https://api.firecrawl.dev/v1/search when left out */
+  firecrawlUrl?: string;
+  /** Tavily's search depth; `advanced` when left out */
+  tavily?: SearchProviderConfig['tavily'];
   /** Default maximum results for searches */
   defaultMaxResults?: number;
   /** Rate limiting configuration */
@@ -86,7 +98,12 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
     tavilyApiKey,
     firecrawlApiKey,
     searxngUrl,
-    rateLimit: options.rateLimit
+    rateLimit: options.rateLimit,
+    wikipedia: options.wikipedia,
+    serperUrl: options.serperUrl,
+    tavilyUrl: options.tavilyUrl,
+    firecrawlUrl: options.firecrawlUrl,
+    tavily: options.tavily
   });
   
   const defaultMultiSearch = options.defaultMultiSearch ?? false;
@@ -98,7 +115,7 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
   
   return {
     name: '@framers/agentos-ext-web-search',
-    version: '1.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       {
         id: webSearchTool.name,
@@ -145,8 +162,10 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
 
 // Export types for consumers
 export { WebSearchTool, ResearchAggregatorTool, FactCheckTool };
-export { SearchProviderService, SearchResult, ProviderResponse } from './services/searchProvider.js';
-export type { SearchProviderConfig, MultiSearchResult, MultiSearchResponse } from './services/searchProvider.js';
+export { SearchProviderService, SearchFailed, SearchResult, ProviderResponse } from './services/searchProvider.js';
+export type { SearchProviderConfig, SearchOptions, MultiSearchResult, MultiSearchResponse } from './services/searchProvider.js';
+/** What a `wikipedia` search the limiter refused throws, with the limiter's reason; public-sources' own class. */
+export { LimiterRefused } from '@framers/agentos-ext-public-sources';
 
 // Default export for convenience
 export default createExtensionPack;

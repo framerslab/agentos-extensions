@@ -75,6 +75,7 @@ import { StealthBrowserService } from '../src/StealthBrowserService.js';
 import { StealthNavigateTool } from '../src/tools/navigate.js';
 import { StealthScrapeTool } from '../src/tools/scrape.js';
 import { createExtensionPack } from '../src/index.js';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ── Reset mocks between tests ───────────────────────────────────────────
 
@@ -357,7 +358,7 @@ describe('createExtensionPack', () => {
     const pack = createExtensionPack({ options: {} });
 
     expect(pack.name).toBe('@framers/agentos-ext-stealth-browser');
-    expect(pack.version).toBe('1.0.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
     expect(pack.descriptors).toHaveLength(6);
 
     const toolNames = pack.descriptors.map((d: any) => d.id);

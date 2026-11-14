@@ -11,8 +11,8 @@
  * @module ml-classifiers/keyword-classifier
  */
 
-import type { ClassifierCategory, CategoryScore } from './types';
-import { ALL_CATEGORIES } from './types';
+import type { ClassifierCategory, CategoryScore } from './types.js';
+import { ALL_CATEGORIES } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Pattern dictionaries

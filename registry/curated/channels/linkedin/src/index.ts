@@ -18,6 +18,7 @@ import { LinkedInSearchTool } from './tools/search.js';
 import { LinkedInAnalyticsTool } from './tools/analytics.js';
 import { LinkedInScheduleTool } from './tools/schedule.js';
 import { LinkedInOrgPostTool } from './tools/orgPost.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -92,7 +93,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-linkedin',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'linkedinPost', kind: 'tool', priority: 50, payload: postTool },
       { id: 'linkedinComment', kind: 'tool', priority: 50, payload: commentTool },

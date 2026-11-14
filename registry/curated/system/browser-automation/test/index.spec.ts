@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createExtensionPack, getSharedBrowser, getSharedCaptcha, getSharedProxy } from '../src/index';
 import type { ExtensionContext, ExtensionPack } from '../src/index';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -59,7 +60,7 @@ describe('Browser Automation – createExtensionPack', () => {
   });
 
   it('should have version 0.2.0', () => {
-    expect(pack.version).toBe('0.2.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   // ── Descriptor count and IDs ──

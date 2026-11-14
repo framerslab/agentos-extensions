@@ -10,7 +10,7 @@
  */
 
 import type { ExtensionContext, ExtensionPack } from '@framers/agentos';
-import { YouTubeService, type YouTubeConfig } from './YouTubeService';
+import { YouTubeService, type YouTubeConfig, type VideoStatusRow } from './YouTubeService';
 import { YouTubeChannelAdapter } from './YouTubeChannelAdapter';
 import { YouTubeUploadTool } from './tools/upload';
 import { YouTubeShortTool } from './tools/short';
@@ -20,6 +20,7 @@ import { YouTubeTrendingTool } from './tools/trending';
 import { YouTubeAnalyticsTool } from './tools/analytics';
 import { YouTubePlaylistTool } from './tools/playlist';
 import { YouTubeScheduleTool } from './tools/schedule';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface YouTubeChannelOptions {
   apiKey?: string;
@@ -92,7 +93,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-youtube',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'youtubeUpload', kind: 'tool', priority, payload: uploadTool },
       { id: 'youtubeShort', kind: 'tool', priority, payload: shortTool },
@@ -128,5 +129,5 @@ export {
   YouTubePlaylistTool,
   YouTubeScheduleTool,
 };
-export type { YouTubeConfig };
+export type { YouTubeConfig, VideoStatusRow };
 export default createExtensionPack;

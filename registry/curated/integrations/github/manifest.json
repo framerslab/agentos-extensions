@@ -2,8 +2,8 @@
   "$schema": "https://agentos.sh/schemas/extension-manifest-v1.json",
   "id": "com.framers.integrations.github",
   "name": "GitHub Extension",
-  "version": "0.10.0",
-  "description": "GitHub API tools: 26 tools for repos, issues, PRs, branches, commits, releases, Actions, files, gists, and codebase indexing. Its ./documents entry adds a GitHub App's installation mode (the app's JWT, installation tokens, the user's web flow, webhook deliveries checked and read as typed events, a daily reconcile, every call under a deadline with rate limit timing) and a connector that reads a repository's documentation as account sources.",
+  "version": "0.11.0",
+  "description": "GitHub API tools: 26 tools for repos, issues, PRs, branches, commits, releases, Actions, files, gists, and codebase indexing. Its ./documents entry adds a GitHub App's installation mode (the app's JWT, installation tokens, the user's web flow, webhook deliveries checked and read as typed events, a daily reconcile, every call under a deadline with rate limit timing), calls made on a person's own token (the issues assigned to them, an issue opened and closed, the token's refresh and the grant's revoke) and a connector that reads a repository's documentation as account sources.",
   "categories": ["tool", "developer"],
   "extensions": [
     { "kind": "tool", "id": "github_search", "displayName": "GitHub Search" },
@@ -47,6 +47,7 @@
     "Gist creation",
     "GitHub App installation mode: app JWT, installation tokens, the user's web flow, installations and repositories a user can reach, webhook signatures, daily reconcile",
     "Webhook deliveries read as typed events: pushes, installation actions, repositories added and removed, accounts renamed",
+    "Calls on a person's own token: the open issues assigned to them in the repositories named, the repositories they may open an issue in, an issue opened and closed, the user token's refresh and the grant's revoke",
     "Every REST call under a deadline, answers read under a cap, rate limits answered with the time to try again",
     "Repository documentation as account sources, read by tree with raw file reads and compared by tree on a push"
   ]

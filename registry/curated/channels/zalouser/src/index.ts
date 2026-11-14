@@ -31,6 +31,7 @@ import type {
   ToolExecutionContext,
   ToolExecutionResult,
 } from '@framers/agentos';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface ZalouserChannelOptions {
   /**
@@ -422,7 +423,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-zalouser',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'zalouserChannelSendMessage', kind: 'tool', priority, payload: tool },
       { id: 'zalouserChannel', kind: 'messaging-channel', priority, payload: adapter },

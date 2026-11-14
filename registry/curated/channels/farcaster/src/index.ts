@@ -17,6 +17,7 @@ import { FarcasterLikeTool } from './tools/like.js';
 import { FarcasterRecastTool } from './tools/recast.js';
 import { FarcasterSearchTool } from './tools/search.js';
 import { FarcasterFeedTool } from './tools/feed.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -89,7 +90,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-farcaster',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'farcasterCast', kind: 'tool', priority: 50, payload: castTool },
       { id: 'farcasterReply', kind: 'tool', priority: 50, payload: replyTool },

@@ -34,13 +34,13 @@
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^6.0.3",
-    "vitest": "^3.2.7"
+    "vitest": "^5.1.0"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
-    "nostr-tools": "2.25.2",
+    "nostr-tools": "2.26.0",
     "ws": "^8.18.0"
   },
   "repository": {

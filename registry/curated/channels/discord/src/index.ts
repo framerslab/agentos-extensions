@@ -26,6 +26,7 @@ import {
 } from './DiscordChannelAdapter';
 import { DiscordSendMessageTool } from './tools/sendMessage';
 import { DiscordSendMediaTool } from './tools/sendMedia';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 export interface DiscordChannelOptions {
   botToken?: string;
@@ -123,7 +124,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-discord',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'discordChannelSendMessage', kind: 'tool', priority, payload: sendMessageTool },
       { id: 'discordChannelSendMedia', kind: 'tool', priority, payload: sendMediaTool },

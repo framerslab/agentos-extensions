@@ -270,6 +270,8 @@ function installAndVerify(items, consumer, { hosts = [], label = '', warnUndecla
       options: entry.fixture.options ?? {},
       exports: entry.exports,
       entries: entrySpecifiers(entry.pkg.name, entry.entries),
+      // The version the tarball's package.json holds, which a pack that reports a version must report.
+      version: entry.pkg.version,
     };
     const result = spawnSync(process.execPath, [verifier, JSON.stringify(payload)], {
       cwd: consumer,

@@ -13,6 +13,7 @@ import { bindVoiceProvider, type VoiceProviderBinding } from '@framers/agentos/i
 import { PlivoVoiceService, type PlivoServiceConfig } from './PlivoVoiceService';
 import { createPlivoVoiceProvider, PlivoVoiceProvider } from './PlivoVoiceProvider';
 import { PlivoVoiceCallTool } from './tools/voiceCall';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ============================================================================
 // Extension Options
@@ -157,7 +158,7 @@ export function createExtensionPack(context: ExtensionContext): PlivoVoicePack {
   return {
     binding,
     name: '@framers/agentos-ext-voice-plivo',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'plivoVoiceCall', kind: 'tool', priority, payload: voiceCallTool },
       { id: 'plivoVoiceProvider', kind: 'voice-provider', priority, payload: provider },

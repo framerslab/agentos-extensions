@@ -1,0 +1,58 @@
+name: Published pack
+
+# After a release: installs that exact version of one pack from the registry into an empty project, beside the newest
+# @framers/agentos, and runs that pack's consumer script of the checked-out commit against it
+# (registry/curated/<dir>/scripts/published-consumer.mjs). Started by hand:
+#   gh workflow run published-pack.yml -f dir=safety/self-harm-referral -f version=<x.y.z>
+# It reads no secret and writes nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      dir:
+        description: The pack's folder under registry/curated/
+        required: true
+        type: choice
+        options: [safety/self-harm-referral]
+      version:
+        description: Exact published version, without v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  published:
+    name: Published pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: The version is a release number
+        env:
+          VERSION: ${{ inputs.version }}
+        run: printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: registry/curated/${{ inputs.dir }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: The published pack runs as an application imports it
+        env:
+          DIR: ${{ inputs.dir }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          NAME="$(node -p "require('./registry/curated/${DIR}/package.json').name")"
+          WORK="$(mktemp -d)"
+          cp "registry/curated/${DIR}/scripts/published-consumer.mjs" "$WORK/consumer.mjs"
+          cd "$WORK"
+          printf '%s\n' '{"name":"published-consumer","private":true,"type":"module"}' > package.json
+          # optional dependencies are installed, as an application's default install takes them; no install script runs
+          npm install --ignore-scripts --no-audit --no-fund --no-package-lock "${NAME}@${VERSION}" @framers/agentos@latest
+          test "$(node -p "require('./node_modules/${NAME}/package.json').version")" = "$VERSION"
+          node consumer.mjs

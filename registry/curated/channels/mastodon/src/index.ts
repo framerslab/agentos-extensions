@@ -18,6 +18,7 @@ import { MastodonSearchTool } from './tools/search.js';
 import { MastodonTrendingTool } from './tools/trending.js';
 import { MastodonFollowTool } from './tools/follow.js';
 import { MastodonAnalyticsTool } from './tools/analytics.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -84,7 +85,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-mastodon',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'mastodonPost', kind: 'tool', priority: 50, payload: postTool },
       { id: 'mastodonReply', kind: 'tool', priority: 50, payload: replyTool },

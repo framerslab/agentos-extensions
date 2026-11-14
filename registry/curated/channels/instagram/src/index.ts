@@ -20,6 +20,7 @@ import { InstagramFollowTool } from './tools/follow.js';
 import { InstagramHashtagsTool } from './tools/hashtags.js';
 import { InstagramExploreTool } from './tools/explore.js';
 import { InstagramAnalyticsTool } from './tools/analytics.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -80,7 +81,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-instagram',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'instagramPost', kind: 'tool', priority: 50, payload: postTool },
       { id: 'instagramReel', kind: 'tool', priority: 50, payload: reelTool },

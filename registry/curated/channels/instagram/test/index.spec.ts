@@ -15,6 +15,7 @@ vi.mock('axios', () => ({
 }));
 
 import { createExtensionPack, type ExtensionContext } from '../src/index.js';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,7 +66,7 @@ describe('createExtensionPack()', () => {
 
   it('should return version 0.1.0', () => {
     const pack = createExtensionPack(makeContext());
-    expect(pack.version).toBe('0.1.0');
+    expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
   });
 
   it('should contain 11 descriptors (10 tools + 1 channel)', () => {

@@ -1,0 +1,63 @@
+{
+  "name": "@framers/agentos-ext-linear",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Linear for AgentOS: OAuth 2.0 with PKCE on the core's redirect flow, a GraphQL client over fetch, and the issue tracker interface of the account sources library",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./manifest.json": "./manifest.json",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "tsc -p tsconfig.test.json && vitest run --passWithNoTests",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "agentos",
+    "extension",
+    "linear",
+    "issues",
+    "oauth"
+  ],
+  "author": {
+    "name": "Frame",
+    "url": "https://frame.dev"
+  },
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "manifest.json"
+  ],
+  "peerDependencies": {
+    "@framers/agentos": ">=0.15.81",
+    "@framers/agentos-ext-account-sources": ">=0.11.3"
+  },
+  "devDependencies": {
+    "@framers/agentos": "workspace:^",
+    "@framers/agentos-ext-account-sources": "workspace:^",
+    "@types/node": "^20.0.0",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.7"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/framerslab/agentos-extensions.git",
+    "directory": "registry/curated/integrations/linear"
+  },
+  "homepage": "https://github.com/framerslab/agentos-extensions/tree/master/registry/curated/integrations/linear#readme",
+  "bugs": {
+    "url": "https://github.com/framerslab/agentos-extensions/issues"
+  }
+}

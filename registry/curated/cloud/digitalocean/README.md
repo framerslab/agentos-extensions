@@ -120,7 +120,7 @@ Explicit options take precedence over secrets, then environment variables. `opti
 
 Activation fails when the token is missing and validates supplied tokens by fetching account information.
 
-App and Droplet creation provision remote resources. Service apps use the fixed environment slug `node-js` and default size `basic-xxs`. Static sites default `outputDir` to `build`. App variables use type `GENERAL` with scope `RUN_AND_BUILD_TIME`.
+App and Droplet creation provision remote resources. Service apps use the fixed environment slug `node-js` and default size `basic-xxs`. A static site without `outputDir` leaves the build folder to App Platform, which looks for `_static`, `dist`, `public` and `build` ([app spec](https://docs.digitalocean.com/products/app-platform/reference/app-spec/)). App variables use type `GENERAL` with scope `RUN_AND_BUILD_TIME`.
 
 Deployment triggers a remote build and returns its phase without waiting for completion. Resource deletion is permanent and destroys associated data according to the deletion tool's description. A Droplet ID that cannot be parsed as a number returns an error.
 

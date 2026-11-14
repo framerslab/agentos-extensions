@@ -81,6 +81,8 @@ export interface DeployPagesResult {
 export interface CreatePagesProjectOptions {
   /** Git repository URL (e.g. "https://github.com/user/repo") */
   gitUrl: string;
+  /** Pages project name (inferred from the repository name if omitted) */
+  projectName?: string;
   /** Production branch (defaults to "main") */
   productionBranch?: string;
   /** Build command (e.g. "npm run build") */
@@ -232,7 +234,7 @@ export class CloudflareService {
 
   /** Deploy from a Git URL — creates project if needed, then triggers deployment. */
   async deployFromGit(opts: CreatePagesProjectOptions): Promise<DeployPagesResult> {
-    const projectName = this.inferProjectName(opts.gitUrl);
+    const projectName = opts.projectName || this.inferProjectName(opts.gitUrl);
 
     // Try to get existing project
     let _project: CloudflarePagesProject | null = null;

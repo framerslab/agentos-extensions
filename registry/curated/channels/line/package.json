@@ -34,13 +34,13 @@
     "@framers/agentos": "workspace:^",
     "@types/node": "^20.0.0",
     "typescript": "^6.0.3",
-    "vitest": "^3.2.7"
+    "vitest": "^5.1.0"
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
-    "@line/bot-sdk": "10.6.0"
+    "@line/bot-sdk": "11.4.0"
   },
   "repository": {
     "type": "git",

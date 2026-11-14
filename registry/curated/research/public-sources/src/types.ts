@@ -35,6 +35,10 @@ export interface SourceDocument {
   licence: SourceLicence;
   /** The text, block by block: white space collapsed, NFC, the markup and the reference markers gone. */
   blocks: string[];
+  /** The site's name as the page states it, such as its `og:site_name`, where it states one. */
+  publisher?: string;
+  /** The page's own date, in milliseconds since 1970, where it states one. */
+  pageDate?: number;
 }
 
 /** One passage: a sentence of an article, shaped as AgentOS's `VerificationSource`, with its attribution and its place. */

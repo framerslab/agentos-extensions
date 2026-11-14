@@ -15,6 +15,7 @@ import { NamecheapRegisterDomainTool } from './tools/registerDomain.js';
 import { NamecheapListDomainsTool } from './tools/listDomains.js';
 import { NamecheapConfigureDnsTool } from './tools/configureDns.js';
 import { NamecheapGetDnsRecordsTool } from './tools/getDnsRecords.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -90,7 +91,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-domain-namecheap',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'namecheapSearchDomain', kind: 'tool', priority: 40, payload: searchDomainTool },
       { id: 'namecheapRegisterDomain', kind: 'tool', priority: 40, payload: registerDomainTool },

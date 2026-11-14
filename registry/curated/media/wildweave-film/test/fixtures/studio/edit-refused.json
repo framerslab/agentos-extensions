@@ -1,9 +1,0 @@
-{
-  "error": "edit_refused",
-  "findings": [
-    { "level": "error", "sceneId": "s02", "code": "line_overflow", "message": "the narration of s02 runs past the scene's end at 3000 ms" }
-  ],
-  "added": [
-    { "level": "error", "sceneId": "s02", "code": "line_overflow", "message": "the narration of s02 runs past the scene's end at 3000 ms" }
-  ]
-}

@@ -20,9 +20,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockPipelineCall = vi.fn();
 
 vi.mock('@huggingface/transformers', () => ({
-  pipeline: vi.fn().mockResolvedValue({
-    _call: mockPipelineCall,
-  }),
+  // transformers.js returns a callable pipeline object, so the stand-in is a function.
+  pipeline: vi.fn().mockResolvedValue((text: string, opts: unknown) => mockPipelineCall(text, opts)),
 }));
 
 // ---------------------------------------------------------------------------

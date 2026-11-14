@@ -62,6 +62,7 @@ vi.mock('node:dns/promises', () => ({
 }));
 
 import { createExtensionPack } from '../src/index.js';
+import { createRequire as createPackageRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -82,7 +83,7 @@ describe('Mastodon createExtensionPack', () => {
 
     it('should return version 0.1.0', () => {
       const pack = createExtensionPack({ secrets: { 'mastodon.accessToken': 'tok' } });
-      expect(pack.version).toBe('0.1.0');
+      expect(pack.version).toBe(createPackageRequire(import.meta.url)('../package.json').version);
     });
   });
 

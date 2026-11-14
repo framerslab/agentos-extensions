@@ -15,6 +15,7 @@ import { GbpCreatePostTool } from './tools/createPost.js';
 import { GbpReplyTool } from './tools/reply.js';
 import { GbpAnalyticsTool } from './tools/analytics.js';
 import { GbpUpdateInfoTool } from './tools/updateInfo.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -81,7 +82,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-google-business',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'gbpCreatePost', kind: 'tool', priority: 50, payload: createPostTool },
       { id: 'gbpReply', kind: 'tool', priority: 50, payload: replyTool },

@@ -1,10 +1,11 @@
 /**
  * @fileoverview The `./documents` entry: a GitHub App's installation mode (its JWT and installation tokens, the user's
  * web flow, what a user token reaches, the webhook signature and its deliveries read as typed events, the daily
- * reconcile, the uninstall), `GitHubDocumentsConnector`, a repository's documentation as an account source at its
- * default branch or at a named branch or commit, and `parseGitHubLink`, the GitHub addresses a person pastes, read
- * without a request. Every call goes to GitHub's REST API over an injected `fetch`, under a deadline, its answer read
- * under a cap.
+ * reconcile, the uninstall), the calls made on a person's own token (the issues assigned to them, an issue opened and
+ * closed, the token's refresh and the grant's revoke), `GitHubDocumentsConnector`, a repository's documentation as an
+ * account source at its default branch or at a named branch or commit, and `parseGitHubLink`, the GitHub addresses a
+ * person pastes, read without a request. Every call goes to GitHub's REST API over an injected `fetch`, under a
+ * deadline, its answer read under a cap.
  * @module agentos-ext-github/documents
  */
 
@@ -51,14 +52,38 @@ export {
 export { parseGitHubLink, type GitHubLink } from './links.js';
 /** The app's JWT and installation tokens. */
 export { appJwt, GitHubAppCredential, type GitHubAppIdentity, type InstallationTokenOptions } from '../app/credential.js';
-/** The user's web flow on the auth module's redirect flow. */
+/** The user's web flow on the auth module's redirect flow, the token set it answers, and a user token's refresh. */
 export {
   GitHubAppUserFlow,
   GITHUB_OAUTH_ENDPOINTS,
+  refreshUserToken,
   type GitHubAppClient,
   type GitHubAppUserFlowOptions,
   type GitHubOAuthEndpoints,
+  type GitHubTokenRefreshInput,
+  type GitHubTokenRefreshOptions,
+  type GitHubUserTokenSet,
 } from '../app/userFlow.js';
+/**
+ * The calls made on a person's own token: the open issues assigned to them in the repositories named, the
+ * repositories they may open an issue in, an issue opened and an issue closed.
+ */
+export {
+  listAssignedIssues,
+  issueTargets,
+  createIssueAsUser,
+  closeIssueAsUser,
+  type AssignedIssue,
+  type CloseIssueInput,
+  type CreatedIssue,
+  type CreateIssueInput,
+  type IssueTarget,
+  type ListAssignedIssuesInput,
+} from '../app/userIssues.js';
+/** What those calls and a refresh throw: GitHub's secondary rate limit, and a token GitHub no longer takes. */
+export { GitHubSecondaryLimitError, GitHubGrantGoneError, type GitHubGrantGoneReason } from '../app/errors.js';
+/** The app's authorization for a person deleted at GitHub, with every token under it. */
+export { revokeGrant, type RevokeGrantInput } from '../app/revoke.js';
 /**
  * What a user token reaches, the app's own installations (each with when it was suspended), the repositories an
  * installation reaches, and those of them a caller holds that it no longer reaches.

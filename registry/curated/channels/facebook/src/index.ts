@@ -19,6 +19,7 @@ import { FacebookSearchTool } from './tools/search.js';
 import { FacebookAnalyticsTool } from './tools/analytics.js';
 import { FacebookScheduleTool } from './tools/schedule.js';
 import { FacebookPagePostTool } from './tools/pagePost.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -89,7 +90,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-channel-facebook',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'facebookPost', kind: 'tool', priority: 50, payload: postTool },
       { id: 'facebookComment', kind: 'tool', priority: 50, payload: commentTool },

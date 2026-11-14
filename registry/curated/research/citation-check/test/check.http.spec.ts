@@ -135,6 +135,40 @@ describe('checkCitations against pages on the loopback address', () => {
     for (const request of server.received) expect(request.headers['user-agent']).toMatch(/^Mozilla\/5\.0 /u);
   });
 
+  it('finds a quotation after a spaced dash before a number, and one the document sets in emphasis', async () => {
+    const document = `They counted "4,200 ships came" (${server.origin}/dash) and wrote "she was the *only* survivor" (${server.origin}/dash).`;
+    const report = await checkCitations(parseCitedClaims(document), QUIET);
+    expect(report.checks.map((check) => [check.claim, check.verdict])).toEqual([
+      ['4,200 ships came', 'exact'],
+      ['she was the only survivor', 'exact'],
+    ]);
+  });
+
+  it('reads an untyped UTF-16 body by its byte order mark', async () => {
+    const report = await checkCitations([claim(1, 'The tide tables were printed in 1902', '/utf16')], QUIET);
+    expect(report.checks[0]).toMatchObject({ verdict: 'exact', passage: 'The tide tables were printed in 1902.' });
+    expect(report.pages[0]).toMatchObject({ outcome: 'read', status: 200, via: 'fetch' });
+  });
+
+  it('answers a body past maxBytes as too large, whether its length is declared or streamed', async () => {
+    const report = await checkCitations(
+      [claim(1, 'Too long a page of words', '/declared-large'), claim(2, 'Too long a page of words', '/streamed-large')],
+      { ...QUIET, maxBytes: 1_000 },
+    );
+    const outcome = (path: string) => report.pages.find((page) => page.url === `${server.origin}${path}`);
+    expect(outcome('/declared-large')).toMatchObject({ outcome: 'unreadable', status: 200, failure: 'too_large' });
+    expect(outcome('/streamed-large')).toMatchObject({ outcome: 'unreadable', status: 200, failure: 'too_large' });
+    expect(report.checks.map((check) => check.verdict)).toEqual(['unreadable', 'unreadable']);
+  });
+
+  it('stops following redirects past the bound and answers the page as too many redirects', async () => {
+    const report = await checkCitations([claim(1, 'A page that only ever redirects', '/loop')], QUIET);
+    expect(report.checks[0]).toMatchObject({ verdict: 'unreachable' });
+    expect(report.pages[0]).toMatchObject({ outcome: 'unreachable', failure: 'redirects' });
+    // The first request and five redirects.
+    expect(server.received.filter((request) => request.path === '/loop')).toHaveLength(6);
+  });
+
   it('retries a page with no text through the fallback scraper and grades what it returns', async () => {
     const asked: string[] = [];
     const scraper = {

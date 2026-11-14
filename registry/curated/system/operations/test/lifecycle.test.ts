@@ -577,7 +577,7 @@ describeBackends('lifecycle events', (backend) => {
     expect(await ops.events.drainLifecycle()).toMatchObject({ delivered: 2, pending: 0 });
   });
 
-  it('12. the migration: 0003 and 0004 leave the checksums of the first two, the catalog holds seventeen tables, the release before them starts over a newer ledger, and the longest prefix keeps its names whole', async () => {
+  it('12. the migration: 0003 to 0005 leave the checksums of the first two, the catalog holds seventeen tables, the release before them starts over a newer ledger, and the longest prefix keeps its names whole', async () => {
     const fresh = freshPrefix();
     const ledger = `${fresh}_schema_migrations`;
     const earlier = operationsMigrations(dialectOf(db), fresh).slice(0, 2);
@@ -597,16 +597,16 @@ describeBackends('lifecycle events', (backend) => {
       const before = await checksums();
 
       const report = await migrateOperations(db, { prefix: fresh });
-      expect(report.applied).toEqual(['0003_lifecycle_outbox.sql', '0004_discord_outbox.sql']);
+      expect(report.applied).toEqual(['0003_lifecycle_outbox.sql', '0004_discord_outbox.sql', '0005_first_unanswered.sql']);
       expect(report.skipped).toEqual(['0001_operations.sql', '0002_partial_indexes.sql']);
       expect(report.changed).toEqual([]);
       expect(await checksums()).toMatchObject(before);
       expect(await tables(fresh)).toEqual([...operationsTables(fresh)].sort());
       expect(await tables(fresh)).toHaveLength(17);
 
-      // The release before 0003, over a database that holds 0003 and 0004, applies nothing and starts.
+      // The release before 0003, over a database that holds 0003 to 0005, applies nothing and starts.
       const older = await runSchemaMigrations(db, earlier, runner);
-      expect(older).toMatchObject({ applied: [], changed: [], unknown: ['0003_lifecycle_outbox.sql', '0004_discord_outbox.sql'] });
+      expect(older).toMatchObject({ applied: [], changed: [], unknown: ['0003_lifecycle_outbox.sql', '0004_discord_outbox.sql', '0005_first_unanswered.sql'] });
       const fixture = fixtureOptions(db, { prefix: fresh }, clock);
       const ops = createOperations(fixture.options);
       ops.events.record('search', { plan: 'free' });

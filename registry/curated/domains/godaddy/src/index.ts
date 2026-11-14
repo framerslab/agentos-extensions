@@ -15,6 +15,7 @@ import { GoDaddyRegisterDomainTool } from './tools/registerDomain.js';
 import { GoDaddyListDomainsTool } from './tools/listDomains.js';
 import { GoDaddyConfigureDnsTool } from './tools/configureDns.js';
 import { GoDaddyGetDomainInfoTool } from './tools/getDomainInfo.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -82,7 +83,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-domain-godaddy',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'godaddySearchDomain', kind: 'tool', priority: 40, payload: searchDomainTool },
       { id: 'godaddyRegisterDomain', kind: 'tool', priority: 40, payload: registerDomainTool },

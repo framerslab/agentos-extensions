@@ -50,7 +50,7 @@
     "@framers/agentos-ext-account-sources": "workspace:^",
     "@types/node": "^20.12.12",
     "typescript": "^6.0.3",
-    "vitest": "^3.2.7"
+    "vitest": "^5.1.0"
   },
   "engines": {
     "node": ">=22"

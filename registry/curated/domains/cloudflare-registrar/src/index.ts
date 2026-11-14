@@ -14,6 +14,7 @@ import { CfRegListDomainsTool } from './tools/listDomains.js';
 import { CfRegGetDomainInfoTool } from './tools/getDomainInfo.js';
 import { CfRegConfigureDnsTool } from './tools/configureDns.js';
 import { CfRegTransferDomainTool } from './tools/transferDomain.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -80,7 +81,7 @@ export function createExtensionPack(context: ExtensionContext): ExtensionPack {
 
   return {
     name: '@framers/agentos-ext-domain-cloudflare-registrar',
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
     descriptors: [
       { id: 'cfRegListDomains', kind: 'tool', priority: 40, payload: listDomainsTool },
       { id: 'cfRegGetDomainInfo', kind: 'tool', priority: 40, payload: getDomainInfoTool },

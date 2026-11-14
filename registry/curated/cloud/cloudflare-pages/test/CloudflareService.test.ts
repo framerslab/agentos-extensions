@@ -241,6 +241,28 @@ describe('CloudflareService', () => {
       expect(result.id).toBe('dep-3');
       expect(mockFetch).toHaveBeenCalledTimes(4);
     });
+
+    it('deploys to the project named by projectName, not the one inferred from the repository', async () => {
+      // getProject finds the named project
+      mockFetch.mockResolvedValueOnce(mockResponse({
+        result: { id: 'p-staging', name: 'shop-staging', production_branch: 'main', created_on: '2024-01-01', domains: [] },
+      }));
+      // createDeployment
+      mockFetch.mockResolvedValueOnce(mockResponse({
+        result: { id: 'dep-4', url: 'shop-staging.pages.dev', environment: 'production' },
+      }));
+
+      const result = await service.deployFromGit({
+        gitUrl: 'https://github.com/acme/shop',
+        projectName: 'shop-staging',
+      });
+
+      const urls = mockFetch.mock.calls.map((c) => String(c[0]));
+      expect(urls.every((u) => !u.includes('/pages/projects/shop/') && !u.endsWith('/pages/projects/shop'))).toBe(true);
+      expect(urls[0]).toContain('/pages/projects/shop-staging');
+      expect(urls[1]).toContain('/pages/projects/shop-staging/deployments');
+      expect(result.projectName).toBe('shop-staging');
+    });
   });
 
   describe('getDeployment', () => {

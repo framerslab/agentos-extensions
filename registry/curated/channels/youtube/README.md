@@ -1,6 +1,6 @@
 # YouTube channel
 
-This pack gives an agent video and Shorts uploads, comments, search, trends, statistics, playlist management and scheduled publishing through the YouTube Data API using `googleapis`.
+This pack gives an agent video and Shorts uploads, comments, search, trends, statistics, playlist management and scheduled publishing through the YouTube Data API using `googleapis`. Code that holds the service can also read the status of a batch of videos ([below](#reading-the-status-of-videos)).
 
 ## Installation
 
@@ -141,6 +141,28 @@ The API key resolves from options, then `options.secrets`, then environment vari
 The adapter registers platform `youtube`. Activation initializes the API service, and connection status follows its running state. A video block triggers an upload from its HTTPS URL; metadata comes from `platformOptions.title`, `platformOptions.tags`, `platformOptions.categoryId` and `platformOptions.privacyStatus`. The title falls back to the video caption, then `Untitled`; a text block supplies the description before the caption fallback.
 
 Without a video block, sending posts a comment using `conversationId` as the video ID and `replyToMessageId` as the optional parent comment ID. Empty video IDs or comment text throw. The adapter stores event handlers but emits no inbound events. Typing indicators do nothing.
+
+## Reading the status of videos
+
+`YouTubeService.getVideosStatus(videoIds)` reads the status of many videos at once and needs the API key alone. It calls `videos.list` with the parts `snippet`, `status` and `contentDetails` once for each fifty ids, and each call costs one quota unit, so 120 ids cost three units.
+
+It returns one row for each video the API returned, in the order of the ids asked for. An id asked twice is read once and has one row. An id the API returns nothing for, such as a removed or private video, has no row. A row holds the video's `id` and these fields, each value as the API gave it, so a caller checks a value's type itself:
+
+| Part | Fields |
+| --- | --- |
+| `snippet` | `channelId`, `channelTitle`, `title`, `description` |
+| `status` | `embeddable`, `madeForKids`, `privacyStatus` |
+| `contentDetails` | `caption`, `duration`, `contentRating` |
+
+A field the API left out is absent from the row. An empty list makes no call. A failed call, a refused quota among them, rejects with the API's own error, and no rows are returned. The method stores nothing and logs nothing.
+
+```ts
+import { YouTubeService, type VideoStatusRow } from '@framers/agentos-ext-channel-youtube';
+
+const youtube = new YouTubeService({ apiKey: process.env.YOUTUBE_API_KEY! });
+await youtube.initialize();
+const rows: VideoStatusRow[] = await youtube.getVideosStatus(['video-id-1', 'video-id-2']);
+```
 
 ## Notes
 

@@ -30,9 +30,10 @@
 import type { ExtensionPack, ExtensionPackContext } from '@framers/agentos';
 import type { ExtensionDescriptor, ExtensionLifecycleContext } from '@framers/agentos';
 import { EXTENSION_KIND_GUARDRAIL, EXTENSION_KIND_TOOL } from '@framers/agentos';
-import type { TopicalityOptions } from './types';
-import { TopicalityGuardrail } from './TopicalityGuardrail';
-import { CheckTopicTool } from './tools/CheckTopicTool';
+import type { TopicalityLogger, TopicalityOptions } from './types.js';
+import { TopicalityGuardrail } from './TopicalityGuardrail.js';
+import { CheckTopicTool } from './tools/CheckTopicTool.js';
+import { PACKAGE_VERSION } from './packageVersion.js';
 
 // ---------------------------------------------------------------------------
 // Re-exports
@@ -45,10 +46,10 @@ import { CheckTopicTool } from './tools/CheckTopicTool';
  * import { createTopicalityGuardrail, TopicalityOptions } from '@framers/agentos-ext-topicality';
  * ```
  */
-export * from './types';
-export { TopicalityGuardrail } from './TopicalityGuardrail';
-export { CheckTopicTool } from './tools/CheckTopicTool';
-export { cosineSimilarity, clearEmbeddingCache } from './embeddings';
+export * from './types.js';
+export { TopicalityGuardrail } from './TopicalityGuardrail.js';
+export { CheckTopicTool } from './tools/CheckTopicTool.js';
+export { cosineSimilarity, clearEmbeddingCache } from './embeddings.js';
 
 // ---------------------------------------------------------------------------
 // Pack factory
@@ -59,7 +60,12 @@ export { cosineSimilarity, clearEmbeddingCache } from './embeddings';
  *  - The {@link TopicalityGuardrail} (input-only topic enforcement).
  *  - The {@link CheckTopicTool} `check_topic` tool (on-demand classification).
  *
+ * With no allowed and no blocked topic the guardrail passes every input and
+ * writes one line saying so, through `logger`, else the activation context's
+ * logger, else the console.
+ *
  * @param options - Pack-level configuration with allowed/blocked topics.
+ * @param logger - The host's logger.
  * @returns A fully-configured {@link ExtensionPack} with one guardrail and
  *          one tool.
  *
@@ -73,18 +79,24 @@ export { cosineSimilarity, clearEmbeddingCache } from './embeddings';
  * });
  * ```
  */
-export function createTopicalityGuardrail(options: TopicalityOptions): ExtensionPack {
+export function createTopicalityGuardrail(
+  options?: Partial<TopicalityOptions> | null,
+  logger?: TopicalityLogger
+): ExtensionPack {
   /** The topicality guardrail service instance. */
-  let guardrail = new TopicalityGuardrail(options);
+  let guardrail = new TopicalityGuardrail(options, logger);
 
   /** The on-demand topic check tool instance. */
   let tool = new CheckTopicTool(guardrail);
 
   /**
    * Rebuild components (called on activation to pick up any option changes).
+   *
+   * @param activationLogger - The activation context's logger, used when the
+   *   pack was created without one.
    */
-  function buildComponents(): void {
-    guardrail = new TopicalityGuardrail(options);
+  function buildComponents(activationLogger?: TopicalityLogger): void {
+    guardrail = new TopicalityGuardrail(options, logger ?? activationLogger);
     tool = new CheckTopicTool(guardrail);
   }
 
@@ -93,7 +105,7 @@ export function createTopicalityGuardrail(options: TopicalityOptions): Extension
     name: 'topicality',
 
     /** Semantic version of the pack. */
-    version: '0.1.0',
+    version: PACKAGE_VERSION,
 
     /**
      * Descriptors getter — returns the current component instances wrapped
@@ -129,10 +141,10 @@ export function createTopicalityGuardrail(options: TopicalityOptions): Extension
      * Lifecycle hook called by the extension manager when the pack is
      * activated.  Rebuilds components to ensure fresh state.
      *
-     * @param _context - Activation context provided by the extension manager.
+     * @param context - Activation context provided by the extension manager.
      */
-    onActivate: (_context: ExtensionLifecycleContext): void => {
-      buildComponents();
+    onActivate: (context?: ExtensionLifecycleContext): void => {
+      buildComponents(context?.logger);
     },
 
     /**
@@ -176,6 +188,9 @@ export function createTopicalityGuardrail(options: TopicalityOptions): Extension
  * }
  * ```
  */
-export function createExtensionPack(context: ExtensionPackContext): ExtensionPack {
-  return createTopicalityGuardrail(context.options as TopicalityOptions);
+export function createExtensionPack(context?: ExtensionPackContext): ExtensionPack {
+  return createTopicalityGuardrail(
+    context?.options as unknown as Partial<TopicalityOptions> | undefined,
+    context?.logger
+  );
 }
