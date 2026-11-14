@@ -54,6 +54,38 @@ describe('googleCalendarAddress', () => {
     expect(url.searchParams.get('dates')).toBe('20261112T150000Z/20261112T150000Z');
   });
 
+  it('gives an end in the start\'s second the start as its end, and an end in a later second that second', () => {
+    // `dates` is written to the second, so the seconds decide: an end in the start's second, earlier milliseconds
+    // included, is written as the start, as for no end, and an end in an earlier second is refused
+    for (const [start, end] of [
+      ['2026-11-12T15:00:00Z', '2026-11-12T15:00:00Z'],
+      ['2026-11-12T15:00:00.100Z', '2026-11-12T15:00:00.900Z'],
+      ['2026-11-12T15:00:00.900Z', '2026-11-12T15:00:00.100Z'],
+    ] as const) {
+      const url = new URL(googleCalendarAddress({ title: 'x', start: new Date(start), end: new Date(end) }));
+      expect(url.searchParams.get('dates'), `${start} ${end}`).toBe('20261112T150000Z/20261112T150000Z');
+    }
+    const next = new URL(googleCalendarAddress({
+      title: 'x', start: new Date('2026-11-12T15:00:00.900Z'), end: new Date('2026-11-12T15:00:01Z'),
+    }));
+    expect(next.searchParams.get('dates')).toBe('20261112T150000Z/20261112T150001Z');
+    expect(() => googleCalendarAddress({
+      title: 'x', start: new Date('2026-11-12T15:00:01.100Z'), end: new Date('2026-11-12T15:00:00.900Z'),
+    })).toThrow(RangeError);
+  });
+
+  it('reads a date-time string with a fraction of more than three digits, cut to the second it falls in', () => {
+    const micro = new URL(googleCalendarAddress({
+      title: 'x', start: '2026-11-12T15:00:00.123456+00:00', end: '2026-11-12T15:30:00.999999+00:00',
+    }));
+    expect(micro.searchParams.get('dates')).toBe('20261112T150000Z/20261112T153000Z');
+    const nano = new URL(googleCalendarAddress({ title: 'x', start: '2026-11-12T10:59:59.999999999-05:00' }));
+    expect(nano.searchParams.get('dates')).toBe('20261112T155959Z/20261112T155959Z');
+    // rounded, the start would fall in the next second and the end before it; cut, both fall in the start's second
+    const cut = new URL(googleCalendarAddress({ title: 'x', start: '2026-11-12T15:00:00.9999999Z', end: '2026-11-12T15:00:00.1Z' }));
+    expect(cut.searchParams.get('dates')).toBe('20261112T150000Z/20261112T150000Z');
+  });
+
   it('keeps a plus sign, a hash, an ampersand and letters outside ASCII inside their field', () => {
     const title = 'Café + 日本 #1 & a=b?';
     const details = 'Line one\r\nLine two 😀';
