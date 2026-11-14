@@ -223,6 +223,29 @@ describe('the note bundle, named for any file system and read strictly', () => {
     expect(read.notes.map((note) => note.folderId)).toEqual([WORK, RESEARCH]);
   });
 
+  it('names 20,000 notes of one title and 20,000 sibling folders of one name in one pass each, with the same names as before', () => {
+    const id = (n: number, tag: string): string => tag + n.toString(16).padStart(31, '0');
+    const many: BundleSnapshot = {
+      ...SNAPSHOT,
+      folders: Array.from({ length: 20_000 }, (_, n) => ({ id: id(n, 'f'), name: 'Work', parentId: null })),
+      notes: Array.from({ length: 20_000 }, (_, n) => ({ ...SNAPSHOT.notes[1]!, id: id(n, 'e'), title: 'Plan', folderId: null })),
+    };
+    const began = performance.now();
+    const names = noteFileNames(many);
+    // Restarting each name's suffix at 1 checks 200,000,000 candidates for each list, many seconds; one pass is milliseconds.
+    expect(performance.now() - began).toBeLessThan(1_000);
+    expect(names.get(id(0, 'e'))).toBe('Plan.md');
+    expect(names.get(id(19_999, 'e'))).toBe('Plan (20000).md');
+    expect(new Set(names.values()).size).toBe(20_000);
+
+    const mixed: BundleSnapshot = {
+      ...SNAPSHOT,
+      folders: [],
+      notes: ['Plan (2)', 'Plan', 'plan', 'Plan'].map((title, n) => ({ ...SNAPSHOT.notes[1]!, id: id(n, 'd'), title, folderId: null })),
+    };
+    expect([...noteFileNames(mixed).values()]).toEqual(['Plan (2).md', 'Plan.md', 'plan (3).md', 'Plan (4).md']);
+  });
+
   it('refuses two notes of one id before it names, plans or writes them', async () => {
     const twins: BundleSnapshot = { ...SNAPSHOT, notes: [SNAPSHOT.notes[0]!, { ...SNAPSHOT.notes[1]!, id: SNAPSHOT.notes[0]!.id }] };
     expect(() => noteFileNames(twins)).toThrow(RangeError);
