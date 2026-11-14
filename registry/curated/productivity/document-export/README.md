@@ -208,9 +208,15 @@ const snapshot: BundleSnapshot = {
 };
 
 const plan = planNoteBundle(snapshot); // one part a file: at most 2,000 notes and 10 MiB of note bytes
-const zip = await writeNoteBundlePart(snapshot, plan, 0, { onNote: (i, n) => console.log(`Note ${i} of ${n}`) });
-const read = await readNoteBundle(zip); // read.notes equals snapshot.notes; read.manifest.part is { index: 1, count: 1 }
+const zips: Uint8Array[] = [];
+for (let index = 0; index < plan.length; index += 1) {
+  // One ZIP a part: a complete export writes every part of the plan.
+  zips.push(await writeNoteBundlePart(snapshot, plan, index, { onNote: (i, n) => console.log(`Note ${i} of ${n}`) }));
+}
+const read = await readNoteBundle(zips[0]!); // this snapshot is one part: read.notes equals snapshot.notes; read.manifest.part is { index: 1, count: 1 }
 ```
+
+A complete export writes every part of the plan, one ZIP a part. `readNoteBundle` reads one part and takes it without the others, so a caller that writes part 0 alone of a longer plan exports that part's notes alone, with no error at the read. An import that wants the whole snapshot checks `read.manifest.part.count`, and `read.manifest.parts` for the note ids each other part holds.
 
 | Name | What it is |
 |---|---|

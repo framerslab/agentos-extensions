@@ -162,6 +162,9 @@ function folderPaths(folders: readonly BundleFolder[]): Map<string, string> {
   const paths = new Map<string, string>();
   // Each path taken, by its lower case, with the folder that holds it; the manifest's name is no folder's.
   const taken = new Map<string, string | null>([[NOTE_BUNDLE_MANIFEST, null]]);
+  // The next suffix to try for each parent and name, whatever its case. A taken path is never given up, so every
+  // suffix below it is taken already, and the names come out as a count from 1 would give them, in one pass.
+  const next = new Map<string, number>();
   const walking = new Set<string>();
   const pathOf = (id: string): string => {
     const known = paths.get(id);
@@ -172,13 +175,16 @@ function folderPaths(folders: readonly BundleFolder[]): Map<string, string> {
     const own = folder.name === null ? safeName(id.slice(0, 8)) : safeName(folder.name);
     const parent = folder.parentId === null ? '' : pathOf(folder.parentId);
     walking.delete(id);
+    const first = (parent === '' ? own : `${parent}/${own}`).toLowerCase();
     let path = '';
-    for (let n = 1; ; n += 1) {
+    let n = next.get(first) ?? 1;
+    for (; ; n += 1) {
       const name = n === 1 ? own : `${own} (${n})`;
       path = parent === '' ? name : `${parent}/${name}`;
       const holder = taken.get(path.toLowerCase());
       if (holder === undefined || holder === id) break;
     }
+    next.set(first, n + 1);
     taken.set(path.toLowerCase(), id);
     paths.set(id, path);
     return path;
@@ -205,16 +211,21 @@ export function noteFileNames(snapshot: Pick<BundleSnapshot, 'folders' | 'notes'
   const taken = new Set<string>([NOTE_BUNDLE_MANIFEST]);
   for (const path of folders.values()) taken.add(path.toLowerCase());
   const names = new Map<string, string>();
+  // The next suffix to try for each folder and title, whatever its case. A taken path is never given up, so every
+  // suffix below it is taken already, and the names come out as a count from 1 would give them, in one pass.
+  const next = new Map<string, number>();
   for (const note of snapshot.notes) {
     const folder = note.folderId === null ? '' : (folders.get(note.folderId) ?? '');
     const base = safeName(note.title);
-    let n = 1;
+    const first = (folder === '' ? base : `${folder}/${base}`).toLowerCase();
+    let n = next.get(first) ?? 1;
     let path = '';
-    do {
+    for (; ; n += 1) {
       const file = n === 1 ? `${base}.md` : `${base} (${n}).md`;
       path = folder === '' ? file : `${folder}/${file}`;
-      n += 1;
-    } while (taken.has(path.toLowerCase()));
+      if (!taken.has(path.toLowerCase())) break;
+    }
+    next.set(first, n + 1);
     taken.add(path.toLowerCase());
     names.set(note.id, path);
   }
