@@ -12,3 +12,28 @@ export { actionItemsCsv } from './csv.js';
 export { toSrt, toVtt } from './subtitles.js';
 export { toDocx } from './docx.js';
 export { readArchive, writeArchive, type ArchiveEntry, type ReadArchiveOptions, type WriteArchiveOptions } from './archive.js';
+export {
+  NOTE_BUNDLE_FORMAT,
+  NOTE_BUNDLE_LIMITS,
+  NOTE_BUNDLE_MANIFEST,
+  NOTE_BUNDLE_MAX_NOTE_BYTES,
+  NOTE_BUNDLE_READ_BYTES,
+  NOTE_BUNDLE_VERSION,
+  NoteBundleError,
+  noteFileNames,
+  planNoteBundle,
+  readNoteBundle,
+  writeNoteBundlePart,
+  type BundleFolder,
+  type BundleManifest,
+  type BundleManifestNote,
+  type BundleNote,
+  type BundlePartPlan,
+  type BundleSnapshot,
+  type BundleSource,
+  type NoteBundleLimits,
+  type NoteBundleReason,
+  type ReadBundle,
+  type ReadNoteBundleOptions,
+  type WritePartOptions,
+} from './notes.js';
