@@ -6,7 +6,7 @@
  */
 
 import shippedTable from './referral-lines.json' with { type: 'json' };
-import type { ReferralLine, ReferralTable } from './types.js';
+import type { DetectionMethod, PrivateReferral, ReferralLine, ReferralSentEvent, ReferralTable } from './types.js';
 
 /** The table the pack ships, `src/referral-lines.json`: each line with the page that states its number. */
 export const REFERRAL_TABLE: ReferralTable = shippedTable as ReferralTable;
@@ -102,4 +102,40 @@ export function buildReferral(table: ReferralTable, country: string | null): Ref
     : table.emergency.unknown;
   const text = [table.intro, '', ...lines.map((line) => `- ${line.label}: ${line.text}`), '', closing].join('\n');
   return { text, lines };
+}
+
+/** The fields of a private referral's event that the caller knows. */
+export interface PrivateReferralFields {
+  recipientId: string;
+  guardrailId: string;
+  method: DetectionMethod;
+  sessionId: string | null;
+  conversationId: string | null;
+  occurredAt: string;
+}
+
+/**
+ * A private referral for a place the table resolved: the text and the lines a referral there names, and the event
+ * that says it was built for one person. Detects nothing and calls no handler.
+ */
+export function privateReferralFor(table: ReferralTable, place: ReferralPlace, fields: PrivateReferralFields): PrivateReferral {
+  const referral = buildReferral(table, place.country);
+  const lineIds = referral.lines.map((line) => line.id);
+  const event: ReferralSentEvent = {
+    type: 'referral_sent',
+    guardrailId: fields.guardrailId,
+    stage: 'input',
+    country: place.country,
+    locale: place.locale,
+    lineIds: [...lineIds],
+    method: fields.method,
+    judgeOutcome: 'confirmed',
+    tableVersion: table.version,
+    sessionId: fields.sessionId,
+    conversationId: fields.conversationId,
+    occurredAt: fields.occurredAt,
+    delivery: 'private',
+    recipientId: fields.recipientId,
+  };
+  return { recipientId: fields.recipientId, text: referral.text, lineIds: [...lineIds], event };
 }

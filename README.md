@@ -101,22 +101,21 @@ release strategies:
 
 ### Core Extensions (monorepo root)
 
-Seven foundational packages live at the monorepo root under `packages/agentos-ext-*`.
-These are **independently versioned** with semantic-release CI/CD and have their own
-GitHub Actions workflows:
+Seven foundational packages live at the monorepo root under `packages/agentos-ext-*`:
 
 | Package | Description |
 |---------|-------------|
 | `agentos-ext-code-safety` | Static code analysis guardrail (injection, XSS, secrets) |
-| `agentos-ext-pii-redaction` | PII detection & redaction pipeline |
+| `agentos-ext-pii-redaction` | PII detection and redaction pipeline, with a refuse mode (`onDetect: 'refuse'`) and two contact types (street addresses, social handles) that it detects only when named |
 | `agentos-ext-grounding-guard` | Claim extraction & source verification |
-| `agentos-ext-ml-classifiers` | Content classification: one local English toxicity model (toxic-bert), with an LLM judge or keyword patterns as fallbacks |
+| `agentos-ext-ml-classifiers` | Content classification: one local English toxicity model (toxic-bert), with an LLM judge or keyword patterns as fallbacks; a `/moderation` entry point with an OpenAI Moderation guard and a conduct classifier on a judge model you choose |
 | `agentos-ext-topicality` | Topic drift detection & off-topic filtering |
 | `agentos-ext-http-api` | HTTP API server for AgentOS |
 | `agentos-ext-skills` | Skill loading & execution tooling |
 
-Each has its own `.github/` CI workflow, `.releaserc.json`, and publishes to npm
-independently. Version bumps here do **not** affect curated extension versions.
+Each is versioned on its own and published to npm by the publish workflows of the
+repository that holds it, on the push to that repository's master that changes a file
+the package ships. Version bumps here do **not** affect curated extension versions.
 
 ### Curated Extensions (this submodule)
 
@@ -139,10 +138,11 @@ shipped files changed on `master` since its last release ([RELEASING.md](./RELEA
 The `registry/curated/safety/` directory contains **stub READMEs** pointing to the
 canonical core packages at the monorepo root. The actual source code for code-safety,
 pii-redaction, and grounding-guard lives exclusively in `packages/agentos-ext-*` at
-the monorepo root. The ml-classifiers and topicality packages have copies here that
-carry the code of their newest npm versions; npm still receives both from the root
-packages until [issue 121](https://github.com/framerslab/agentos-extensions/issues/121)
-moves their releases here.
+the monorepo root. The ml-classifiers and topicality packages have copies here; npm
+receives both from the root packages until
+[issue 121](https://github.com/framerslab/agentos-extensions/issues/121) moves their
+releases here. The ml-classifiers copy is older than the package on npm: it has no
+`/moderation` entry point.
 Two guardrails live only here and publish from this repository:
 `content-policy-rewriter` and `self-harm-referral`.
 

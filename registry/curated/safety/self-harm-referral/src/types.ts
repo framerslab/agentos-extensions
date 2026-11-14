@@ -54,20 +54,22 @@ export interface ReferralTable {
 /** The stages the guard evaluates. */
 export type ReferralStage = 'input' | 'output';
 
-/** How a referral's text was found to call for one. */
-export type DetectionMethod = 'keyword' | 'keyword_and_judge';
+/** How a referral's text was found to call for one. `classifier`: another classifier confirmed it (`createPrivateReferral()`). */
+export type DetectionMethod = 'keyword' | 'keyword_and_judge' | 'classifier';
 
 /**
  * What the judge said about a keyword match that led to a referral: `none` when no judge is configured, `confirmed`
- * when it found the text calls for one, `unsure` when it cleared the text below the threshold, `failed` when it threw,
- * timed out or answered nothing usable.
+ * when it found the text calls for one, `unsure` when it cleared the text below the threshold (in `private` delivery,
+ * also when it found the text calls for one below the threshold), `failed` when it threw, timed out or answered
+ * nothing usable.
  */
 export type JudgeOutcome = 'none' | 'confirmed' | 'unsure' | 'failed';
 
 /**
- * The event every referral emits. It names no person and holds none of their words: the host counts it.
+ * The event every referral emits. It holds ids and none of the person's words: the host counts it.
  *
- * It says the guard answered with a referral. AgentOS sends that answer to the person, since the guard runs in its first
+ * In private delivery it reports a referral built for the host to deliver to recipientId alone. In reply delivery,
+ * AgentOS sends the answer to the person, since the guard runs in its first
  * phase and a BLOCK there ends the evaluation. Two cases are the host's to know: a host that hides `ERROR` chunks hides
  * an input referral, and a required guard whose `timeoutMs` passes before the judge's deadline has already blocked with
  * no referral when the event fires.
@@ -93,6 +95,10 @@ export interface ReferralSentEvent {
   conversationId: string | null;
   /** When the referral was sent, as an ISO 8601 time. */
   occurredAt: string;
+  /** How the referral reaches the person. Set in `private` mode and by `createPrivateReferral()`; absent in `reply` mode. */
+  delivery?: 'reply' | 'private';
+  /** With `private`: the id of the person it is for. An id, never a name. */
+  recipientId?: string;
 }
 
 /** The model judge's settings when the guard builds it on AgentOS's `createLlmPhraseJudge`. */
@@ -108,15 +114,29 @@ export interface JudgeModelOptions {
 export interface SelfHarmReferralOptions {
   /** The guard's id, on its descriptor and its verdicts. Default `self-harm-referral`. */
   id?: string;
-  /** The stages it evaluates. Default both. */
+  /** The stages it evaluates. Default both in reply delivery, input alone in private delivery. */
   stages?: ReferralStage[];
+  /**
+   * `reply` (default): the guard answers the turn itself with the referral, as before. `private`: for rooms. A keyword
+   * match goes to the judge, which is required; a match it confirms at or above `judgeThreshold` is a FLAG carrying
+   * `metadata.privateReply` for the host to send to the speaker alone; any other match it does not clear sends nothing
+   * and is flagged for a person, as is a confirmed one whose sender is an agent or has no usable id. The guard never
+   * blocks, evaluates input alone, and fails open.
+   */
+  delivery?: 'reply' | 'private';
   /** A judge the host built, asked about each keyword match. Takes precedence over `judgeModel`. */
   judge?: PhraseJudge;
   /** A model judge on the host's provider, built with AgentOS's `createLlmPhraseJudge`. */
   judgeModel?: JudgeModelOptions;
-  /** The judge's confidence at or above which its clearing of a match counts. Default 0.7. */
+  /**
+   * The judge's confidence at or above which its clearing of a match counts; in private delivery its confirmation
+   * too. Default 0.7.
+   */
   judgeThreshold?: number;
-  /** How long the judge may take before the referral is sent without its answer. Default 6000 ms. */
+  /**
+   * The judge deadline. Default 6000 ms; expiry refers in reply mode and flags without a referral in private mode,
+   * where the guard's own `config.timeoutMs` is this plus one second.
+   */
   judgeTimeoutMs?: number;
   /** The country (ISO 3166-1 alpha-2) whose lines a referral names when the turn names no country. */
   country?: string;
@@ -138,4 +158,12 @@ export interface SelfHarmReferralOptions {
   logger?: ILogger;
   /** The clock the event's time is read from. Default `Date.now`. */
   now?: () => number;
+}
+
+/** What a host sends to one person and nobody else. */
+export interface PrivateReferral {
+  recipientId: string;
+  text: string;
+  lineIds: string[];
+  event: ReferralSentEvent;
 }

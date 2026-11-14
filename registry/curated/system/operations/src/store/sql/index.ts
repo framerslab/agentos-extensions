@@ -2,7 +2,7 @@
  * @fileoverview The numbered SQL of both dialects as text, so the built package carries it: `tsc`
  * copies no `.sql` file into `dist`. The files beside this module, `postgres/0001_operations.sql`,
  * `postgres/0002_partial_indexes.sql`, `postgres/0003_lifecycle_outbox.sql`,
- * `postgres/0004_discord_outbox.sql` and their `sqlite/` twins, are the readable form, and
+ * `postgres/0004_discord_outbox.sql`, `postgres/0005_first_unanswered.sql` and their `sqlite/` twins, are the readable form, and
  * `test/migrations.test.ts` fails when this text and a file differ. `{{prefix}}` stands for the
  * product's table prefix, which `operationsMigrations` writes in before the runner hashes and
  * applies the text (D3). A file that has shipped is never edited: a change is a new number.
@@ -551,9 +551,42 @@ CREATE INDEX IF NOT EXISTS {{prefix}}_discord_outbox_source_created ON {{prefix}
 `;
 
 /** The package's migrations in number order. A later file only adds. */
+/** The fifth on PostgreSQL: the time of the person's first message the team has not answered, filled for the requests before it. */
+export const POSTGRES_0005_FIRST_UNANSWERED = `-- The time of the person's first message after the team's latest message on PostgreSQL: null when the team spoke last or nobody
+-- has written. A person's message sets it when it is null, a staff message clears it and a system message leaves it, in the
+-- statement that moves the sender's pointer. The requests written before this file take it from their messages: the person's
+-- earliest message after the team's latest one, on each request whose person spoke last. {{prefix}} is the product's table prefix,
+-- written in before this text is applied.
+
+ALTER TABLE {{prefix}}_tickets ADD COLUMN IF NOT EXISTS first_unanswered_at BIGINT;
+UPDATE {{prefix}}_tickets SET first_unanswered_at = COALESCE(
+  (SELECT MIN(m.created_at) FROM {{prefix}}_messages m
+    WHERE m.ticket_id = {{prefix}}_tickets.id AND m.sender = 'person'
+      AND ({{prefix}}_tickets.last_staff_at IS NULL OR m.created_at > {{prefix}}_tickets.last_staff_at)),
+  last_person_at)
+WHERE last_person_at IS NOT NULL AND (last_staff_at IS NULL OR last_person_at >= last_staff_at);
+`;
+
+/** The fifth on SQLite, the same column and fill. */
+export const SQLITE_0005_FIRST_UNANSWERED = `-- The time of the person's first message after the team's latest message on SQLite: null when the team spoke last or nobody
+-- has written. A person's message sets it when it is null, a staff message clears it and a system message leaves it, in the
+-- statement that moves the sender's pointer. The requests written before this file take it from their messages: the person's
+-- earliest message after the team's latest one, on each request whose person spoke last. {{prefix}} is the product's table prefix,
+-- written in before this text is applied.
+
+ALTER TABLE {{prefix}}_tickets ADD COLUMN first_unanswered_at INTEGER;
+UPDATE {{prefix}}_tickets SET first_unanswered_at = COALESCE(
+  (SELECT MIN(m.created_at) FROM {{prefix}}_messages m
+    WHERE m.ticket_id = {{prefix}}_tickets.id AND m.sender = 'person'
+      AND ({{prefix}}_tickets.last_staff_at IS NULL OR m.created_at > {{prefix}}_tickets.last_staff_at)),
+  last_person_at)
+WHERE last_person_at IS NOT NULL AND (last_staff_at IS NULL OR last_person_at >= last_staff_at);
+`;
+
 export const MIGRATION_FILES: readonly OpsMigrationFile[] = [
   { name: '0001_operations.sql', postgres: POSTGRES_0001_OPERATIONS, sqlite: SQLITE_0001_OPERATIONS },
   { name: '0002_partial_indexes.sql', postgres: POSTGRES_0002_PARTIAL_INDEXES, sqlite: SQLITE_0002_PARTIAL_INDEXES },
   { name: '0003_lifecycle_outbox.sql', postgres: POSTGRES_0003_LIFECYCLE_OUTBOX, sqlite: SQLITE_0003_LIFECYCLE_OUTBOX },
   { name: '0004_discord_outbox.sql', postgres: POSTGRES_0004_DISCORD_OUTBOX, sqlite: SQLITE_0004_DISCORD_OUTBOX },
+  { name: '0005_first_unanswered.sql', postgres: POSTGRES_0005_FIRST_UNANSWERED, sqlite: SQLITE_0005_FIRST_UNANSWERED },
 ];

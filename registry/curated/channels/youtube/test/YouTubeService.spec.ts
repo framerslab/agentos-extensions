@@ -558,6 +558,133 @@ describe('YouTubeService', () => {
     });
   });
 
+  describe('getVideosStatus', () => {
+    const ids = (n: number, from = 0) => Array.from({ length: n }, (_, i) => `vid${String(from + i).padStart(3, '0')}`);
+
+    // videos.list answers each call with the items of the ids it was given, in an order of its own.
+    const answerEveryId = () =>
+      mockVideosList.mockImplementation(async ({ id }) => ({
+        data: { items: [...id].reverse().map((v) => ({ id: v, status: { embeddable: true } })) },
+      }));
+
+    let keyOnly: YouTubeService;
+    beforeEach(async () => {
+      keyOnly = new YouTubeService(TEST_CONFIG_NO_OAUTH);
+      await keyOnly.initialize();
+    });
+
+    it('reads 120 ids in three calls of 50, 50 and 20, each asking for snippet, status and contentDetails', async () => {
+      answerEveryId();
+      const asked = ids(120);
+
+      const rows = await keyOnly.getVideosStatus(asked);
+
+      expect(mockVideosList).toHaveBeenCalledTimes(3);
+      const calls = mockVideosList.mock.calls.map(([params]) => params);
+      expect(calls.map((p) => p.id)).toEqual([asked.slice(0, 50), asked.slice(50, 100), asked.slice(100)]);
+      for (const p of calls) expect(p.part).toEqual(['snippet', 'status', 'contentDetails']);
+      expect(rows.map((r) => r.id)).toEqual(asked);
+    });
+
+    it('returns the rows in the order of the ids asked for', async () => {
+      mockVideosList.mockResolvedValueOnce({
+        data: { items: [{ id: 'c' }, { id: 'a' }, { id: 'b' }] },
+      });
+
+      const rows = await keyOnly.getVideosStatus(['a', 'b', 'c']);
+
+      expect(rows.map((r) => r.id)).toEqual(['a', 'b', 'c']);
+    });
+
+    it('gives no row to an id the API returned nothing for', async () => {
+      mockVideosList.mockResolvedValueOnce({ data: { items: [{ id: 'kept' }] } });
+
+      const rows = await keyOnly.getVideosStatus(['gone', 'kept', 'private']);
+
+      expect(rows).toEqual([{ id: 'kept' }]);
+    });
+
+    it('reads an id asked twice once and gives it one row', async () => {
+      answerEveryId();
+
+      const rows = await keyOnly.getVideosStatus(['a', 'b', 'a']);
+
+      expect(mockVideosList).toHaveBeenCalledTimes(1);
+      expect(mockVideosList.mock.calls[0][0].id).toEqual(['a', 'b']);
+      expect(rows.map((r) => r.id)).toEqual(['a', 'b']);
+    });
+
+    it('passes every value through as the API gave it, a string for a boolean included', async () => {
+      mockVideosList.mockResolvedValueOnce({
+        data: {
+          items: [
+            {
+              id: 'v1',
+              kind: 'youtube#video',
+              etag: 'etag-1',
+              snippet: {
+                channelId: 'UC123',
+                channelTitle: 'A channel',
+                title: 'A title',
+                description: 'A description',
+                publishedAt: '2026-01-01T00:00:00Z',
+                tags: ['x'],
+              },
+              status: { embeddable: 'true', madeForKids: false, privacyStatus: 'public', license: 'youtube' },
+              contentDetails: {
+                caption: true,
+                duration: 'PT3M32S',
+                contentRating: { ytRating: 'ytAgeRestricted' },
+                definition: 'hd',
+              },
+              statistics: { viewCount: '9' },
+            },
+            { id: 'v2', snippet: { title: null }, status: {} },
+          ],
+        },
+      });
+
+      const rows = await keyOnly.getVideosStatus(['v1', 'v2']);
+
+      expect(rows).toEqual([
+        {
+          id: 'v1',
+          snippet: { channelId: 'UC123', channelTitle: 'A channel', title: 'A title', description: 'A description' },
+          status: { embeddable: 'true', madeForKids: false, privacyStatus: 'public' },
+          contentDetails: { caption: true, duration: 'PT3M32S', contentRating: { ytRating: 'ytAgeRestricted' } },
+        },
+        { id: 'v2', snippet: { title: null }, status: {} },
+      ]);
+      expect(Object.keys(rows[0].status)).not.toContain('license');
+      expect('madeForKids' in rows[1].status).toBe(false);
+    });
+
+    it('makes no call for an empty list', async () => {
+      const rows = await keyOnly.getVideosStatus([]);
+
+      expect(rows).toEqual([]);
+      expect(mockVideosList).not.toHaveBeenCalled();
+    });
+
+    it('rejects with the API error itself when the quota is refused', async () => {
+      const refused = Object.assign(new Error('The request cannot be completed because you have exceeded your quota.'), {
+        code: 403,
+        errors: [{ domain: 'youtube.quota', reason: 'quotaExceeded' }],
+      });
+      mockVideosList.mockResolvedValueOnce({ data: { items: [{ id: 'vid000' }] } });
+      mockVideosList.mockRejectedValueOnce(refused);
+
+      await expect(keyOnly.getVideosStatus(ids(60))).rejects.toBe(refused);
+    });
+
+    it('rejects before any call when the service is not initialized', async () => {
+      const idle = new YouTubeService(TEST_CONFIG_NO_OAUTH);
+
+      await expect(idle.getVideosStatus(['a'])).rejects.toThrow('YouTubeService not initialized');
+      expect(mockVideosList).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getChannelStatistics', () => {
     it('should fetch statistics for a channel by ID', async () => {
       await service.initialize();

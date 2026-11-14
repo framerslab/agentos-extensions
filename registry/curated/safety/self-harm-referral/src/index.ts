@@ -16,6 +16,7 @@ export {
   DEFAULT_JUDGE_THRESHOLD,
   DEFAULT_JUDGE_TIMEOUT_MS,
   REFERRAL_REASON_CODE,
+  UNCONFIRMED_REASON_CODE,
   SELF_HARM_JUDGE_CRITERIA,
   SelfHarmReferralGuardrail,
 } from './SelfHarmReferralGuardrail.js';
@@ -30,6 +31,7 @@ export {
   type Referral,
   type ReferralPlace,
 } from './referrals.js';
+export { createPrivateReferral, type PrivateReferralInput } from './privateReferral.js';
 export { PACKAGE_NAME, PACKAGE_VERSION } from './packageVersion.js';
 export type * from './types.js';
 
