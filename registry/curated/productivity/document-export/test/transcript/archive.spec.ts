@@ -1,9 +1,12 @@
+import { fileURLToPath } from 'node:url';
 import { strFromU8, strToU8, zipSync } from 'fflate';
+import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ArchiveError } from '../../src/archive/errors.js';
 import { openArchive } from '../../src/archive/index.js';
 import { readArchive, writeArchive, type WriteArchiveOptions } from '../../src/transcript/archive.js';
+import { make } from './forward-options.js';
 
 const MEBIBYTE = 1024 * 1024;
 
@@ -13,6 +16,12 @@ const ENTRIES = [
   { path: 'sessions/s1.json', data: new Uint8Array([1, 2, 3]) },
   { path: 'sessions/s1.md', data: '# Session' },
 ];
+
+/** The archive module evaluated afresh, under whatever globals the test has set. */
+async function loadAgain(): Promise<{ writeArchive: typeof writeArchive }> {
+  vi.resetModules();
+  return import('../../src/transcript/archive.js');
+}
 
 /** Each entry read back as its path and its bytes, in order. */
 function readBack(zip: Uint8Array): Array<[string, number[]]> {
@@ -168,19 +177,107 @@ describe('the archive', () => {
     expect(seen).toEqual(['library.json', 'sessions/s1.json', 'sessions/s1.md']);
   });
 
-  it('yields a task between entries, so a stop sent from outside the loop is heard after the entry in hand', async () => {
+  it('yields a task between entries, so a stop sent through a port before the call is heard after the entry in hand', async () => {
     const controller = new AbortController();
     const seen: string[] = [];
-    setTimeout(() => controller.abort(), 0); // queued before the call, as a worker's stop message would be
-    await expect(writeArchive(ENTRIES, { signal: controller.signal, onEntry: (_index, path) => seen.push(path) })).rejects.toThrow(
-      ArchiveError,
-    );
-    expect(seen).toEqual(['library.json']);
+    const stop = new MessageChannel();
+    stop.port1.onmessage = () => controller.abort();
+    // From a turn of the event loop of its own, so the stop is not read in a turn already under way.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    try {
+      stop.port2.postMessage('stop'); // sent before the call, as a worker's stop message would be
+      await expect(writeArchive(ENTRIES, { signal: controller.signal, onEntry: (_index, path) => seen.push(path) })).rejects.toThrow(
+        ArchiveError,
+      );
+      expect(seen).toEqual(['library.json']);
+    } finally {
+      stop.port1.close();
+    }
   });
+
+  it('hears a stop sent through a port while the write runs, after the entry in hand', async () => {
+    const entries = Array.from({ length: 50 }, (_, index) => ({ path: `notes/${index}.md`, data: `# Note ${index}` }));
+    const controller = new AbortController();
+    const seen: number[] = [];
+    const stop = new MessageChannel();
+    stop.port1.onmessage = () => controller.abort();
+    try {
+      await expect(
+        writeArchive(entries, {
+          signal: controller.signal,
+          onEntry: (index) => {
+            seen.push(index);
+            // A stop that reaches the thread while entry 10 is written, as a worker's would.
+            if (index === 10) stop.port2.postMessage('stop');
+          },
+        }),
+      ).rejects.toMatchObject({ reason: 'stopped' });
+      expect(seen).toHaveLength(11);
+    } finally {
+      stop.port1.close();
+    }
+  });
+
+  it('waits on no timer between entries, so a long write is not paced by the timer clamp', async () => {
+    const entries = Array.from({ length: 200 }, (_, index) => ({ path: `notes/${index}.md`, data: `# Note ${index}` }));
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    // Timers that never fire: a write that waits on one between entries never finishes.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+    try {
+      const held = new Promise<never>((_resolve, reject) => {
+        guard = realSetTimeout(() => reject(new Error('the write waited on a timer between entries')), 10_000);
+      });
+      // Loaded again under the fake timers, so a timer the module keeps from its load is a fake one too.
+      const { writeArchive: write } = await Promise.race([loadAgain(), held]);
+      const seen: number[] = [];
+      const zip = await Promise.race([write(entries, { onEntry: (index) => seen.push(index) }), held]);
+      expect(seen).toHaveLength(200);
+      expect(readArchive(zip).map((entry) => entry.path)).toEqual(entries.map((entry) => entry.path));
+    } finally {
+      vi.useRealTimers();
+      realClearTimeout(guard);
+    }
+  }, 20_000);
+
+  it('with no setImmediate, as in a browser, yields through a message channel, waits on no timer and still stops', async () => {
+    const entries = Array.from({ length: 200 }, (_, index) => ({ path: `notes/${index}.md`, data: `# Note ${index}` }));
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    vi.stubGlobal('setImmediate', undefined);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+    try {
+      const held = new Promise<never>((_resolve, reject) => {
+        guard = realSetTimeout(() => reject(new Error('the write waited on a timer between entries')), 10_000);
+      });
+      // Loaded again with no setImmediate and fake timers, so what the module keeps from its load is these too.
+      const { writeArchive: write } = await Promise.race([loadAgain(), held]);
+      const zip = await Promise.race([write(entries, {}), held]);
+      expect(readArchive(zip)).toHaveLength(200);
+      const controller = new AbortController();
+      const seen: number[] = [];
+      await expect(
+        write(entries, {
+          signal: controller.signal,
+          onEntry: (index) => {
+            seen.push(index);
+            if (index === 3) controller.abort();
+          },
+        }),
+      ).rejects.toMatchObject({ reason: 'stopped' });
+      expect(seen).toEqual([0, 1, 2, 3]);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      realClearTimeout(guard);
+    }
+  }, 20_000);
 
   it('writes the same bytes twice for the same entries when the time is pinned, a number or a Date', async () => {
     const at = Date.UTC(2026, 10, 4, 10, 0, 0);
-    // The clock alone is faked; the write's timers stay real.
+    // The clock alone is faked.
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(Date.UTC(2026, 0, 1, 9, 0, 0));
@@ -195,6 +292,62 @@ describe('the archive', () => {
       vi.useRealTimers();
     }
   });
+
+  it('writes a pinned time as the local clock reads it, as a zip records it with no time zone', async () => {
+    const at = new Date(2026, 10, 4, 10, 30, 20);
+    const zip = await writeArchive(ENTRIES, { mtime: at });
+    // The first local header holds the DOS time at byte 10 and the DOS date at byte 12 (APPNOTE 4.3.7).
+    const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+    const time = view.getUint16(10, true);
+    const date = view.getUint16(12, true);
+    expect([time >> 11, (time >> 5) & 63, (time & 31) * 2]).toEqual([10, 30, 20]);
+    expect([(date >> 9) + 1980, (date >> 5) & 15, date & 31]).toEqual([2026, 11, 4]);
+  });
+
+  it('refuses a pinned time that is no date, or falls outside 1980 to 2099, before any entry is reported', async () => {
+    for (const mtime of [new Date('x'), Number.NaN, Number.POSITIVE_INFINITY, new Date(1979, 11, 31, 12), new Date(2100, 0, 1, 12)]) {
+      const seen: string[] = [];
+      await expect(writeArchive(ENTRIES, { mtime, onEntry: (_index, path) => seen.push(path) }), String(mtime)).rejects.toThrow(
+        RangeError,
+      );
+      expect(seen).toEqual([]);
+    }
+  });
+
+  it('refuses a pinned time that is neither milliseconds nor a Date, as a caller without types might pass', async () => {
+    // A string the Date constructor parses, a boolean and a date-like object, each of which it would coerce.
+    for (const mtime of ['2026-11-04', true, { valueOf: () => Date.UTC(2026, 10, 4) }]) {
+      const seen: string[] = [];
+      await expect(
+        writeArchive(ENTRIES, { mtime: mtime as unknown as number, onEntry: (_index, path) => seen.push(path) }),
+        String(mtime),
+      ).rejects.toThrow(RangeError);
+      expect(seen).toEqual([]);
+    }
+  });
+
+  it('takes options a caller forwards without knowing whether it was given them, and answers the form they ask for', async () => {
+    const file = fileURLToPath(new URL('./forward-options.ts', import.meta.url));
+    const program = ts.createProgram([file], {
+      strict: true,
+      noEmit: true,
+      skipLibCheck: true,
+      target: ts.ScriptTarget.ES2022,
+      lib: ['lib.es2022.d.ts'],
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      types: ['node'],
+    });
+    const errors = ts
+      .getPreEmitDiagnostics(program, program.getSourceFile(file))
+      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+    expect(errors).toEqual([]);
+    expect(make(ENTRIES)).toBeInstanceOf(Uint8Array);
+    expect(make(ENTRIES, undefined)).toBeInstanceOf(Uint8Array);
+    const asked = make(ENTRIES, {});
+    expect(asked).toBeInstanceOf(Promise);
+    await expect(asked).resolves.toBeInstanceOf(Uint8Array);
+  }, 60_000);
 
   it('refuses a bad path on the hooked form before any entry is reported', async () => {
     const seen: string[] = [];
