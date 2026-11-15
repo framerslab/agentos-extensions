@@ -60,9 +60,9 @@ export interface WriteArchiveOptions {
  * The entries as one zip, in the order given.
  *
  * With options, the zip is written entry by entry: `onEntry` hears each one as it is written, and between two entries
- * the write posts a message to a channel of its own and goes on when it arrives, so a message already sent to the
- * thread (a worker's stop) is handled after the entry in hand and `signal` is read again before the next. No timer is
- * waited on, so the pace is not a timer's minimum delay. Every path, and `mtime`, is checked before the first entry is
+ * the write waits for a task of its own (`setImmediate` where there is one, else a message to a channel of its own), so
+ * a message already sent to the thread (a worker's stop) is handled after the entry in hand and `signal` is read again
+ * before the next. No timer is waited on, so the pace is not a timer's minimum delay. Every path, and `mtime`, is checked before the first entry is
  * written, and a path given twice is refused; with no options, an entry whose path was given before replaces that
  * entry's data. Options that may be `undefined` answer either form, as they are given.
  *
@@ -92,12 +92,24 @@ interface TaskPort {
 }
 
 /**
- * A channel the write posts to between entries. Its message is a task of its own, so the messages already queued for
- * the thread are handled before the write goes on, and it waits on no timer: a timer's delay is at least 1 ms in Node
- * and 4 ms in a browser once timers nest past five levels.
+ * How the write waits between entries: for a task of its own, so the messages already queued for the thread are
+ * handled before it goes on, and on no timer, whose delay is at least 1 ms in Node and 4 ms in a browser once timers
+ * nest past five levels. Node runs an immediate queued from a callback in the loop's next turn, after that turn's I/O
+ * and port messages. Without `setImmediate`, as in a browser, the write posts to a channel of its own, each message
+ * a task; Node is not given that path, since it hands one port up to 1,000 messages in a row, a stop from another
+ * port waiting behind them.
  */
-function taskChannel(): { next: () => Promise<void>; close: () => void } {
-  // Node's typings give its MessagePort no onmessage, though setting it starts the port as on the web.
+function taskYield(): { next: () => Promise<void>; close: () => void } {
+  if (typeof setImmediate === 'function') {
+    return {
+      next: () =>
+        new Promise<void>((resolve) => {
+          setImmediate(() => resolve());
+        }),
+      close: () => {},
+    };
+  }
+  // Node's typings give its MessagePort no onmessage, though the web's has one.
   const channel = new MessageChannel() as unknown as { port1: TaskPort; port2: TaskPort };
   let wake: (() => void) | undefined;
   channel.port1.onmessage = () => {
@@ -111,7 +123,7 @@ function taskChannel(): { next: () => Promise<void>; close: () => void } {
         wake = resolve;
         channel.port2.postMessage(null);
       }),
-    // An open port with a listener keeps Node's event loop alive; closing one end closes both.
+    // Closing one end closes both.
     close: () => channel.port1.close(),
   };
 }
@@ -136,7 +148,7 @@ async function writeInSteps(entries: readonly ArchiveEntry[], options: WriteArch
     given.add(path);
   }
   const mtime = options.mtime === undefined ? undefined : checkTime(options.mtime);
-  const tasks = taskChannel();
+  const tasks = taskYield();
   try {
     return await writeEntries(entries, paths, options, mtime, tasks.next);
   } finally {
