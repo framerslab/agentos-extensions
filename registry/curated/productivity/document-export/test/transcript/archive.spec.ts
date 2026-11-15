@@ -176,6 +176,8 @@ describe('the archive', () => {
     const seen: string[] = [];
     const stop = new MessageChannel();
     stop.port1.onmessage = () => controller.abort();
+    // From a turn of the event loop of its own, so the stop is not read in a turn already under way.
+    await new Promise<void>((resolve) => setImmediate(resolve));
     try {
       stop.port2.postMessage('stop'); // sent before the call, as a worker's stop message would be
       await expect(writeArchive(ENTRIES, { signal: controller.signal, onEntry: (_index, path) => seen.push(path) })).rejects.toThrow(
@@ -187,13 +189,36 @@ describe('the archive', () => {
     }
   });
 
+  it('hears a stop sent through a port while the write runs, after the entry in hand', async () => {
+    const entries = Array.from({ length: 50 }, (_, index) => ({ path: `notes/${index}.md`, data: `# Note ${index}` }));
+    const controller = new AbortController();
+    const seen: number[] = [];
+    const stop = new MessageChannel();
+    stop.port1.onmessage = () => controller.abort();
+    try {
+      await expect(
+        writeArchive(entries, {
+          signal: controller.signal,
+          onEntry: (index) => {
+            seen.push(index);
+            // A stop that reaches the thread while entry 10 is written, as a worker's would.
+            if (index === 10) stop.port2.postMessage('stop');
+          },
+        }),
+      ).rejects.toMatchObject({ reason: 'stopped' });
+      expect(seen).toHaveLength(11);
+    } finally {
+      stop.port1.close();
+    }
+  });
+
   it('waits on no timer between entries, so a long write is not paced by the timer clamp', async () => {
     const entries = Array.from({ length: 200 }, (_, index) => ({ path: `notes/${index}.md`, data: `# Note ${index}` }));
     const realSetTimeout = globalThis.setTimeout;
     const realClearTimeout = globalThis.clearTimeout;
     let guard: ReturnType<typeof setTimeout> | undefined;
     // Timers that never fire: a write that waits on one between entries never finishes.
-    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'setImmediate'] });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
     try {
       const held = new Promise<never>((_resolve, reject) => {
         guard = realSetTimeout(() => reject(new Error('the write waited on a timer between entries')), 10_000);
@@ -204,6 +229,38 @@ describe('the archive', () => {
       expect(readArchive(zip).map((entry) => entry.path)).toEqual(entries.map((entry) => entry.path));
     } finally {
       vi.useRealTimers();
+      realClearTimeout(guard);
+    }
+  }, 20_000);
+
+  it('with no setImmediate, as in a browser, yields through a message channel, waits on no timer and still stops', async () => {
+    const entries = Array.from({ length: 200 }, (_, index) => ({ path: `notes/${index}.md`, data: `# Note ${index}` }));
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    vi.stubGlobal('setImmediate', undefined);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+    try {
+      const held = new Promise<never>((_resolve, reject) => {
+        guard = realSetTimeout(() => reject(new Error('the write waited on a timer between entries')), 10_000);
+      });
+      const zip = await Promise.race([writeArchive(entries, {}), held]);
+      expect(readArchive(zip)).toHaveLength(200);
+      const controller = new AbortController();
+      const seen: number[] = [];
+      await expect(
+        writeArchive(entries, {
+          signal: controller.signal,
+          onEntry: (index) => {
+            seen.push(index);
+            if (index === 3) controller.abort();
+          },
+        }),
+      ).rejects.toMatchObject({ reason: 'stopped' });
+      expect(seen).toEqual([0, 1, 2, 3]);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
       realClearTimeout(guard);
     }
   }, 20_000);
