@@ -61,17 +61,18 @@ export interface WriteArchiveOptions {
  *
  * With options, the zip is written entry by entry: `onEntry` hears each one as it is written, and between two entries
  * the write waits for a task of its own (`setImmediate` where there is one, else a message to a channel of its own) and
- * reads `signal` again before the next. An abort on the writer's own thread stops it after the entry in hand. In Node, so
- * does a message already sent to the thread (a worker's stop); a browser picks the next task from its task queues in an
- * order of its own, so there such a message is handled between two entries when the browser picks it, not by rule after
- * the entry in hand. No timer is waited on, so the pace is not a timer's minimum delay. Every path, and `mtime`, is
- * checked before the first entry is written, and a path given twice is refused; with no options, an entry whose path
- * was given before replaces that entry's data. Options that may be `undefined` answer either form, as they are given.
+ * reads `signal` again before the next. An abort on the writer's own thread stops it after the entry in hand. In Node,
+ * so does a message already sent to the thread (a worker's stop); a browser picks the next task from its task queues in
+ * an order of its own, so there such a message is handled when the browser picks it, not by rule after the entry in
+ * hand, and the write may finish before it is. No timer is waited on, so the pace is not a timer's minimum delay. Every
+ * path, and `mtime`, is checked before the first entry is written, and a path given twice is refused; with no options,
+ * an entry whose path was given before replaces that entry's data. Options that may be `undefined` answer either form,
+ * as they are given.
  *
  * @throws {Error} When a path is not relative or holds an empty part, `..` or a backslash, or, with options, when it is
  * given twice; with options, the promise rejects with it before any entry is reported.
- * @throws {RangeError} With options, when `mtime` is not a date or falls outside 1980 to 2099 in the writer's time
- * zone; the promise rejects with it before any entry is reported.
+ * @throws {RangeError} With options, when `mtime` is neither milliseconds nor a `Date`, is not a real date or falls
+ * outside 1980 to 2099 in the writer's time zone; the promise rejects with it before any entry is reported.
  * @throws {ArchiveError} With options, reason `stopped`, when `signal` is aborted before an entry or after the last.
  */
 export function writeArchive(entries: readonly ArchiveEntry[]): Uint8Array;
@@ -94,14 +95,14 @@ interface TaskPort {
 }
 
 /**
- * How the write waits between entries: for a task of its own, and on no timer, whose delay is at least 1 ms in Node
- * and 4 ms in a browser once timers nest past five levels. Node runs an immediate queued from a callback in the loop's
- * next turn, after that turn's I/O and port messages, so the messages already queued for the thread are handled before
- * the write goes on. Without `setImmediate`, as in a browser, the write posts to a channel of its own, each message a
- * task. Each port is a task source of its own and the event loop picks among them in an order the browser decides
- * (HTML, the event loop's processing model), so there a stop from another port is not ordered against the write's next
- * entry. Node is not given that path, since it hands one port up to 1,000 messages in a row, a stop from another port
- * waiting behind them.
+ * How the write waits between entries: for a task of its own, and on no timer, whose delay is at least 1 ms in Node and
+ * 4 ms in a browser once timers nest past five levels. Node runs an immediate queued from a callback in the loop's next
+ * turn, after that turn's I/O and port messages, so the messages already queued for the thread are handled before the
+ * write goes on. Without `setImmediate`, as in a browser, the write posts to a channel of its own, each message a task.
+ * Each port is a task source of its own and the event loop picks among them in an order the browser decides (HTML, the
+ * event loop's processing model), so there a stop from another port is not ordered against the write's next entry, and
+ * the write may end first. Node is not given that path, since it hands one port up to 1,000 messages in a row, a stop
+ * from another port waiting behind them.
  */
 function taskYield(): { next: () => Promise<void>; close: () => void } {
   if (typeof setImmediate === 'function') {
@@ -132,9 +133,17 @@ function taskYield(): { next: () => Promise<void>; close: () => void } {
   };
 }
 
-/** The pinned time as a date, refused unless fflate can write it: a real date from 1980 to 2099 in local time. */
+/**
+ * The pinned time as a date, refused unless it is milliseconds or a `Date` (one from another realm too) and fflate can
+ * write it: a real date from 1980 to 2099 in local time. A string or an object the Date constructor would coerce is
+ * refused, so a caller without types gets the error rather than a time it did not mean.
+ */
 function checkTime(mtime: number | Date): Date {
-  const at = new Date(mtime);
+  const isDate = Object.prototype.toString.call(mtime) === '[object Date]';
+  if (typeof mtime !== 'number' && !isDate) {
+    throw new RangeError('transcript archive: mtime must be milliseconds or a Date.');
+  }
+  const at = new Date(isDate ? (mtime as Date).getTime() : (mtime as number));
   const year = at.getFullYear();
   // An invalid date's year is NaN, which fflate's own range check lets through as DOS time 0.
   if (!(year >= 1980 && year <= 2099)) {
