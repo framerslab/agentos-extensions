@@ -6,7 +6,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { readArchive } from '../../src/transcript/archive.js';
-import { NOTE_BUNDLE_LIMITS, NOTE_BUNDLE_MAX_NOTE_BYTES, NOTE_BUNDLE_READ_BYTES, planNoteBundle, readNoteBundle, writeNoteBundlePart, type BundleNote, type BundleSnapshot } from '../../src/transcript/notes.js';
+import { ArchiveError } from '../../src/archive/errors.js';
+import { NOTE_BUNDLE_LIMITS, NOTE_BUNDLE_READ_BYTES, planNoteBundle, readNoteBundle, writeNoteBundlePart, type BundleNote, type BundleSnapshot } from '../../src/transcript/notes.js';
 
 const encoder = new TextEncoder();
 
@@ -118,14 +119,40 @@ describe('the note bundle in parts', () => {
     expect(read.notes).toHaveLength(1);
   });
 
-  it("refuses a note past NOTE_BUNDLE_MAX_NOTE_BYTES, and reads one just under it back under the reader's default bound", async () => {
-    expect(NOTE_BUNDLE_MAX_NOTE_BYTES).toBe(33_554_432);
-    expect(() => planNoteBundle(snapshot([note(1, 'q'.repeat(NOTE_BUNDLE_MAX_NOTE_BYTES))]))).toThrow(RangeError);
-    const largest = note(2, 'q'.repeat(NOTE_BUNDLE_MAX_NOTE_BYTES - 1000));
-    const whole = snapshot([largest]);
+  it('puts a note of 40,000,000 bytes alone in its part among 41 ordinary notes, and every part reads back every note', async () => {
+    // Past the read's default bound of 64 MiB with nothing else, a note this long still goes into the bundle whole.
+    const before = Array.from({ length: 20 }, (_, i) => note(i + 1, `ordinary ${i + 1}`));
+    const large = note(21, 'q'.repeat(40_000_000));
+    const after = Array.from({ length: 21 }, (_, i) => note(i + 22, `ordinary ${i + 22}`));
+    const whole = snapshot([...before, large, ...after]);
     const plan = planNoteBundle(whole);
-    const read = await readNoteBundle(await writeNoteBundlePart(whole, plan, 0), { worker: false });
-    expect(read.notes[0]!.block.length).toBe(largest.block.length);
+    expect(plan.map((part) => part.noteIds)).toEqual([before.map((each) => each.id), [large.id], after.map((each) => each.id)]);
+    expect(plan[1]!.bytes).toBeGreaterThan(40_000_000);
+    const read: BundleNote[] = [];
+    for (const index of plan.keys()) {
+      const part = await readNoteBundle(await writeNoteBundlePart(whole, plan, index), { worker: false });
+      expect(part.manifest.part).toEqual({ index: index + 1, count: 3 });
+      read.push(...part.notes);
+    }
+    expect(read.map((each) => each.id)).toEqual(whole.notes.map((each) => each.id));
+    // Compared as one flag, so a failure prints no 40 MB diff.
+    expect(read[20]!.block === large.block).toBe(true);
+    expect(read.filter((each) => each.id !== large.id)).toEqual([...before, ...after]);
+  }, 60_000);
+
+  it("reads a part of one note back whole past the read's bound, the manifest still within it, and refuses a part of two past it", async () => {
+    const long = note(1, 'p'.repeat(5000));
+    const alone = snapshot([long]);
+    const plan = planNoteBundle(alone, { notes: NOTE_BUNDLE_LIMITS.notes, bytes: 1000, readBytes: 1500 });
+    expect(plan.map((part) => part.noteIds)).toEqual([[long.id]]);
+    const bytes = await writeNoteBundlePart(alone, plan, 0, { readBytes: 1500 });
+    const read = await readNoteBundle(bytes, { worker: false, maxInflatedBytes: 1500 });
+    expect(read.notes).toEqual([long]);
+    // Two notes in one part are counted together against the bound, as before.
+    const two = snapshot([note(2, 'p'.repeat(1000)), note(3, 'p'.repeat(1000))]);
+    const both = await writeNoteBundlePart(two, planNoteBundle(two), 0);
+    await expect(readNoteBundle(both, { worker: false, maxInflatedBytes: 1500 })).rejects.toBeInstanceOf(ArchiveError);
+    await expect(writeNoteBundlePart(two, planNoteBundle(two), 0, { readBytes: 1500 })).rejects.toBeInstanceOf(RangeError);
   });
 
   it('plans an empty snapshot as one empty part, which reads back with no note', async () => {
