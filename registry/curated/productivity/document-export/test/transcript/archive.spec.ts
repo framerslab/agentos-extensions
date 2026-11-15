@@ -17,6 +17,12 @@ const ENTRIES = [
   { path: 'sessions/s1.md', data: '# Session' },
 ];
 
+/** The archive module evaluated afresh, under whatever globals the test has set. */
+async function loadAgain(): Promise<{ writeArchive: typeof writeArchive }> {
+  vi.resetModules();
+  return import('../../src/transcript/archive.js');
+}
+
 /** Each entry read back as its path and its bytes, in order. */
 function readBack(zip: Uint8Array): Array<[string, number[]]> {
   return readArchive(zip).map((entry) => [entry.path, [...entry.data]]);
@@ -223,8 +229,10 @@ describe('the archive', () => {
       const held = new Promise<never>((_resolve, reject) => {
         guard = realSetTimeout(() => reject(new Error('the write waited on a timer between entries')), 10_000);
       });
+      // Loaded again under the fake timers, so a timer the module keeps from its load is a fake one too.
+      const { writeArchive: write } = await Promise.race([loadAgain(), held]);
       const seen: number[] = [];
-      const zip = await Promise.race([writeArchive(entries, { onEntry: (index) => seen.push(index) }), held]);
+      const zip = await Promise.race([write(entries, { onEntry: (index) => seen.push(index) }), held]);
       expect(seen).toHaveLength(200);
       expect(readArchive(zip).map((entry) => entry.path)).toEqual(entries.map((entry) => entry.path));
     } finally {
@@ -244,12 +252,14 @@ describe('the archive', () => {
       const held = new Promise<never>((_resolve, reject) => {
         guard = realSetTimeout(() => reject(new Error('the write waited on a timer between entries')), 10_000);
       });
-      const zip = await Promise.race([writeArchive(entries, {}), held]);
+      // Loaded again with no setImmediate and fake timers, so what the module keeps from its load is these too.
+      const { writeArchive: write } = await Promise.race([loadAgain(), held]);
+      const zip = await Promise.race([write(entries, {}), held]);
       expect(readArchive(zip)).toHaveLength(200);
       const controller = new AbortController();
       const seen: number[] = [];
       await expect(
-        writeArchive(entries, {
+        write(entries, {
           signal: controller.signal,
           onEntry: (index) => {
             seen.push(index);
