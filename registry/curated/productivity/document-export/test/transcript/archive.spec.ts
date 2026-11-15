@@ -210,7 +210,7 @@ describe('the archive', () => {
 
   it('writes the same bytes twice for the same entries when the time is pinned, a number or a Date', async () => {
     const at = Date.UTC(2026, 10, 4, 10, 0, 0);
-    // The clock alone is faked; the write's timers stay real.
+    // The clock alone is faked.
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(Date.UTC(2026, 0, 1, 9, 0, 0));
