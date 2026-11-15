@@ -314,6 +314,18 @@ describe('the archive', () => {
     }
   });
 
+  it('refuses a pinned time that is neither milliseconds nor a Date, as a caller without types might pass', async () => {
+    // A string the Date constructor parses, a boolean and a date-like object, each of which it would coerce.
+    for (const mtime of ['2026-11-04', true, { valueOf: () => Date.UTC(2026, 10, 4) }]) {
+      const seen: string[] = [];
+      await expect(
+        writeArchive(ENTRIES, { mtime: mtime as unknown as number, onEntry: (_index, path) => seen.push(path) }),
+        String(mtime),
+      ).rejects.toThrow(RangeError);
+      expect(seen).toEqual([]);
+    }
+  });
+
   it('takes options a caller forwards without knowing whether it was given them, and answers the form they ask for', async () => {
     const file = fileURLToPath(new URL('./forward-options.ts', import.meta.url));
     const program = ts.createProgram([file], {
