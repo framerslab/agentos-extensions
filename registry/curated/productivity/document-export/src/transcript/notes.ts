@@ -3,9 +3,10 @@
  * folders that mirror the person's folders, and `notes.json`, the manifest that carries identity (each note's stable
  * id, folder, pin, sources, tags, compatibility fields and known times) and the part accounting. Past
  * `NOTE_BUNDLE_LIMITS`, one frozen snapshot comes as numbered parts, each importable alone; a note whose own file passes
- * the byte bound goes alone in a part, so no note is split or left out. The writer writes entry by entry through
- * `writeArchive` with its progress and its stop; the reader opens the ZIP one entry at a time through `openArchive`,
- * under a bound on the bytes it inflates, and refuses a newer version whole. Browser-safe.
+ * the byte bound goes alone in a part, whatever its size, and reads back whole, so no note is split or left out. The
+ * writer writes entry by entry through `writeArchive` with its progress and its stop; the reader opens the ZIP one entry
+ * at a time through `openArchive`, under a bound on the bytes it inflates, and refuses a newer version whole.
+ * Browser-safe.
  *
  * @module document-export/transcript/notes
  */
@@ -21,11 +22,9 @@ export const NOTE_BUNDLE_VERSION = 1;
 /** One part's bounds: at most 2,000 notes and 10 MiB of note bytes (a note's file and its manifest entry). */
 export const NOTE_BUNDLE_LIMITS = { notes: 2000, bytes: 10_485_760 } as const;
 /**
- * The most bytes one note may count, its file and its manifest entry: 32 MiB, so a part of one such note and its
- * manifest reads back under the reader's default bound of 64 MiB.
+ * The bound a read keeps when the caller names none: 64 MiB. It holds the manifest of every part, and the manifest and
+ * the notes' files together of a part of more than one note; a part of one note reads that note whole.
  */
-export const NOTE_BUNDLE_MAX_NOTE_BYTES = 33_554_432;
-/** The bound a read keeps when the caller names none, the manifest and the notes' files together: 64 MiB. */
 export const NOTE_BUNDLE_READ_BYTES = 67_108_864;
 
 /** A folder as the bundle keeps it: its id, its name (null when the copy could not open it) and its parent's id. */
@@ -247,9 +246,9 @@ const ENTRY_FRAME = ENTRY_INDENT.length + 2;
  * A note's bytes in a part: its file, and its manifest entry as `notes.json` holds it, its path among its fields,
  * indented as the writer indents it, with the comma and line break after it.
  */
-function noteBytes(note: BundleNote, path: string): number {
+function noteBytes(note: BundleNote, path: string): { file: number; entry: number } {
   const written = JSON.stringify(manifestEntry(note, path), null, 2).replace(/\n/g, `\n${ENTRY_INDENT}`);
-  return encoder.encode(note.block).length + encoder.encode(written).length + ENTRY_FRAME;
+  return { file: encoder.encode(note.block).length, entry: encoder.encode(written).length + ENTRY_FRAME };
 }
 
 /** What a plan is bounded by: one part's notes and bytes, and the bytes a read of one part keeps (`NOTE_BUNDLE_READ_BYTES` unless named). */
@@ -282,35 +281,47 @@ function manifestBytes(folders: readonly BundleFolder[], parts: readonly BundleP
 
 /**
  * The snapshot's parts: notes in the snapshot's order, a part closed before a note would pass either bound, and a note
- * whose own bytes pass the byte bound alone in a part of its own. A note counts as its file and its manifest entry as
- * written, its path among the entry's fields. Every part, with its manifest's index of the parts and the snapshot's
- * folders, stays within the bytes a read keeps, so each part the plan makes reads back under the reader's bound. An
- * empty snapshot is one empty part.
+ * whose own bytes pass the byte bound alone in a part of its own, whatever its size, so no note is split or left out. A
+ * note counts as its file and its manifest entry as written, its path among the entry's fields. Every part's manifest,
+ * its index of the parts, the snapshot's folders and its notes' entries, stays within the bytes a read keeps, and so do
+ * the notes' files with it in a part of more than one note; a part of one note reads that note whole, as the reader
+ * reads it. An empty snapshot is one empty part.
  *
- * @throws {RangeError} When two notes share one id, a note counts more than `NOTE_BUNDLE_MAX_NOTE_BYTES`, a part
- * with its manifest would pass `limits.readBytes`, or that bound is not zero or more.
+ * @throws {RangeError} When two notes share one id, a part's manifest, or a part of more than one note with its
+ * manifest, would pass `limits.readBytes`, or that bound is not zero or more.
  */
 export function planNoteBundle(snapshot: Pick<BundleSnapshot, 'folders' | 'notes'>, limits: NoteBundleLimits = NOTE_BUNDLE_LIMITS): BundlePartPlan[] {
   const names = noteFileNames(snapshot);
   const parts: BundlePartPlan[] = [];
+  // Each part's file bytes, beside the plan, so a part of one note is held to its manifest alone.
+  const files: number[] = [];
   let open: BundlePartPlan = { index: 0, noteIds: [], bytes: 0 };
+  let openFiles = 0;
   for (const note of snapshot.notes) {
-    const bytes = noteBytes(note, names.get(note.id) as string);
-    if (bytes > NOTE_BUNDLE_MAX_NOTE_BYTES) throw new RangeError(`note bundle: a note of ${bytes} bytes passes the ${NOTE_BUNDLE_MAX_NOTE_BYTES} one note may count`);
+    const { file, entry } = noteBytes(note, names.get(note.id) as string);
+    const bytes = file + entry;
     const full = open.noteIds.length >= limits.notes || (open.noteIds.length > 0 && open.bytes + bytes > limits.bytes);
     if (full) {
       parts.push(open);
+      files.push(openFiles);
       open = { index: parts.length, noteIds: [], bytes: 0 };
+      openFiles = 0;
     }
     open.noteIds.push(note.id);
     open.bytes += bytes;
+    openFiles += file;
   }
-  if (open.noteIds.length > 0 || parts.length === 0) parts.push(open);
+  if (open.noteIds.length > 0 || parts.length === 0) {
+    parts.push(open);
+    files.push(openFiles);
+  }
   const readBytes = limits.readBytes ?? NOTE_BUNDLE_READ_BYTES;
   if (!(readBytes >= 0)) throw new RangeError(`note bundle: readBytes must be zero or more, not ${readBytes}`);
   const manifest = manifestBytes(snapshot.folders, parts);
-  for (const part of parts) {
-    if (part.bytes + manifest > readBytes) throw new RangeError(`note bundle: a part of ${part.bytes + manifest} bytes with its manifest passes the ${readBytes} a read keeps`);
+  for (const [i, part] of parts.entries()) {
+    // A part of one note reads that note whole, so only its manifest, the note's entry among it, counts.
+    const counted = part.noteIds.length === 1 ? part.bytes - (files[i] as number) : part.bytes;
+    if (counted + manifest > readBytes) throw new RangeError(`note bundle: a part of ${counted + manifest} bytes with its manifest passes the ${readBytes} a read keeps`);
   }
   return parts;
 }
@@ -323,7 +334,7 @@ export interface WritePartOptions {
   signal?: AbortSignal;
   /** The version written in the manifest; this build's when absent. */
   version?: number;
-  /** The most bytes the part's manifest and files may hold together, the bound a read of it keeps; `NOTE_BUNDLE_READ_BYTES` when absent. */
+  /** The most bytes the part's manifest may hold, with its files when it holds more than one note: the bound a read of it keeps; `NOTE_BUNDLE_READ_BYTES` when absent. */
   readBytes?: number;
 }
 
@@ -331,7 +342,8 @@ export interface WritePartOptions {
  * One part as a ZIP: its notes' Markdown files, then `notes.json`. The write goes entry by entry, and a stop rejects
  * with the archive writer's `ArchiveError` (reason `stopped`), handing back no archive. The parts are numbered from 1 in
  * the plan's order, and the part's entry lists the notes its files hold. The part as written, its manifest with the
- * snapshot's own id and time and its notes' files, stays within `readBytes`, so a read under that bound takes it whole.
+ * snapshot's own id and time, and its notes' files when it holds more than one, stays within `readBytes`, so a read
+ * under that bound takes it whole; a part of one note reads that note whole past the bound, as the reader reads it.
  *
  * @throws {RangeError} When the plan holds no part of that index, two notes share one id, the part as written would
  * pass `readBytes`, or that bound is not zero or more.
@@ -355,7 +367,8 @@ export async function writeNoteBundlePart(snapshot: BundleSnapshot, plan: readon
   const readBytes = options.readBytes ?? NOTE_BUNDLE_READ_BYTES;
   if (!(readBytes >= 0)) throw new RangeError(`note bundle: readBytes must be zero or more, not ${readBytes}`);
   let total = encoder.encode(written).length;
-  for (const note of notes) total += encoder.encode(note.block).length;
+  // A part of one note reads that note whole, so its file does not count against the bound.
+  if (notes.length !== 1) for (const note of notes) total += encoder.encode(note.block).length;
   if (total > readBytes) throw new RangeError(`note bundle: part ${index + 1} would hold ${total} bytes, past the ${readBytes} a read keeps`);
   const entries: ArchiveEntry[] = [...notes.map((note) => ({ path: names.get(note.id) as string, data: note.block })), { path: NOTE_BUNDLE_MANIFEST, data: written }];
   return writeArchive(entries, {
@@ -376,7 +389,10 @@ export interface ReadBundle {
 
 /** What a read is bounded by, and how it inflates. */
 export interface ReadNoteBundleOptions {
-  /** The most bytes the manifest and the notes' files may hold together, read from the directory before any. Default 64 MiB. */
+  /**
+   * The most bytes the manifest may hold, and the manifest and the notes' files together in a part of more than one note,
+   * read from the directory before any is inflated; a part of one note reads that note whole. Default 64 MiB.
+   */
   maxInflatedBytes?: number;
   /** Inflate in fflate's worker (the default) or, with `false`, on the calling thread. */
   worker?: boolean;
@@ -384,7 +400,7 @@ export interface ReadNoteBundleOptions {
   signal?: AbortSignal;
 }
 
-/** The bound a read keeps when the caller names none, which every part a plan makes stays within. */
+/** The bound a read keeps when the caller names none, which every part a plan makes is held to. */
 const MAX_INFLATED_BYTES = NOTE_BUNDLE_READ_BYTES;
 
 const isText = (value: unknown): value is string => typeof value === 'string';
@@ -462,13 +478,14 @@ function manifestOf(value: unknown): BundleManifest {
  * format, is `not_a_bundle` (the caller reads it as files); a manifest of a newer version is `newer_version`, refused
  * whole with no note read; a manifest of the wrong shape, a manifest or note file the ZIP records twice, a note that
  * names a file the ZIP does not hold, or a note file that is not UTF-8, is `bad_manifest`. A block keeps a leading byte
- * order mark. The manifest and the notes' files may inflate to `maxInflatedBytes` together, counted from the sizes
- * the directory records before any is read, and each read is checked against its recorded length; a note of any size
- * within that bound reads back whole.
+ * order mark. The manifest may inflate to `maxInflatedBytes`, and in a part of more than one note the manifest and the
+ * notes' files together, counted from the sizes the directory records before any note is read; a part of one note, as
+ * the writer makes for a note past the byte bound, reads that note whole at its recorded size. Each read is checked
+ * against its recorded length.
  *
  * @throws {NoteBundleError} For a file that is not a bundle this build reads, as above.
  * @throws {ArchiveError} When the bytes are not a ZIP the archive reader opens, an entry it needs is refused, the
- * files pass the bound (reason `size`), or the signal fires (reason `stopped`).
+ * manifest or a part of more than one note passes the bound (reason `size`), or the signal fires (reason `stopped`).
  */
 export async function readNoteBundle(bytes: Uint8Array | Blob, options: ReadNoteBundleOptions = {}): Promise<ReadBundle> {
   const limit = options.maxInflatedBytes ?? MAX_INFLATED_BYTES;
@@ -503,9 +520,10 @@ export async function readNoteBundle(bytes: Uint8Array | Blob, options: ReadNote
       if (entry === undefined || twice.has(note.path)) throw new NoteBundleError('bad_manifest');
       return entry;
     });
-    // Every file's recorded size counts against the bound before the first is inflated.
+    // In a part of more than one note, every file's recorded size counts against the bound before the first is
+    // inflated; a part of one note reads that note whole, so no note the writer puts alone is ever refused.
     let left = limit - raw.length;
-    for (const entry of entries) left -= entry.size;
+    if (entries.length !== 1) for (const entry of entries) left -= entry.size;
     if (left < 0) throw new ArchiveError('size', REFUSED.size);
     // A block reads back as it was written: a leading byte order mark is the block's own character, and bytes that are
     // not UTF-8 are refused rather than read as replacement characters.
