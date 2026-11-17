@@ -227,6 +227,22 @@ describe('ClaimChecker.check', () => {
     expect(asked.map((one) => one.prompt).join('\n')).not.toContain('Jane Roe');
   });
 
+  it('a check sends a passage as it was when that check began, whatever another check reads of it meanwhile', async () => {
+    const { embed, batches } = fakeEmbed();
+    const { judge, asked } = fakeJudge({ relation: 'none', quote: '' });
+    const claims = new ClaimChecker({ embed, judge, checker });
+    const note = passage('My notes say the Treaty of Versailles was signed in 1918 by [name].', 'note:one', 'note', 'Notes');
+    // The first check takes the redacted note and waits on its first turn; the host then puts the name back for a
+    // second check that may only hold the note back.
+    const first = claims.check(CLAIM, [note], { signal: signal() });
+    note.content = 'My notes say the Treaty of Versailles was signed in 1918 by Jane Roe.';
+    const second = claims.check(CLAIM, [passage(LEAD, 'encyclopedia:Treaty_of_Versailles')], { signal: signal(), found: [note] });
+    await Promise.all([first, second]);
+    expect(batches.flat()).toContain('My notes say the Treaty of Versailles was signed in 1918 by [name].');
+    expect(batches.flat().join('\n')).not.toContain('Jane Roe');
+    expect(asked.map((one) => one.prompt).join('\n')).not.toContain('Jane Roe');
+  });
+
   it('compares at most maxPassages passages, in the order the checker ranks them', async () => {
     const { embed, batches } = fakeEmbed();
     const { judge } = fakeJudge({ relation: 'none', quote: '' });
@@ -315,5 +331,23 @@ describe('ClaimChecker: the veto reads every passage, however long', () => {
     const same = passage('The Treaty of Versailles was signed in 1919.', 'page:almanac', 'page', 'Almanac');
     expect(claims.agree(first, CLAIM, [same])).toEqual([same]);
     expect(claims.agree(first, CLAIM, [same, long])).toEqual([]);
+  });
+});
+
+describe('ClaimChecker: later calls read every passage as it is now', () => {
+  it('revisit reads a retained passage in the source its host moved it to, so it invents no disagreement within one source', async () => {
+    const { embed } = fakeEmbed();
+    const { judge } = fakeJudge({ relation: 'differs', quote: QUOTE });
+    const claims = new ClaimChecker({ embed, judge, checker });
+    const lead = passage(LEAD, 'source:a');
+    const other = passage('The Treaty of Versailles was signed in 1920.', 'source:b', 'page', 'Other');
+    const first = await claims.check(CLAIM, [lead, other], { signal: signal() });
+    if (first.kind !== 'decided') throw new Error(`expected a decision, got ${first.reason}`);
+    expect(first.named).toBe(lead);
+    expect(first.decision.relation).toBe('differs');
+    // The host moves the two passages to other sources; the lead now shares no source with the other.
+    lead.group = 'source:b';
+    other.group = 'source:c';
+    expect(claims.revisit(first, CLAIM, [lead])?.relation).toBe('differs');
   });
 });
