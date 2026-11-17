@@ -264,6 +264,12 @@ export interface MultiSearchResponse {
   };
 }
 
+/** One provider's rate-limit window: the requests counted in it and when it ends. */
+interface RateWindow {
+  count: number;
+  resetTime: number;
+}
+
 /** `onSend` answered `false` or threw for a provider of a `multiSearch`: nothing was sent to it. */
 class ProviderSkipped {}
 const SKIPPED = new ProviderSkipped();
@@ -300,7 +306,7 @@ function anyOf(signals: Array<AbortSignal | undefined>): AbortSignal | undefined
  */
 export class SearchProviderService {
   private config: SearchProviderConfig;
-  private rateLimitState: Map<string, { count: number; resetTime: number }>;
+  private rateLimitState: Map<string, RateWindow>;
   /** The `wikipedia` provider, built once when the config enables it. */
   private wikipedia: WikipediaSourceProvider | null = null;
   private wikipediaLimiter: RefusalKeeper | null = null;
@@ -543,7 +549,7 @@ export class SearchProviderService {
    * @returns {Promise<boolean>} True if within limits
    */
   private async checkRateLimit(provider: string): Promise<boolean> {
-    return this.takeRateLimit(provider);
+    return this.takeRateLimit(provider) !== null;
   }
 
   /** Whether a provider is within its rate limit, counting nothing. */
@@ -552,33 +558,36 @@ export class SearchProviderService {
     return state === undefined || Date.now() > state.resetTime || state.count < this.config.rateLimit!.maxRequests;
   }
 
-  /** Gives back one request counted against a provider's rate limit in its current window, for a request that never left. */
-  private releaseRateLimit(provider: string): void {
-    const state = this.rateLimitState.get(provider);
-    if (state !== undefined && Date.now() <= state.resetTime && state.count > 0) state.count -= 1;
+  /**
+   * Gives back one request counted in `window`, for a request that never left. A window that has since ended, and a
+   * new one in its place, are left as they are: the count goes back to the window it was taken from or nowhere.
+   */
+  private releaseRateLimit(provider: string, window: RateWindow): void {
+    if (this.rateLimitState.get(provider) === window && window.count > 0) window.count -= 1;
   }
 
-  /** Counts one request against a provider's rate limit; false, counting nothing, when it is past the limit. */
-  private takeRateLimit(provider: string): boolean {
+  /**
+   * Counts one request against a provider's rate limit and answers the window it was counted in; null, counting
+   * nothing, when it is past the limit.
+   */
+  private takeRateLimit(provider: string): RateWindow | null {
     const now = Date.now();
     const state = this.rateLimitState.get(provider);
-    
+
     if (!state || now > state.resetTime) {
-      this.rateLimitState.set(provider, {
-        count: 1,
-        resetTime: now + this.config.rateLimit!.windowMs
-      });
-      return true;
+      const window: RateWindow = { count: 1, resetTime: now + this.config.rateLimit!.windowMs };
+      this.rateLimitState.set(provider, window);
+      return window;
     }
-    
+
     if (state.count >= this.config.rateLimit!.maxRequests) {
-      return false;
+      return null;
     }
-    
+
     state.count++;
-    return true;
+    return state;
   }
-  
+
   /**
    * Search using Serper.dev API
    * 
@@ -1170,14 +1179,14 @@ export class SearchProviderService {
         return false;
       }
     };
-    /** Whether this provider's request was counted against the service's rate limit. */
-    let taken = false;
+    /** The rate-limit window this provider's request was counted in, once it was. */
+    let charged: RateWindow | null = null;
     /** The last checks before the request leaves, the rate limit counted only here. */
     const dispatch = (): void => {
       halt();
       if (provider === 'duckduckgo') return;
-      if (!this.takeRateLimit(provider)) throw new LimiterRefused('wait');
-      taken = true;
+      charged = this.takeRateLimit(provider);
+      if (charged === null) throw new LimiterRefused('wait');
     };
 
     const work = (async (): Promise<SearchResult[]> => {
@@ -1210,8 +1219,9 @@ export class SearchProviderService {
         if (thrown === SKIPPED) return end('skipped');
         if (isRefusal(thrown)) {
           // The wiki's limiter can refuse after the request was counted (a block that came during `onSend`): it never
-          // left, so the count is given back.
-          if (taken) this.releaseRateLimit(provider);
+          // left, so the count goes back to the window it was taken from. Only the wiki's limiter refuses after the
+          // count, and a caller's abort is never a refusal of it, whatever its reason.
+          if (charged !== null && provider === 'wikipedia' && options.signal?.aborted !== true) this.releaseRateLimit(provider, charged);
           return end('limited');
         }
         return end('failed');

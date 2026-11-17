@@ -614,8 +614,9 @@ describe("multiSearch: a count given back is the count taken", () => {
     const reason = new LimiterRefused('caller');
     controller.abort(reason);
     await expect(pending).rejects.toBe(reason);
-    // The aborted request's own end settles after the call's rejection.
+    // The aborted request's own end settles after the call's rejection; a request sent now would be answered at once.
     await new Promise((resolve) => setTimeout(resolve, 100));
+    scripts = {};
     const next = await limited.multiSearch('treaty', { providers: ['tavily'], fallback: false });
     expect(next.metadata.outcomes).toEqual({ tavily: 'limited' });
     expect(asked).toHaveLength(1);

@@ -162,10 +162,10 @@ const response = await search.multiSearch('Treaty of Versailles signed', {
 |---|---|
 | `answered` | It returned at least one result. |
 | `empty` | It returned without an error and with no result. |
-| `failed` | Its request failed: an error status, a network error, a body that would not parse, or Tavily's or Firecrawl's own 15-second timer. For DuckDuckGo, an error from its instant answer endpoint, or from its search page when the instant answer finds nothing to stand in for it. A `search` reads those timers and those errors as no results; `multiSearch` never reads a failure as a search that found nothing. |
+| `failed` | Its request failed: an error status, a network error, a body that would not parse, or Tavily's or Firecrawl's own 15-second timer. For DuckDuckGo, an error from its instant answer endpoint, or from its search page when the instant answer finds nothing to stand in for it. A `search` reads Tavily's and Firecrawl's timers as no results, and its fallback to DuckDuckGo reads DuckDuckGo's errors as no results; a `search` pinned to `duckduckgo` rejects when its instant answer fails. `multiSearch` never reads a failure as a search that found nothing. |
 | `late` | It had not answered by `deadlineMs`. |
 | `skipped` | Nothing was sent to it: it is not configured, or `onSend` answered `false` or threw. |
-| `limited` | Nothing was sent to it: the service's `rateLimit` or the wiki's limiter refused it. A request counts against `rateLimit` only when it leaves, so a provider `onSend` skipped, one late before it left, or a wiki request its limiter refused after `onSend` (a block that came meanwhile) spends none of it. |
+| `limited` | Nothing was sent to it: the service's `rateLimit` or the wiki's limiter refused it. A request counts against `rateLimit` only when it leaves, so a provider `onSend` skipped, one late before it left, or a wiki request its limiter refused after `onSend` (a block that came meanwhile) spends none of it; the count goes back to the window it was taken from, never to a window opened since. A request that left keeps its count, the caller's abort included. |
 
 `metadata.providersQueried` lists every provider the call considered, in order, and each of them is either in `providersSucceeded` (answered) or in `providersFailed` (any other outcome), as before. A call with none of these options asks every configured provider and DuckDuckGo, as it did before they existed.
 
