@@ -41,6 +41,13 @@ let scripts: Partial<Record<StandIn | 'wikipedia', Script>> = {};
 const fetched: string[] = [];
 /** The requests DuckDuckGo's and Brave's endpoints received. */
 const fixedHosts: string[] = [];
+/** The status DuckDuckGo's instant answer endpoint answers, with a JSON body either way. */
+let instantAnswerStatus = 200;
+/**
+ * A host whose requests reject as an `AbortError` with the caller's signal not aborted: what Tavily's and Firecrawl's
+ * own 15-second timers do to a request, without the wait.
+ */
+const TIMEOUT_HOST = 'timeout.invalid';
 const realFetch = globalThis.fetch;
 
 function generated(provider: string, count: number): string[] {
@@ -111,13 +118,20 @@ beforeAll(async () => {
     const address = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     fetched.push(address);
     const host = new URL(address).hostname;
+    if (host === TIMEOUT_HOST) {
+      init?.signal?.throwIfAborted();
+      throw new DOMException('This operation was aborted', 'AbortError');
+    }
     if (host.endsWith('duckduckgo.com') || host === 'api.search.brave.com') {
       init?.signal?.throwIfAborted();
       fixedHosts.push(address);
       // DuckDuckGo's HTML page with no result block, then its instant answer with nothing in it: no results.
       return host === 'html.duckduckgo.com'
         ? new Response('<html><body></body></html>', { status: 200, headers: { 'content-type': 'text/html' } })
-        : new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+        : new Response(instantAnswerStatus === 200 ? '{}' : '{"error":"unavailable"}', {
+            status: instantAnswerStatus,
+            headers: { 'content-type': 'application/json' },
+          });
     }
     return realFetch(input, init);
   });
@@ -134,6 +148,7 @@ beforeEach(() => {
   fetched.length = 0;
   fixedHosts.length = 0;
   scripts = {};
+  instantAnswerStatus = 200;
 });
 
 function service(extra: Record<string, unknown> = {}): SearchProviderService {
@@ -376,5 +391,101 @@ describe('multiSearch: outcomes', () => {
     const second = await limited.multiSearch('treaty', { providers: ['serper'], fallback: false });
     expect(second.metadata.outcomes).toEqual({ serper: 'limited' });
     expect(asked).toHaveLength(1);
+  });
+});
+
+describe('multiSearch: the deadline, the signal, the hook and the rate limit at the moment a request would leave', () => {
+  it('deadlineMs 0 sends nothing: the provider is late before its request leaves', async () => {
+    const response = await service().multiSearch('treaty', { providers: ['serper'], fallback: false, deadlineMs: 0 });
+    expect(response.metadata.outcomes).toEqual({ serper: 'late' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(asked).toEqual([]);
+  });
+
+  it('an onSend that works past the deadline before it answers true sends nothing', async () => {
+    const response = await service().multiSearch('treaty', {
+      providers: ['serper'],
+      fallback: false,
+      deadlineMs: 30,
+      onSend: () => {
+        const until = Date.now() + 80;
+        while (Date.now() < until) {
+          // Work that holds the thread past the deadline, so no timer can run before the hook answers.
+        }
+        return true;
+      },
+    });
+    expect(response.metadata.outcomes).toEqual({ serper: 'late' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(asked).toEqual([]);
+  });
+
+  it('fallback: false leaves DuckDuckGo out even when the providers name it', async () => {
+    const response = await service().multiSearch('treaty', { providers: ['duckduckgo', 'serper'], fallback: false });
+    expect(fixedHosts).toEqual([]);
+    expect(response.metadata.providersQueried).toEqual(['serper']);
+    expect(response.metadata.outcomes).toEqual({ serper: 'answered' });
+  });
+
+  it('a hook that aborts the call stops every later hook: nothing more is charged and nothing is sent', async () => {
+    const controller = new AbortController();
+    const reason = new Error('the caller stopped');
+    const seen: string[] = [];
+    const pending = service().multiSearch('treaty', {
+      providers: ['serper', 'tavily'],
+      fallback: false,
+      signal: controller.signal,
+      onSend: (provider) => {
+        seen.push(provider);
+        if (provider === 'serper') controller.abort(reason);
+        return true;
+      },
+    });
+    expect(await rejection(pending)).toBe(reason);
+    expect(seen).toEqual(['serper']);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(asked).toEqual([]);
+  });
+
+  it('runs the hooks in the order the providers are named, DuckDuckGo last', async () => {
+    const seen: string[] = [];
+    await service().multiSearch('treaty', {
+      providers: ['tavily', 'serper', 'firecrawl'],
+      onSend: (provider) => {
+        seen.push(provider);
+      },
+    });
+    expect(seen).toEqual(['tavily', 'serper', 'firecrawl', 'duckduckgo']);
+  });
+
+  it('a provider onSend skipped spends none of the rate limit: the next call is sent', async () => {
+    const limited = service({ rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    const skipped = await limited.multiSearch('treaty', { providers: ['serper'], fallback: false, onSend: () => false });
+    expect(skipped.metadata.outcomes).toEqual({ serper: 'skipped' });
+    const sent = await limited.multiSearch('treaty', { providers: ['serper'], fallback: false });
+    expect(sent.metadata.outcomes).toEqual({ serper: 'answered' });
+    expect(asked).toHaveLength(1);
+  });
+});
+
+describe('multiSearch: failures read as failures', () => {
+  it("Tavily's and Firecrawl's own timeouts answer failed, while a pinned search still answers no results", async () => {
+    const timing = service({ tavilyUrl: `https://${TIMEOUT_HOST}/tavily`, firecrawlUrl: `https://${TIMEOUT_HOST}/firecrawl` });
+    const response = await timing.multiSearch('treaty', { providers: ['tavily', 'firecrawl', 'serper'], fallback: false });
+    expect(response.metadata.outcomes).toEqual({ tavily: 'failed', firecrawl: 'failed', serper: 'answered' });
+    const pinned = await timing.search('treaty', { provider: 'tavily' });
+    expect(pinned.results).toEqual([]);
+  });
+
+  it("DuckDuckGo's instant answer endpoint answering an error status is failed, not empty", async () => {
+    instantAnswerStatus = 500;
+    const response = await service().multiSearch('treaty', { providers: ['duckduckgo'], fallback: false });
+    expect(response.metadata.outcomes).toEqual({ duckduckgo: 'failed' });
+  });
+
+  it('a provider named __proto__ has an outcome of its own', async () => {
+    const response = await service().multiSearch('treaty', { providers: ['__proto__', 'serper'], fallback: false });
+    expect(Object.getOwnPropertyDescriptor(response.metadata.outcomes, '__proto__')?.value).toBe('skipped');
+    expect(Object.keys(response.metadata.outcomes)).toEqual(['__proto__', 'serper']);
   });
 });
