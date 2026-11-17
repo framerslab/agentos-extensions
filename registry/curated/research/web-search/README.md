@@ -108,6 +108,67 @@ try {
 
 A search with neither `signal` nor `onSend` sends the requests it sent before these options existed.
 
+## Asking several providers from code
+
+```ts
+import { SearchProviderService, type MultiSearchOptions } from '@framers/agentos-ext-web-search';
+
+const search = new SearchProviderService({
+  serperApiKey: process.env.SERPER_API_KEY,
+  tavilyApiKey: process.env.TAVILY_API_KEY,
+  tavily: { searchDepth: 'basic' },
+  firecrawlApiKey: process.env.FIRECRAWL_API_KEY,
+});
+
+// The host's own count of requests, one a provider; a provider past its cap is skipped.
+const sent = new Map<string, number>();
+const CAP = 1_000;
+
+const providers = ['serper', 'tavily', 'firecrawl'];
+const controller = new AbortController();
+const response = await search.multiSearch('Treaty of Versailles signed', {
+  providers, // these alone, in this order
+  fallback: false, // DuckDuckGo is not asked
+  perProvider: 5, // each provider is asked for five results
+  maxResults: 5 * providers.length, // the merged list keeps all fifteen
+  deadlineMs: 4_000, // a provider that has not answered by then is late
+  signal: controller.signal,
+  onSend: (provider) => {
+    const count = sent.get(provider) ?? 0;
+    if (count >= CAP) return false; // nothing is sent to it
+    sent.set(provider, count + 1);
+  },
+});
+
+// With Firecrawl past its cap: response.metadata.outcomes is { serper: 'answered', tavily: 'answered', firecrawl: 'skipped' },
+// and a page both Serper and Tavily found has providers ['serper', 'tavily'], in the order named above.
+```
+
+`multiSearch(query, { maxResults, providers, fallback, signal, onSend, deadlineMs, perProvider })`:
+
+| Option | What it does | When left out |
+|---|---|---|
+| `providers` | The providers to ask, in this order. A provider named but not configured answers `skipped` and is sent nothing. `wikipedia` is asked only when the service enables it and it is named. | Every configured provider, `wikipedia` among them when enabled. |
+| `fallback` | `false` leaves DuckDuckGo out. With `true`, DuckDuckGo is asked after the other providers. | `true` |
+| `signal` | Ends every provider's request; the call rejects with the signal's reason, whether it aborts before or during the call. | No signal. |
+| `onSend(provider)` | Awaited once before each provider's request is sent. `false` or a throw skips that provider alone, with nothing sent to it, and the others go on. For `wikipedia` it runs once the wiki's limiter has granted the request. | Every provider is sent its request. |
+| `deadlineMs` | Each provider's own bound, counted from the start of the call. A provider that has not answered by then, or is still waiting on `onSend`, answers `late`: its request is aborted, nothing is sent to it if it had not been, and its results are dropped. The others' results stand. | No bound beyond Tavily's and Firecrawl's own 15-second timers and the wiki's `timeoutMs`. |
+| `perProvider` | How many results each provider is asked for. `maxResults` stays the cap on the merged list, so a host that filters the merged list passes a cap that drops nothing. | `maxResults` |
+| `maxResults` | The most results the merged list answers. | 10 |
+
+`metadata.outcomes` names what became of each provider queried:
+
+| Outcome | Meaning |
+|---|---|
+| `answered` | It returned at least one result. |
+| `empty` | It returned without an error and with no result. |
+| `failed` | Its request failed: an error status, a network error, a body that would not parse. |
+| `late` | It had not answered by `deadlineMs`. |
+| `skipped` | Nothing was sent to it: it is not configured, or `onSend` answered `false` or threw. |
+| `limited` | Nothing was sent to it: the service's `rateLimit` or the wiki's limiter refused it. |
+
+`metadata.providersQueried` lists every provider the call considered, in order, and each of them is either in `providersSucceeded` (answered) or in `providersFailed` (any other outcome), as before. A call with none of these options asks every configured provider and DuckDuckGo, as it did before they existed.
+
 ## Tools
 
 ### `web_search`
@@ -124,7 +185,7 @@ Cross-check a claim across sources.
 
 ## Ranking
 
-With `multiSearch: true` (a tool input, or the pack option `defaultMultiSearch: true` for every tool), a query goes to every configured provider (the `wikipedia` provider among them when it is enabled) and DuckDuckGo in parallel. Results are merged by normalized URL and ordered by a confidence score built from how many providers returned the URL and where each placed it. The pack runs no reranking model and sends results to no reranking service.
+With `multiSearch: true` (a tool input, or the pack option `defaultMultiSearch: true` for every tool), a query goes to every configured provider (the `wikipedia` provider among them when it is enabled) and DuckDuckGo in parallel. From code, `multiSearch`'s options choose the providers, leave DuckDuckGo out, skip a provider, bound each one and set how many results each is asked for ([Asking several providers from code](#asking-several-providers-from-code)). Results are merged by normalized URL (the host without `www.`, tracking parameters such as `utm_source` removed, the query sorted, no trailing slash) in the order the providers were named, so a result's `providers` keep that order, and ordered by a confidence score built from how many providers returned the URL and where each placed it among the results it was asked for. The pack runs no reranking model and sends results to no reranking service.
 
 ### Reranking with AgentOS
 

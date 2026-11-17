@@ -163,7 +163,14 @@ export function createExtensionPack(context: ExtensionPackContext): ExtensionPac
 // Export types for consumers
 export { WebSearchTool, ResearchAggregatorTool, FactCheckTool };
 export { SearchProviderService, SearchFailed, SearchResult, ProviderResponse } from './services/searchProvider.js';
-export type { SearchProviderConfig, SearchOptions, MultiSearchResult, MultiSearchResponse } from './services/searchProvider.js';
+export type {
+  SearchProviderConfig,
+  SearchOptions,
+  MultiSearchOptions,
+  MultiSearchResult,
+  MultiSearchResponse,
+  ProviderOutcome,
+} from './services/searchProvider.js';
 /** What a `wikipedia` search the limiter refused throws, with the limiter's reason; public-sources' own class. */
 export { LimiterRefused } from '@framers/agentos-ext-public-sources';
 

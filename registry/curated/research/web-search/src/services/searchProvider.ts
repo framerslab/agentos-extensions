@@ -187,6 +187,52 @@ export interface MultiSearchResult extends SearchResult {
 }
 
 /**
+ * What became of one provider in a `multiSearch`:
+ * - `answered`: it returned at least one result;
+ * - `empty`: it returned without an error and with no result;
+ * - `failed`: its request failed (an error status, a network error, its own timeout's error);
+ * - `late`: it had not answered by `deadlineMs`, so its request was aborted and its results dropped;
+ * - `skipped`: nothing was sent to it, because it is not configured or `onSend` answered `false` or threw;
+ * - `limited`: nothing was sent to it, because the service's rate limit or the wiki's limiter refused it.
+ */
+export type ProviderOutcome = 'answered' | 'empty' | 'failed' | 'late' | 'skipped' | 'limited';
+
+/**
+ * What one call of `multiSearch` may carry. Every option is optional: a call with none asks every configured
+ * provider and DuckDuckGo, as before the options existed.
+ */
+export interface MultiSearchOptions {
+  /** The most results the merged list answers; 10 when left out. */
+  maxResults?: number;
+  /**
+   * The providers to ask, in this order; every configured provider when left out. A provider named but not configured
+   * answers `skipped` and is sent nothing; `wikipedia` is asked only when the service enables it and it is named here.
+   */
+  providers?: readonly string[];
+  /** `true` when left out, which asks DuckDuckGo after the other providers; `false` leaves DuckDuckGo out. */
+  fallback?: boolean;
+  /** Ends every provider's request of this call; the call rejects with the signal's reason. */
+  signal?: AbortSignal;
+  /**
+   * Awaited once before each provider's request is sent, with the provider's name. `false` or a throw skips that
+   * provider alone, with nothing sent to it, and the other providers go on. For `wikipedia` it runs once the wiki's
+   * limiter has granted the request, so a request the limiter refuses never runs it.
+   */
+  onSend?: (provider: string) => boolean | void | Promise<boolean | void>;
+  /**
+   * Each provider's own bound in milliseconds, counted from the start of the call: a provider that has not answered
+   * by then, `onSend`'s wait included, answers `late`, its request aborted and its results dropped. No bound when left
+   * out beyond the providers' own timers.
+   */
+  deadlineMs?: number;
+  /**
+   * How many results each provider is asked for; `maxResults` when left out. `maxResults` stays the cap on the merged
+   * list, so a host that filters after the merge passes a cap that drops nothing (three providers of five: 15).
+   */
+  perProvider?: number;
+}
+
+/**
  * Response from a multi-provider parallel search aggregation.
  */
 export interface MultiSearchResponse {
@@ -195,12 +241,36 @@ export interface MultiSearchResponse {
     query: string;
     timestamp: string;
     totalResponseTime: number;
+    /** Every provider the call considered, in the order it named them: each is in `outcomes`. */
     providersQueried: string[];
+    /** The providers that returned at least one result. */
     providersSucceeded: string[];
+    /** Every other provider queried: empty, failed, late, skipped or limited. */
     providersFailed: string[];
     totalRawResults: number;
     deduplicatedCount: number;
+    /** What became of each provider queried. */
+    outcomes: Record<string, ProviderOutcome>;
   };
+}
+
+/** `onSend` answered `false` or threw for a provider of a `multiSearch`: nothing was sent to it. */
+class ProviderSkipped {}
+const SKIPPED = new ProviderSkipped();
+
+/** The reason a provider's request is aborted at a `multiSearch`'s deadline. */
+class ProviderLate extends Error {
+  constructor(readonly provider: string) {
+    super(`${provider} did not answer before the deadline`);
+    this.name = 'ProviderLate';
+  }
+}
+
+/** The signals given, joined; `undefined` when none is. */
+function anyOf(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const present = signals.filter((one): one is AbortSignal => one !== undefined);
+  if (present.length === 0) return undefined;
+  return present.length === 1 ? present[0] : AbortSignal.any(present);
 }
 
 /**
@@ -889,49 +959,51 @@ export class SearchProviderService {
   }
 
   /**
-   * Searches ALL available providers in parallel, then merges, deduplicates,
-   * and orders results by cross-provider agreement and position.
+   * Asks several providers in parallel, then merges their results by normalized address and orders them by
+   * cross-provider agreement and position. With no options it asks every configured provider (the `wikipedia`
+   * provider among them when the service enables it) and DuckDuckGo. `options.providers`, `fallback`, `onSend`,
+   * `deadlineMs` and `perProvider` choose and bound what is asked; `metadata.outcomes` says what became of each
+   * provider. A result's `providers` follow the order the call named the providers in.
+   *
+   * @throws The signal's reason when `options.signal` aborts, before or during the call. Nothing else: a provider's
+   * failure is its outcome.
    */
-  async multiSearch(
-    query: string,
-    options: { maxResults?: number } = {},
-  ): Promise<MultiSearchResponse> {
+  async multiSearch(query: string, options: MultiSearchOptions = {}): Promise<MultiSearchResponse> {
     const startTime = Date.now();
     const maxResults = options.maxResults || 10;
+    const perProvider = options.perProvider || maxResults;
+    const { signal } = options;
+    signal?.throwIfAborted();
 
-    const providers = [...new Set([...this.getAvailableProviders(), 'duckduckgo'])];
+    const configured = this.getAvailableProviders();
+    const named = options.providers === undefined ? configured : [...options.providers];
+    const providers = [...new Set(options.fallback === false ? named : [...named, 'duckduckgo'])];
+    const askable = new Set([...configured, 'duckduckgo']);
 
-    const providerResults = await Promise.allSettled(
-      providers.map(async (provider) => {
-        try {
-          if (provider !== 'duckduckgo' && !(await this.checkRateLimit(provider))) {
-            throw new Error(`Rate limit exceeded for ${provider}`);
-          }
-          const response = await this.searchWithProvider(query, provider, maxResults, startTime);
-          return { provider, results: response.results, success: true as const };
-        } catch {
-          return { provider, results: [] as SearchResult[], success: false as const };
-        }
-      }),
+    const ends = await untilAbort(
+      Promise.all(
+        providers.map((provider) => this.askProvider(query, provider, askable.has(provider), perProvider, startTime, options)),
+      ),
+      signal,
     );
+    // A provider's request the abort ended answers as an outcome; the call itself rejects with the signal's reason.
+    signal?.throwIfAborted();
 
     const succeeded: string[] = [];
     const failed: string[] = [];
+    const outcomes: Record<string, ProviderOutcome> = {};
     const allResults: Array<{ provider: string; result: SearchResult; position: number }> = [];
 
-    for (const outcome of providerResults) {
-      if (outcome.status === 'fulfilled') {
-        const { provider, results, success } = outcome.value;
-        if (success && results.length > 0) {
-          succeeded.push(provider);
-          results.forEach((result, index) => {
-            allResults.push({ provider, result, position: index + 1 });
-          });
-        } else {
-          failed.push(provider);
-        }
+    // In the order the call named the providers, so a merged result's `providers` keep that order.
+    for (const { provider, outcome, results } of ends) {
+      outcomes[provider] = outcome;
+      if (outcome === 'answered') {
+        succeeded.push(provider);
+        results.forEach((result, index) => {
+          allResults.push({ provider, result, position: index + 1 });
+        });
       } else {
-        failed.push('unknown');
+        failed.push(provider);
       }
     }
 
@@ -965,12 +1037,13 @@ export class SearchProviderService {
       }
     }
 
-    // Score and rank
+    // Score and rank. A position is read against the count each provider was asked for, which is `maxResults` when
+    // `perProvider` is left out.
     const totalProviders = succeeded.length || 1;
     const scoredResults = Array.from(merged.values()).map((r) => {
       const agreementBonus = (r.agreementCount / totalProviders) * 50;
       const positions = Object.values(r.providerPositions);
-      const avgNorm = positions.reduce((s, p) => s + (1 - (p - 1) / maxResults), 0) / positions.length;
+      const avgNorm = positions.reduce((s, p) => s + (1 - (p - 1) / perProvider), 0) / positions.length;
       const positionScore = avgNorm * 30;
       r.confidenceScore = Math.round(Math.min(100, agreementBonus + positionScore + 20));
       return r;
@@ -989,8 +1062,84 @@ export class SearchProviderService {
         providersFailed: failed,
         totalRawResults: allResults.length,
         deduplicatedCount: merged.size,
+        outcomes,
       },
     };
+  }
+
+  /**
+   * One provider's part of a `multiSearch`. It never rejects: what became of the provider is its outcome. A provider
+   * that is not configured, that the rate limit refuses or that `onSend` skips is sent nothing; past the deadline its
+   * request is aborted and its results dropped.
+   */
+  private async askProvider(
+    query: string,
+    provider: string,
+    configured: boolean,
+    count: number,
+    startTime: number,
+    options: MultiSearchOptions,
+  ): Promise<{ provider: string; outcome: ProviderOutcome; results: SearchResult[] }> {
+    const end = (outcome: ProviderOutcome, results: SearchResult[] = []) => ({ provider, outcome, results });
+    if (!configured) return end('skipped');
+
+    // The deadline counts from the start of the call, `onSend`'s wait included; it aborts this provider's request.
+    const deadline = options.deadlineMs === undefined ? undefined : new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late =
+      deadline === undefined
+        ? undefined
+        : new Promise<'late'>((resolve) => {
+            timer = setTimeout(() => {
+              deadline.abort(new ProviderLate(provider));
+              resolve('late');
+            }, Math.max(0, options.deadlineMs! - (Date.now() - startTime)));
+          });
+    const own = anyOf([options.signal, deadline?.signal]);
+
+    const hook = options.onSend;
+    /** `onSend`'s answer: `false` when it answered false or threw, else true. It never rejects. */
+    const permitted = async (): Promise<boolean> => {
+      if (hook === undefined) return true;
+      try {
+        return (await hook(provider)) !== false;
+      } catch {
+        return false;
+      }
+    };
+
+    const work = (async (): Promise<SearchResult[]> => {
+      // The service's own rate limit, as before for every provider but DuckDuckGo: refused, nothing is sent.
+      if (provider !== 'duckduckgo' && !(await this.checkRateLimit(provider))) throw new LimiterRefused('wait');
+      if (provider === 'wikipedia') {
+        // public-sources runs the hook once its limiter has granted the request; a skip there sends nothing.
+        const onSend =
+          hook === undefined
+            ? undefined
+            : async (): Promise<void> => {
+                if (!(await permitted())) throw SKIPPED;
+              };
+        return (await this.searchWithProvider(query, provider, count, startTime, undefined, { signal: own, onSend })).results;
+      }
+      // The deadline or the caller's abort ends the wait for the hook; nothing is sent after either.
+      if (!(await untilAbort(permitted(), own))) throw SKIPPED;
+      return (await this.searchWithProvider(query, provider, count, startTime, undefined, { signal: own })).results;
+    })();
+
+    const settled = work.then(
+      (results) => end(results.length > 0 ? 'answered' : 'empty', results),
+      (error: unknown) => {
+        if (deadline?.signal.aborted && options.signal?.aborted !== true) return end('late');
+        if (error === SKIPPED || (error instanceof CallerStop && error.error === SKIPPED)) return end('skipped');
+        if (isRefusal(error)) return end('limited');
+        return end('failed');
+      },
+    );
+    try {
+      return await (late === undefined ? settled : Promise.race([settled, late.then(() => end('late'))]));
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
