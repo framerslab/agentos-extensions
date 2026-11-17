@@ -40,6 +40,8 @@ const asked: Asked[] = [];
 let scripts: Partial<Record<StandIn | 'wikipedia', Script>> = {};
 /** Every address the pack's fetch was called with, in call order. */
 const fetched: string[] = [];
+/** When each of `fetched` was called, by `Date.now()`, at the same index. */
+const fetchedAt: number[] = [];
 /** The requests DuckDuckGo's and Brave's endpoints received. */
 const fixedHosts: string[] = [];
 /** The status DuckDuckGo's instant answer endpoint answers, with a JSON body either way. */
@@ -120,6 +122,7 @@ beforeAll(async () => {
   vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const address = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     fetched.push(address);
+    fetchedAt.push(Date.now());
     const host = new URL(address).hostname;
     if (host === TIMEOUT_HOST) {
       init?.signal?.throwIfAborted();
@@ -149,6 +152,7 @@ afterAll(async () => {
 beforeEach(() => {
   asked.length = 0;
   fetched.length = 0;
+  fetchedAt.length = 0;
   fixedHosts.length = 0;
   scripts = {};
   instantAnswerStatus = 200;
@@ -757,5 +761,63 @@ describe('abort listeners: none is left on the caller signal once it aborts', ()
     controller.abort(reason);
     await expect(pending).rejects.toBe(reason);
     expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+  });
+});
+
+describe('multiSearch: nothing between the last check and the request', () => {
+  it("no request leaves past its deadline when another provider's hook holds the thread after it was checked", async () => {
+    // The other hook takes a different number of turns before it holds the thread, so one of the runs lands in any gap
+    // between a request's last check and its fetch.
+    for (let turns = 0; turns <= 8; turns += 1) {
+      fetched.length = 0;
+      fetchedAt.length = 0;
+      const started = Date.now();
+      const response = await service().multiSearch('treaty', {
+        providers: ['serper', 'tavily'],
+        fallback: false,
+        deadlineMs: 50,
+        onSend: async (provider) => {
+          if (provider !== 'tavily') return true;
+          for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
+          const until = Date.now() + 100;
+          while (Date.now() < until) {
+            // Work that holds the thread past the deadline.
+          }
+          return true;
+        },
+      });
+      const leftLate = fetched
+        .map((address, index) => ({ address, after: (fetchedAt[index] ?? 0) - started }))
+        .filter((one) => one.address.startsWith(origin) && one.after >= 50);
+      expect({ turns, leftLate }).toEqual({ turns, leftLate: [] });
+      expect(response.metadata.outcomes.tavily).toBe('late');
+    }
+  });
+});
+
+describe('multiSearch: the rate limit counts a wiki request when its limiter starts it', () => {
+  it('a wait in the limiter across the end of a window leaves no third request in the next window of a two-request limit', async () => {
+    let runs = 0;
+    // The second request waits 250 ms in its limiter after its onSend, past the end of the window it was granted in.
+    const limiter = {
+      block: () => {},
+      run: async <T>(task: () => Promise<T>, _signal?: AbortSignal, beforeStart?: () => void | Promise<void>): Promise<T> => {
+        runs += 1;
+        await beforeStart?.();
+        if (runs === 2) await new Promise((resolve) => setTimeout(resolve, 250));
+        return task();
+      },
+    } as unknown as SourceLimiter;
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter, origin }, rateLimit: { maxRequests: 2, windowMs: 300 } });
+    const ask = { providers: ['wikipedia'], fallback: false };
+    const outcome = async () => (await wiki.multiSearch('Treaty of Versailles', ask)).metadata.outcomes.wikipedia;
+    expect(await outcome()).toBe('answered');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Sent at about 450 ms, in the window that opened after the first one ended.
+    expect(await outcome()).toBe('answered');
+    expect(await outcome()).toBe('answered');
+    // Two requests left in that window: the third is refused.
+    expect(await outcome()).toBe('limited');
+    expect(asked).toHaveLength(3);
   });
 });
