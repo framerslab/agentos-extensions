@@ -675,6 +675,35 @@ describe("multiSearch: a count given back is the count taken", () => {
     expect(retry.metadata.outcomes).toEqual({ wikipedia: 'answered' });
   });
 
+  it("an abort event on a signal that did not abort gives nothing back: the request still leaves and keeps its count", async () => {
+    // The real limiter, 200 ms between starts: the hook stamps a start of its own, so the counted request waits there.
+    const limiter = new SourceLimiter({ spacingMs: 200 });
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter, origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    const controller = new AbortController();
+    let hooked: () => void = () => {};
+    const inHook = new Promise<void>((resolve) => {
+      hooked = resolve;
+    });
+    const pending = wiki.multiSearch('Treaty of Versailles', {
+      providers: ['wikipedia'],
+      fallback: false,
+      signal: controller.signal,
+      onSend: async () => {
+        await limiter.run(async () => undefined);
+        hooked();
+      },
+    });
+    await inHook;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // An event named abort, with the signal not aborted.
+    controller.signal.dispatchEvent(new Event('abort'));
+    expect(controller.signal.aborted).toBe(false);
+    expect((await pending).metadata.outcomes).toEqual({ wikipedia: 'answered' });
+    const next = await wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false });
+    expect(next.metadata.outcomes).toEqual({ wikipedia: 'limited' });
+    expect(asked).toHaveLength(1);
+  });
+
   it('a request the caller aborts after it left keeps its count, whatever the reason the caller gives', async () => {
     scripts = { tavily: { hang: true } };
     const limited = service({ rateLimit: { maxRequests: 1, windowMs: 60_000 } });
