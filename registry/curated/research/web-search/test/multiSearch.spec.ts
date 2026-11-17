@@ -43,6 +43,8 @@ const fetched: string[] = [];
 const fixedHosts: string[] = [];
 /** The status DuckDuckGo's instant answer endpoint answers, with a JSON body either way. */
 let instantAnswerStatus = 200;
+/** The status DuckDuckGo's HTML search page answers. */
+let htmlStatus = 200;
 /**
  * A host whose requests reject as an `AbortError` with the caller's signal not aborted: what Tavily's and Firecrawl's
  * own 15-second timers do to a request, without the wait.
@@ -127,7 +129,7 @@ beforeAll(async () => {
       fixedHosts.push(address);
       // DuckDuckGo's HTML page with no result block, then its instant answer with nothing in it: no results.
       return host === 'html.duckduckgo.com'
-        ? new Response('<html><body></body></html>', { status: 200, headers: { 'content-type': 'text/html' } })
+        ? new Response('<html><body></body></html>', { status: htmlStatus, headers: { 'content-type': 'text/html' } })
         : new Response(instantAnswerStatus === 200 ? '{}' : '{"error":"unavailable"}', {
             status: instantAnswerStatus,
             headers: { 'content-type': 'application/json' },
@@ -149,6 +151,7 @@ beforeEach(() => {
   fixedHosts.length = 0;
   scripts = {};
   instantAnswerStatus = 200;
+  htmlStatus = 200;
 });
 
 function service(extra: Record<string, unknown> = {}): SearchProviderService {
@@ -479,13 +482,88 @@ describe('multiSearch: failures read as failures', () => {
 
   it("DuckDuckGo's instant answer endpoint answering an error status is failed, not empty", async () => {
     instantAnswerStatus = 500;
-    const response = await service().multiSearch('treaty', { providers: ['duckduckgo'], fallback: false });
+    const response = await service().multiSearch('treaty', { providers: [] });
     expect(response.metadata.outcomes).toEqual({ duckduckgo: 'failed' });
+    expect(fixedHosts.map((address) => new URL(address).hostname)).toEqual(['html.duckduckgo.com', 'api.duckduckgo.com']);
+  });
+
+  it("DuckDuckGo's HTML page answering an error status, with an empty instant answer after it, is failed", async () => {
+    htmlStatus = 503;
+    const response = await service().multiSearch('treaty', { providers: [] });
+    expect(response.metadata.outcomes).toEqual({ duckduckgo: 'failed' });
+    expect(fixedHosts.map((address) => new URL(address).hostname)).toEqual(['html.duckduckgo.com', 'api.duckduckgo.com']);
   });
 
   it('a provider named __proto__ has an outcome of its own', async () => {
     const response = await service().multiSearch('treaty', { providers: ['__proto__', 'serper'], fallback: false });
     expect(Object.getOwnPropertyDescriptor(response.metadata.outcomes, '__proto__')?.value).toBe('skipped');
     expect(Object.keys(response.metadata.outcomes)).toEqual(['__proto__', 'serper']);
+  });
+});
+
+describe('multiSearch: the order of the hooks, the deadline on a skip, and the wiki under its limiter', () => {
+  it('a DuckDuckGo named first still comes last when fallback is on', async () => {
+    const seen: string[] = [];
+    const response = await service().multiSearch('treaty', {
+      providers: ['duckduckgo', 'serper'],
+      onSend: (provider) => {
+        seen.push(provider);
+      },
+    });
+    expect(seen).toEqual(['serper', 'duckduckgo']);
+    expect(response.metadata.providersQueried).toEqual(['serper', 'duckduckgo']);
+  });
+
+  it('a hook that holds the thread past the deadline and then answers false is late, not skipped', async () => {
+    const response = await service().multiSearch('treaty', {
+      providers: ['serper'],
+      fallback: false,
+      deadlineMs: 30,
+      onSend: () => {
+        const until = Date.now() + 80;
+        while (Date.now() < until) {
+          // Work that holds the thread past the deadline before the hook answers.
+        }
+        return false;
+      },
+    });
+    expect(response.metadata.outcomes).toEqual({ serper: 'late' });
+  });
+
+  it("a wiki request the limiter refuses after onSend spends none of the service's rate limit", async () => {
+    const limiter = new SourceLimiter({ spacingMs: 0 });
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter, origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    const refused = await wiki.multiSearch('Treaty of Versailles', {
+      providers: ['wikipedia'],
+      fallback: false,
+      // A 429 elsewhere blocks the wiki for a second while this hook runs: the limiter refuses the request after it.
+      onSend: () => {
+        limiter.block('1');
+        return true;
+      },
+    });
+    expect(refused.metadata.outcomes).toEqual({ wikipedia: 'limited' });
+    expect(asked).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    const sent = await wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false });
+    expect(sent.metadata.outcomes).toEqual({ wikipedia: 'answered' });
+    expect(asked.map((one) => one.provider)).toEqual(['wikipedia']);
+  });
+
+  it("a wiki request queued behind another runs no hook once the service's rate limit is spent", async () => {
+    const limiter = new SourceLimiter({ spacingMs: 0, concurrency: 1 });
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter, origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    const seen: string[] = [];
+    const options = {
+      providers: ['wikipedia'],
+      fallback: false,
+      onSend: (provider: string) => {
+        seen.push(provider);
+      },
+    };
+    const [first, second] = await Promise.all([wiki.multiSearch('Treaty of Versailles', options), wiki.multiSearch('Treaty of Versailles', options)]);
+    expect([first.metadata.outcomes.wikipedia, second.metadata.outcomes.wikipedia].sort()).toEqual(['answered', 'limited']);
+    expect(seen).toEqual(['wikipedia']);
+    expect(asked).toHaveLength(1);
   });
 });
