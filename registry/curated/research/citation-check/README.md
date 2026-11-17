@@ -299,7 +299,7 @@ Passages that arrive after the first decision, from slower sources, are decided 
 
 In both, every passage of `more` and `found` takes part in the veto, as `check`'s `found` does, whatever its length: the 40-word and 600-character limits hold only for a passage that may be sent or join.
 
-A passage is read as it is when each call is made: a host that redacts a passage in place between calls sends only the redacted text from then on.
+Each call reads every passage once, as it is when the call begins, and never again: a host that redacts a passage in place between calls sends only the redacted text from then on, and a change made while a call runs reaches only later calls. `agree` and `revisit` read the first check's passages as they are when they are called, so a passage the host moved to another source is read in that source.
 
 `usage` counts the judge's tokens in and out and the embeddings' tokens apart; `judged` is the judge calls made (0 or 1). An abort rejects `check` with the signal's reason at once, whatever is pending; a failed embeddings call or judge rejects with its own error.
 

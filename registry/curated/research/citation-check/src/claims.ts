@@ -247,6 +247,23 @@ export function claimJudge(options: {
   };
 }
 
+/**
+ * One call's sentences: each passage read once, when the call first meets it, so everything the call sends or decides on
+ * is the passage as it was then, whatever another call or the host does to it meanwhile, and one passage is one sentence
+ * within the call.
+ */
+function snapshot(): <P extends ClaimPassage>(passage: P) => PassageSentence<P> {
+  const sentences = new Map<ClaimPassage, PassageSentence<ClaimPassage>>();
+  return <P extends ClaimPassage>(passage: P): PassageSentence<P> => {
+    let sentence = sentences.get(passage);
+    if (sentence === undefined) {
+      sentence = { text: passage.content, group: passage.group, passage };
+      sentences.set(passage, sentence);
+    }
+    return sentence as PassageSentence<P>;
+  };
+}
+
 /** `a`, then each of `b` not in it. */
 function unite<T>(a: readonly T[], b: readonly T[]): T[] {
   const seen = new Set(a);
@@ -302,10 +319,11 @@ export class ClaimChecker {
   private readonly judge: ClaimJudge;
   private readonly checker: ClaimCheckerOptions['checker'];
   private readonly maxPassages: number;
-  /** Each passage's sentence, one object a passage, so the grounding guard reads one sentence as one across calls. */
-  private readonly sentences = new WeakMap<ClaimPassage, PassageSentence<ClaimPassage>>();
-  /** Every passage found for a decided check, the held-back ones among them, by the outcome `check` answered. */
-  private readonly founds = new WeakMap<object, PassageSentence<ClaimPassage>[]>();
+  /**
+   * What a decided check keeps for `agree` and `revisit`, by the outcome `check` answered: every passage it found (the
+   * held-back ones among them) and the decided sentence's text as it was decided, which the decision's offsets read.
+   */
+  private readonly decided = new WeakMap<object, { found: ClaimPassage[]; text: string }>();
 
   /**
    * @param options - The embeddings call, the judge, the grounding guard's checker, and the most passages compared.
@@ -320,32 +338,15 @@ export class ClaimChecker {
     this.maxPassages = maxPassages;
   }
 
-  /**
-   * A passage's sentence for the grounding guard, the same object each time, holding the passage's text and group as
-   * they are now: a host may change a passage between calls (a name redacted in place), and only what it holds now is
-   * embedded, judged or decided on.
-   */
-  private sentenceOf<P extends ClaimPassage>(passage: P): PassageSentence<P> {
-    let sentence = this.sentences.get(passage);
-    if (sentence === undefined) {
-      sentence = { text: passage.content, group: passage.group, passage };
-      this.sentences.set(passage, sentence);
-    } else {
-      sentence.text = passage.content;
-      sentence.group = passage.group;
-    }
-    return sentence as PassageSentence<P>;
-  }
-
   /** A decision with the host's passages in place of the grounding guard's sentences. */
   private toHost<P extends ClaimPassage>(decision: Decision): ClaimDecision<P> {
     return { ...decision, sentences: decision.sentences.map((sentence) => (sentence as PassageSentence<P>).passage) };
   }
 
   /** Every passage found for a decided check; the decision's own passages when the outcome is not one `check` answered. */
-  private foundOf<P extends ClaimPassage>(first: Extract<ClaimCheckOutcome<P>, { kind: 'decided' }>): PassageSentence<P>[] {
-    const kept = this.founds.get(first) as PassageSentence<P>[] | undefined;
-    return kept ?? unite(first.decision.sentences.map((passage) => this.sentenceOf(passage)), [this.sentenceOf(first.named)]);
+  private foundOf<P extends ClaimPassage>(first: Extract<ClaimCheckOutcome<P>, { kind: 'decided' }>): P[] {
+    const kept = this.decided.get(first)?.found as P[] | undefined;
+    return kept ?? unite(first.decision.sentences, [first.named]);
   }
 
   /**
@@ -388,11 +389,13 @@ export class ClaimChecker {
       usage: { ...usage },
     });
 
+    // The passages as they are now: this call reads nothing of them later.
+    const sentenceOf = snapshot();
     // 1. The sentences about the claim that may be sent.
-    const kept = this.checker.passages(claim.heard, given.map((passage) => this.sentenceOf(passage))).found;
+    const kept = this.checker.passages(claim.heard, given.map((passage) => sentenceOf(passage))).found;
     if (kept.length === 0) return ended('no_passage');
     const compared = kept.slice(0, this.maxPassages);
-    const found = unite(kept, (options.found ?? []).map((passage) => this.sentenceOf(passage)));
+    const found = unite(kept, (options.found ?? []).map((passage) => sentenceOf(passage)));
 
     // The title and the kind the judge reads, by the sentence the verifier hands its NLI function: a text two passages
     // of different titles or kinds share reads as no title, and as a source of no known kind.
@@ -481,7 +484,7 @@ export class ClaimChecker {
       judged: state.judged,
       usage: { ...usage },
     };
-    this.founds.set(outcome, found as PassageSentence<ClaimPassage>[]);
+    this.decided.set(outcome, { found: found.map((sentence) => sentence.passage), text: decision.sentences[0]?.text ?? named.text });
     return outcome;
   }
 
@@ -510,11 +513,14 @@ export class ClaimChecker {
     const firstPairs = Array.isArray(decision.pairs) ? decision.pairs : [];
     const lead = firstPairs[0];
     if (lead === undefined) return [];
-    const firstSentence = (decision.sentences[0] ?? first.named).content;
-    const later = more.map((passage) => this.sentenceOf(passage));
+    // The first decision's marks and pairs are offsets into its sentence as it was decided.
+    const firstSentence = this.decided.get(first)?.text ?? (decision.sentences[0] ?? first.named).content;
+    // Every passage as it is now, the first check's included (a host may have changed one since).
+    const sentenceOf = snapshot();
+    const later = more.map((passage) => sentenceOf(passage));
     // The passages that may join are those about the claim; the veto reads every passage, as `check`'s `found`.
     const candidates = this.checker.passages(claim.heard, later).found;
-    const found = unite(this.foundOf(first), later);
+    const found = unite(this.foundOf(first).map((passage) => sentenceOf(passage)), later);
     const heardStems = this.checker.stems(claim.heard);
     const considered = new Set(decision.sentences.map((passage) => passage.group));
     const joined: P[] = [];
@@ -554,9 +560,11 @@ export class ClaimChecker {
    */
   revisit<P extends ClaimPassage>(first: Extract<ClaimCheckOutcome<P>, { kind: 'decided' }>, claim: SpokenClaim, found: readonly P[]): ClaimDecision<P> | null {
     const { decision } = first;
-    // Every passage found, as `check`'s `found`: none is held to the sentence limits a passage the judge reads is.
-    const all = unite(this.foundOf(first), found.map((passage) => this.sentenceOf(passage)));
-    const named = decision.relation === 'disagree' ? decision.sentences.map((passage) => this.sentenceOf(passage)) : [this.sentenceOf(first.named)];
+    // Every passage as it is now, the first check's included; none is held to the sentence limits a passage the judge
+    // reads is, as `check`'s `found`.
+    const sentenceOf = snapshot();
+    const named = decision.relation === 'disagree' ? decision.sentences.map((passage) => sentenceOf(passage)) : [sentenceOf(first.named)];
+    const all = unite(unite(named, this.foundOf(first).map((passage) => sentenceOf(passage))), found.map((passage) => sentenceOf(passage)));
     const again = this.checker.decide({ heardWords: claim.heard, heardSentence: claim.heardSentence, proposed: decision.relation, named, found: all, quote: first.quote });
     if (again === null || again.relation !== decision.relation) return null;
     return this.toHost<P>(again);
