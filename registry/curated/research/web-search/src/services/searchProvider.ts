@@ -97,8 +97,11 @@ function untilAbort<T>(work: Promise<T>, signal: AbortSignal | undefined): Promi
     return Promise.reject(signal.reason);
   }
   return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => reject(signal.reason);
-    signal.addEventListener('abort', onAbort, { once: true });
+    // An event named abort on a signal that did not abort is no abort.
+    const onAbort = (): void => {
+      if (signal.aborted) reject(signal.reason);
+    };
+    signal.addEventListener('abort', onAbort);
     work.then(
       (value) => {
         signal.removeEventListener('abort', onAbort);
@@ -1211,7 +1214,11 @@ export class SearchProviderService {
       refunded = true;
       this.releaseRateLimit(provider, charged);
     };
-    if (provider === 'wikipedia') own?.addEventListener('abort', refundUnsent, { once: true });
+    /** The abort's own refund: only for a signal that is aborted, never for an event named abort alone. */
+    const onAbort = (): void => {
+      if (own?.aborted === true) refundUnsent();
+    };
+    if (provider === 'wikipedia') own?.addEventListener('abort', onAbort);
     /** The last checks before the request leaves, the rate limit counted only here. */
     const dispatch = (): void => {
       halt();
@@ -1258,7 +1265,7 @@ export class SearchProviderService {
       return await (late === undefined ? settled : Promise.race([settled, late.then(() => end('late'))]));
     } finally {
       clearTimeout(timer);
-      if (provider === 'wikipedia') own?.removeEventListener('abort', refundUnsent);
+      if (provider === 'wikipedia') own?.removeEventListener('abort', onAbort);
     }
   }
 
