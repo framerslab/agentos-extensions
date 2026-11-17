@@ -297,6 +297,10 @@ Passages that arrive after the first decision, from slower sources, are decided 
 - `agree(first, claim, more)` answers the passages of `more` that agree with a first decision of `matches` or `differs` on the values: one a source other than the first's (by `group`, its best-ranked passage), holding every content stem heard, decided the same relation by the grounding guard, on the same heard value, its value written as the first's.
 - `revisit(first, claim, found)` reads the first decision again over every passage found by then, the check's own found ones among them, and answers it, or `null` when a later passage stops it. A host that holds a "differs" until its sources have answered shows it only when `revisit` still decides it.
 
+In both, every passage of `more` and `found` takes part in the veto, as `check`'s `found` does, whatever its length: the 40-word and 600-character limits hold only for a passage that may be sent or join.
+
+A passage is read as it is when each call is made: a host that redacts a passage in place between calls sends only the redacted text from then on.
+
 `usage` counts the judge's tokens in and out and the embeddings' tokens apart; `judged` is the judge calls made (0 or 1). An abort rejects `check` with the signal's reason at once, whatever is pending; a failed embeddings call or judge rejects with its own error.
 
 ## The tool

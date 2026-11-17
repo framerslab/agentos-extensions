@@ -320,12 +320,19 @@ export class ClaimChecker {
     this.maxPassages = maxPassages;
   }
 
-  /** A passage's sentence for the grounding guard, the same object each time. */
+  /**
+   * A passage's sentence for the grounding guard, the same object each time, holding the passage's text and group as
+   * they are now: a host may change a passage between calls (a name redacted in place), and only what it holds now is
+   * embedded, judged or decided on.
+   */
   private sentenceOf<P extends ClaimPassage>(passage: P): PassageSentence<P> {
     let sentence = this.sentences.get(passage);
     if (sentence === undefined) {
       sentence = { text: passage.content, group: passage.group, passage };
       this.sentences.set(passage, sentence);
+    } else {
+      sentence.text = passage.content;
+      sentence.group = passage.group;
     }
     return sentence as PassageSentence<P>;
   }
@@ -484,7 +491,8 @@ export class ClaimChecker {
    * ranks first about the claim, which joins when:
    *
    * 1. it holds every content stem of the heard words;
-   * 2. the grounding guard decides the first decision's relation for it, on the values, over every passage found;
+   * 2. the grounding guard decides the first decision's relation for it, on the values, over every passage found (the
+   *    first check's and every one of `more`, whatever its length);
    * 3. its first value pair pairs the same heard value as the first decision's;
    * 4. for a "differs", its marked value is the first decision's as written; for a "matches", each of the first
    *    decision's pairs finds its partner written alike.
@@ -503,8 +511,10 @@ export class ClaimChecker {
     const lead = firstPairs[0];
     if (lead === undefined) return [];
     const firstSentence = (decision.sentences[0] ?? first.named).content;
-    const candidates = this.checker.passages(claim.heard, more.map((passage) => this.sentenceOf(passage))).found;
-    const found = unite(this.foundOf(first), candidates);
+    const later = more.map((passage) => this.sentenceOf(passage));
+    // The passages that may join are those about the claim; the veto reads every passage, as `check`'s `found`.
+    const candidates = this.checker.passages(claim.heard, later).found;
+    const found = unite(this.foundOf(first), later);
     const heardStems = this.checker.stems(claim.heard);
     const considered = new Set(decision.sentences.map((passage) => passage.group));
     const joined: P[] = [];
@@ -534,7 +544,7 @@ export class ClaimChecker {
   /**
    * The first decision read again over every passage found by then: the grounding guard's rule with the same proposal,
    * named passage and quote, its `found` every passage the check found (held-back ones among them) and every passage of
-   * `found` about the claim. A "differs" a later passage stops (one that agrees with every heard value) answers `null`,
+   * `found`, as `check` reads its own `found`, whatever its length. A "differs" a later passage stops (one that agrees with every heard value) answers `null`,
    * so a host that holds a "differs" until its slower sources have answered shows nothing.
    *
    * @param first - The decided outcome `check` answered.
@@ -544,7 +554,8 @@ export class ClaimChecker {
    */
   revisit<P extends ClaimPassage>(first: Extract<ClaimCheckOutcome<P>, { kind: 'decided' }>, claim: SpokenClaim, found: readonly P[]): ClaimDecision<P> | null {
     const { decision } = first;
-    const all = unite(this.foundOf(first), this.checker.passages(claim.heard, found.map((passage) => this.sentenceOf(passage))).found);
+    // Every passage found, as `check`'s `found`: none is held to the sentence limits a passage the judge reads is.
+    const all = unite(this.foundOf(first), found.map((passage) => this.sentenceOf(passage)));
     const named = decision.relation === 'disagree' ? decision.sentences.map((passage) => this.sentenceOf(passage)) : [this.sentenceOf(first.named)];
     const again = this.checker.decide({ heardWords: claim.heard, heardSentence: claim.heardSentence, proposed: decision.relation, named, found: all, quote: first.quote });
     if (again === null || again.relation !== decision.relation) return null;
