@@ -124,6 +124,8 @@ function isRefusal(error: unknown): boolean {
  */
 class RefusalKeeper extends SourceLimiter {
   private readonly refusals = new WeakMap<AbortSignal, unknown>();
+  /** The calls whose request the limiter started (keyed by the call's own signal). */
+  private readonly started = new WeakSet<AbortSignal>();
 
   constructor(private readonly inner: SourceLimiter) {
     super();
@@ -134,8 +136,12 @@ class RefusalKeeper extends SourceLimiter {
   }
 
   async run<T>(task: () => Promise<T>, signal?: AbortSignal, beforeStart?: () => void | Promise<void>): Promise<T> {
+    const marked = signal === undefined ? task : (): Promise<T> => {
+      this.started.add(signal);
+      return task();
+    };
     try {
-      return await this.inner.run(task, signal, beforeStart);
+      return await this.inner.run(marked, signal, beforeStart);
     } catch (error) {
       if (signal !== undefined && isRefusal(error)) this.refusals.set(signal, error);
       throw error;
@@ -145,6 +151,11 @@ class RefusalKeeper extends SourceLimiter {
   /** The refusal thrown for the call with this signal, if any. */
   refusal(signal: AbortSignal): unknown {
     return this.refusals.get(signal);
+  }
+
+  /** Whether the limiter started the request of the call with this signal. */
+  began(signal: AbortSignal): boolean {
+    return this.started.has(signal);
   }
 }
 
@@ -311,6 +322,8 @@ export class SearchProviderService {
   private wikipedia: WikipediaSourceProvider | null = null;
   private wikipediaLimiter: RefusalKeeper | null = null;
   private wikipediaOrigin = WIKIPEDIA_ORIGIN;
+  /** The `wikipedia` calls whose request the limiter never started, by the options object each was given. */
+  private readonly wikipediaUnsent = new WeakSet<SearchOptions>();
 
   /**
    * Creates an instance of SearchProviderService
@@ -441,7 +454,13 @@ export class SearchProviderService {
             // The caller's abort ends the wait at once; public-sources then rejects with the signal's reason.
             await untilAbort(sent, callSignal);
           };
-    const outcome = await this.wikipedia.search(query, { limit: maxResults, signal: callSignal, onSend });
+    let outcome: Awaited<ReturnType<WikipediaSourceProvider['search']>>;
+    try {
+      outcome = await this.wikipedia.search(query, { limit: maxResults, signal: callSignal, onSend });
+    } finally {
+      // Whatever ended the call, a request the limiter never started was never sent.
+      if (!this.wikipediaLimiter.began(callSignal)) this.wikipediaUnsent.add(call);
+    }
     if (thrown !== null) throw new CallerStop(thrown.error);
     // The keeper is read before the outcome: public-sources answers `failed` for a refusal from a limiter of another
     // copy of it (its check is by class), and the keeper has that refusal by name.
@@ -1181,6 +1200,8 @@ export class SearchProviderService {
     };
     /** The rate-limit window this provider's request was counted in, once it was. */
     let charged: RateWindow | null = null;
+    /** The options a `wikipedia` request was made with, by which the service knows whether its limiter started it. */
+    let wikiCall: SearchOptions | null = null;
     /** The last checks before the request leaves, the rate limit counted only here. */
     const dispatch = (): void => {
       halt();
@@ -1202,7 +1223,8 @@ export class SearchProviderService {
           if (!(await permitted())) throw SKIPPED;
           dispatch();
         };
-        return (await this.searchWithProvider(query, provider, count, startTime, undefined, { signal: own, onSend }, true)).results;
+        wikiCall = { signal: own, onSend };
+        return (await this.searchWithProvider(query, provider, count, startTime, undefined, wikiCall, true)).results;
       }
       // The deadline or the caller's abort ends the wait for the hook; nothing is sent after either.
       if (!(await untilAbort(permitted(), own))) throw SKIPPED;
@@ -1213,17 +1235,15 @@ export class SearchProviderService {
     const settled = work.then(
       (results) => (pastDeadline() ? end('late') : end(results.length > 0 ? 'answered' : 'empty', results)),
       (error: unknown) => {
+        // The wiki's limiter can end a request after it was counted and before it started (a block that came during
+        // `onSend`, the caller's abort or the deadline during its wait): it never left, so the count goes back to the
+        // window it was taken from, whatever else ended the call. Every other provider's request leaves once counted.
+        if (charged !== null && wikiCall !== null && this.wikipediaUnsent.has(wikiCall)) this.releaseRateLimit(provider, charged);
         // The clock first, as on an answer: a hook that held the thread past the deadline is late whatever it said.
         if (pastDeadline() && options.signal?.aborted !== true) return end('late');
         const thrown = error instanceof CallerStop ? error.error : error;
         if (thrown === SKIPPED) return end('skipped');
-        if (isRefusal(thrown)) {
-          // The wiki's limiter can refuse after the request was counted (a block that came during `onSend`): it never
-          // left, so the count goes back to the window it was taken from. Only the wiki's limiter refuses after the
-          // count, and a caller's abort is never a refusal of it, whatever its reason.
-          if (charged !== null && provider === 'wikipedia' && options.signal?.aborted !== true) this.releaseRateLimit(provider, charged);
-          return end('limited');
-        }
+        if (isRefusal(thrown)) return end('limited');
         return end('failed');
       },
     );
