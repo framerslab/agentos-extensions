@@ -223,8 +223,9 @@ export interface MultiSearchOptions {
    * Awaited once before each provider's request is sent, with the provider's name, and called in the order the
    * providers are named, DuckDuckGo last. `false` or a throw skips that provider alone, with nothing sent to it, and the
    * other providers go on. It is not called for a provider that is not configured, that is past its rate limit, or whose
-   * call has already aborted or passed its deadline. For `wikipedia` it runs once the wiki's limiter has granted the
-   * request, so a request the limiter refuses never runs it.
+   * call has already aborted or passed its deadline. `wikipedia` is the one exception to the order: its hook runs once
+   * the wiki's limiter has granted the request, which can be after the other providers' hooks, so a request the limiter
+   * refuses or queues past the rate limit never runs it.
    */
   onSend?: (provider: string) => boolean | void | Promise<boolean | void>;
   /**
@@ -551,6 +552,12 @@ export class SearchProviderService {
     return state === undefined || Date.now() > state.resetTime || state.count < this.config.rateLimit!.maxRequests;
   }
 
+  /** Gives back one request counted against a provider's rate limit in its current window, for a request that never left. */
+  private releaseRateLimit(provider: string): void {
+    const state = this.rateLimitState.get(provider);
+    if (state !== undefined && Date.now() <= state.resetTime && state.count > 0) state.count -= 1;
+  }
+
   /** Counts one request against a provider's rate limit; false, counting nothing, when it is past the limit. */
   private takeRateLimit(provider: string): boolean {
     const now = Date.now();
@@ -721,16 +728,21 @@ export class SearchProviderService {
    * @returns {Promise<SearchResult[]>} Search results
    */
   private async searchDuckDuckGoAPI(query: string, maxResults: number, signal?: AbortSignal, strict = false): Promise<SearchResult[]> {
+    let htmlFailed = false;
     try {
-      const htmlResults = await this.scrapeDuckDuckGoHTML(query, maxResults, signal);
+      const htmlResults = await this.scrapeDuckDuckGoHTML(query, maxResults, signal, strict);
       if (htmlResults.length > 0) return htmlResults;
     } catch {
       // Fall through to instant answer API
+      htmlFailed = true;
     }
 
     // Fallback: DuckDuckGo instant answer API (limited but free), unless the caller has stopped the search
     signal?.throwIfAborted();
-    return this.searchDuckDuckGoInstantAnswer(query, maxResults, signal, strict);
+    const answers = await this.searchDuckDuckGoInstantAnswer(query, maxResults, signal, strict);
+    // A `multiSearch` reads a failed search page that the instant answer could not stand in for as a failure.
+    if (strict && htmlFailed && answers.length === 0) throw new Error('DuckDuckGo search failed');
+    return answers;
   }
 
   /**
@@ -738,7 +750,7 @@ export class SearchProviderService {
    *
    * @private
    */
-  private async scrapeDuckDuckGoHTML(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  private async scrapeDuckDuckGoHTML(query: string, maxResults: number, signal?: AbortSignal, strict = false): Promise<SearchResult[]> {
     const body = new URLSearchParams({ q: query, b: '' });
     const response = await send('https://html.duckduckgo.com/html/', {
       method: 'POST',
@@ -749,7 +761,10 @@ export class SearchProviderService {
       body: body.toString(),
     }, signal);
 
-    if (!response.ok) return [];
+    if (!response.ok) {
+      if (strict) throw new Error(`DuckDuckGo search page error: ${response.status} ${response.statusText}`);
+      return [];
+    }
 
     const html = await response.text();
     const results: SearchResult[] = [];
@@ -1007,9 +1022,10 @@ export class SearchProviderService {
     signal?.throwIfAborted();
 
     const configured = this.getAvailableProviders();
-    const named = options.providers === undefined ? configured : [...options.providers];
-    // `fallback: false` leaves DuckDuckGo out whether or not the providers name it.
-    const providers = [...new Set(options.fallback === false ? named.filter((provider) => provider !== 'duckduckgo') : [...named, 'duckduckgo'])];
+    // DuckDuckGo is the fallback alone: `fallback: false` leaves it out whether or not the providers name it, and with
+    // the fallback on it comes last, after every provider named.
+    const named = (options.providers === undefined ? configured : [...options.providers]).filter((provider) => provider !== 'duckduckgo');
+    const providers = [...new Set(options.fallback === false ? named : [...named, 'duckduckgo'])];
     const askable = new Set([...configured, 'duckduckgo']);
 
     const ends = await untilAbort(
@@ -1154,10 +1170,14 @@ export class SearchProviderService {
         return false;
       }
     };
+    /** Whether this provider's request was counted against the service's rate limit. */
+    let taken = false;
     /** The last checks before the request leaves, the rate limit counted only here. */
     const dispatch = (): void => {
       halt();
-      if (provider !== 'duckduckgo' && !this.takeRateLimit(provider)) throw new LimiterRefused('wait');
+      if (provider === 'duckduckgo') return;
+      if (!this.takeRateLimit(provider)) throw new LimiterRefused('wait');
+      taken = true;
     };
 
     const work = (async (): Promise<SearchResult[]> => {
@@ -1165,8 +1185,11 @@ export class SearchProviderService {
       halt();
       if (provider !== 'duckduckgo' && !this.rateLimitOpen(provider)) throw new LimiterRefused('wait');
       if (provider === 'wikipedia') {
-        // public-sources runs this once its limiter has granted the request; a throw there sends nothing.
+        // public-sources runs this once its limiter has granted the request; a throw there sends nothing. The deadline,
+        // the signal and the rate limit are read again first, since the limiter may have queued the request.
         const onSend = async (): Promise<void> => {
+          halt();
+          if (!this.rateLimitOpen(provider)) throw new LimiterRefused('wait');
           if (!(await permitted())) throw SKIPPED;
           dispatch();
         };
@@ -1181,10 +1204,16 @@ export class SearchProviderService {
     const settled = work.then(
       (results) => (pastDeadline() ? end('late') : end(results.length > 0 ? 'answered' : 'empty', results)),
       (error: unknown) => {
-        if (deadline?.signal.aborted && options.signal?.aborted !== true) return end('late');
+        // The clock first, as on an answer: a hook that held the thread past the deadline is late whatever it said.
+        if (pastDeadline() && options.signal?.aborted !== true) return end('late');
         const thrown = error instanceof CallerStop ? error.error : error;
         if (thrown === SKIPPED) return end('skipped');
-        if (isRefusal(thrown)) return end('limited');
+        if (isRefusal(thrown)) {
+          // The wiki's limiter can refuse after the request was counted (a block that came during `onSend`): it never
+          // left, so the count is given back.
+          if (taken) this.releaseRateLimit(provider);
+          return end('limited');
+        }
         return end('failed');
       },
     );
