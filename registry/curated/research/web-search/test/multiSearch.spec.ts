@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { getEventListeners } from 'node:events';
 import type { AddressInfo } from 'node:net';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -719,5 +720,42 @@ describe("multiSearch: a count given back is the count taken", () => {
     const next = await limited.multiSearch('treaty', { providers: ['tavily'], fallback: false });
     expect(next.metadata.outcomes).toEqual({ tavily: 'limited' });
     expect(asked).toHaveLength(1);
+  });
+});
+
+describe('abort listeners: none is left on the caller signal once it aborts', () => {
+  it('a pinned search aborted while its onSend never settles leaves no listener', async () => {
+    const controller = new AbortController();
+    const pending = service().search('treaty', { provider: 'serper', signal: controller.signal, onSend: () => new Promise<void>(() => {}) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const reason = new Error('the caller stopped');
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+    expect(asked).toEqual([]);
+  });
+
+  it('a multiSearch aborted while a counted wiki request never leaves its limiter leaves no listener', async () => {
+    let counted: () => void = () => {};
+    const inLimiter = new Promise<void>((resolve) => {
+      counted = resolve;
+    });
+    // A limiter that counts the request in its onSend and then never settles, whatever happens to its signal.
+    const limiter = {
+      block: () => {},
+      run: async <T>(_task: () => Promise<T>, _signal?: AbortSignal, beforeStart?: () => void | Promise<void>): Promise<T> => {
+        await beforeStart?.();
+        counted();
+        return new Promise<T>(() => {});
+      },
+    } as unknown as SourceLimiter;
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter, origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    const controller = new AbortController();
+    const pending = wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false, signal: controller.signal });
+    await inLimiter;
+    const reason = new Error('the caller stopped');
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
   });
 });
