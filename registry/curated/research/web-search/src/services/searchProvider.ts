@@ -97,9 +97,11 @@ function untilAbort<T>(work: Promise<T>, signal: AbortSignal | undefined): Promi
     return Promise.reject(signal.reason);
   }
   return new Promise<T>((resolve, reject) => {
-    // An event named abort on a signal that did not abort is no abort.
+    // An event named abort on a signal that did not abort is no abort; a real one ends the wait and its listener.
     const onAbort = (): void => {
-      if (signal.aborted) reject(signal.reason);
+      if (!signal.aborted) return;
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason);
     };
     signal.addEventListener('abort', onAbort);
     work.then(
@@ -1216,7 +1218,9 @@ export class SearchProviderService {
     };
     /** The abort's own refund: only for a signal that is aborted, never for an event named abort alone. */
     const onAbort = (): void => {
-      if (own?.aborted === true) refundUnsent();
+      if (own?.aborted !== true) return;
+      own.removeEventListener('abort', onAbort);
+      refundUnsent();
     };
     if (provider === 'wikipedia') own?.addEventListener('abort', onAbort);
     /** The last checks before the request leaves, the rate limit counted only here. */
