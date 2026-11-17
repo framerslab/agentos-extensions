@@ -631,6 +631,50 @@ describe("multiSearch: a count given back is the count taken", () => {
     expect(asked.map((one) => one.provider)).toEqual(['wikipedia']);
   });
 
+  /**
+   * A limiter that counts the first request in its onSend and then holds it, noticing the end of its signal only after
+   * 20 ms, as a limiter in the middle of other work does; every later request is granted at once.
+   */
+  function slowToNotice(counted: () => void): SourceLimiter {
+    let runs = 0;
+    return {
+      block: () => {},
+      run: async <T>(task: () => Promise<T>, signal?: AbortSignal, beforeStart?: () => void | Promise<void>): Promise<T> => {
+        runs += 1;
+        await beforeStart?.();
+        if (runs > 1) return task();
+        counted();
+        return new Promise<T>((_, reject) => {
+          signal?.addEventListener('abort', () => setTimeout(() => reject(signal.reason), 20), { once: true });
+        });
+      },
+    } as unknown as SourceLimiter;
+  }
+
+  it('a counted wiki request the caller aborts in its limiter is given back before the call rejects: a retry at once is sent', async () => {
+    let counted: () => void = () => {};
+    const inLimiter = new Promise<void>((resolve) => {
+      counted = resolve;
+    });
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter: slowToNotice(counted), origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    const controller = new AbortController();
+    const pending = wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false, signal: controller.signal });
+    await inLimiter;
+    const reason = new Error('the caller stopped');
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    const retry = await wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false });
+    expect(retry.metadata.outcomes).toEqual({ wikipedia: 'answered' });
+  });
+
+  it('a counted wiki request late in its limiter is given back before the call answers: a retry at once is sent', async () => {
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter: slowToNotice(() => {}), origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    const late = await wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false, deadlineMs: 100 });
+    expect(late.metadata.outcomes).toEqual({ wikipedia: 'late' });
+    const retry = await wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false });
+    expect(retry.metadata.outcomes).toEqual({ wikipedia: 'answered' });
+  });
+
   it('a request the caller aborts after it left keeps its count, whatever the reason the caller gives', async () => {
     scripts = { tavily: { hang: true } };
     const limited = service({ rateLimit: { maxRequests: 1, windowMs: 60_000 } });
