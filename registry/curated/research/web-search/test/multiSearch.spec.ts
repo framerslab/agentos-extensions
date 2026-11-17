@@ -605,6 +605,32 @@ describe("multiSearch: a count given back is the count taken", () => {
     expect(asked).toHaveLength(1);
   });
 
+  it('a wiki request its limiter refused after it was counted gets its count back even when the caller aborts first', async () => {
+    const controller = new AbortController();
+    const reason = new Error('the caller stopped');
+    let runs = 0;
+    // The first request: counted in its onSend, then the caller aborts and the limiter refuses it, nothing sent. Every
+    // later request is granted at once.
+    const limiter = {
+      block: () => {},
+      run: async <T>(task: () => Promise<T>, _signal?: AbortSignal, beforeStart?: () => void | Promise<void>): Promise<T> => {
+        runs += 1;
+        await beforeStart?.();
+        if (runs === 1) {
+          controller.abort(reason);
+          throw new LimiterRefused('blocked');
+        }
+        return task();
+      },
+    } as unknown as SourceLimiter;
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter, origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    await expect(wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false, signal: controller.signal })).rejects.toBe(reason);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const next = await wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false });
+    expect(next.metadata.outcomes).toEqual({ wikipedia: 'answered' });
+    expect(asked.map((one) => one.provider)).toEqual(['wikipedia']);
+  });
+
   it('a request the caller aborts after it left keeps its count, whatever the reason the caller gives', async () => {
     scripts = { tavily: { hang: true } };
     const limited = service({ rateLimit: { maxRequests: 1, windowMs: 60_000 } });
