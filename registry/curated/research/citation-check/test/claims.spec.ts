@@ -205,11 +205,26 @@ describe('ClaimChecker.check', () => {
     const { embed, batches } = fakeEmbed();
     const { judge, asked } = fakeJudge({ relation: 'differs', quote: QUOTE });
     const lead = passage(LEAD, 'encyclopedia:Treaty_of_Versailles');
-    const held = passage('The Treaty of Versailles was signed in 1918.', 'note:history', 'note', 'History notes');
+    const held = passage('My notes say the Treaty of Versailles was signed in 1918.', 'note:history', 'note', 'History notes');
     const outcome = await new ClaimChecker({ embed, judge, checker }).check(CLAIM, [lead], { signal: signal(), found: [lead, held] });
     expect(outcome).toMatchObject({ kind: 'ended', reason: 'undecided', judged: 1 });
     expect(batches.flat()).not.toContain(held.content);
     expect(asked.map((one) => one.prompt).join('\n')).not.toContain(held.content);
+  });
+
+  it('reads a passage as it is now when the host changes it between checks: a redacted name reaches no model', async () => {
+    const { embed, batches } = fakeEmbed();
+    const { judge, asked } = fakeJudge({ relation: 'none', quote: '' });
+    const claims = new ClaimChecker({ embed, judge, checker });
+    const lead = passage(LEAD, 'encyclopedia:Treaty_of_Versailles');
+    const note = passage('My notes say the Treaty of Versailles was signed in 1918 by Jane Roe.', 'note:one', 'note', 'Notes');
+    await claims.check(CLAIM, [lead], { signal: signal(), found: [lead, note] });
+    // The host redacts the note in place, and may send it from then on.
+    note.content = 'My notes say the Treaty of Versailles was signed in 1918 by [name].';
+    await claims.check(CLAIM, [note], { signal: signal() });
+    expect(batches.flat()).toContain(note.content);
+    expect(batches.flat().join('\n')).not.toContain('Jane Roe');
+    expect(asked.map((one) => one.prompt).join('\n')).not.toContain('Jane Roe');
   });
 
   it('compares at most maxPassages passages, in the order the checker ranks them', async () => {
@@ -273,5 +288,32 @@ describe('ClaimChecker: later passages, by code alone', () => {
     expect(claims.agree(first, CLAIM, [other])).toEqual([]);
     expect(claims.agree(first, CLAIM, [sameSource])).toEqual([]);
     expect(asked).toHaveLength(1);
+  });
+});
+
+describe('ClaimChecker: the veto reads every passage, however long', () => {
+  const LONG =
+    'In the account the historians of the period kept, which runs to many pages and covers the negotiations, the delegations, ' +
+    'the arguments about reparations and the new borders drawn across the continent, the Treaty of Versailles was signed in 1918 ' +
+    'after months of talks among the powers.';
+
+  it('a passage past the sentence limit that agrees with 1918 stops a "differs" whether it comes in found or later', async () => {
+    expect(LONG.split(/\s+/u).length).toBeGreaterThan(40);
+    const { embed } = fakeEmbed();
+    const { judge } = fakeJudge({ relation: 'differs', quote: QUOTE });
+    const claims = new ClaimChecker({ embed, judge, checker });
+    const lead = passage(LEAD, 'encyclopedia:Treaty_of_Versailles');
+    const long = passage(LONG, 'page:history', 'page', 'History');
+    // In found from the start: the veto reads it.
+    const early = await claims.check(CLAIM, [lead], { signal: signal(), found: [lead, long] });
+    expect(early).toMatchObject({ kind: 'ended', reason: 'undecided' });
+    // Later, by revisit: the veto reads it the same way.
+    const first = await claims.check(CLAIM, [lead], { signal: signal() });
+    if (first.kind !== 'decided') throw new Error(`expected a decision, got ${first.reason}`);
+    expect(claims.revisit(first, CLAIM, [lead, long])).toBeNull();
+    // And beside a later source written alike, which no longer joins once the long passage vetoes.
+    const same = passage('The Treaty of Versailles was signed in 1919.', 'page:almanac', 'page', 'Almanac');
+    expect(claims.agree(first, CLAIM, [same])).toEqual([same]);
+    expect(claims.agree(first, CLAIM, [same, long])).toEqual([]);
   });
 });
