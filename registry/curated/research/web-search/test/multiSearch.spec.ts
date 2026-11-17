@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SourceLimiter } from '@framers/agentos-ext-public-sources';
+import { LimiterRefused, SourceLimiter } from '@framers/agentos-ext-public-sources';
 import { SearchProviderService } from '../src/services/searchProvider';
 
 // multiSearch over Node's own fetch, against stand-ins on the loopback address for Serper, Tavily, Firecrawl and
@@ -564,6 +564,60 @@ describe('multiSearch: the order of the hooks, the deadline on a skip, and the w
     const [first, second] = await Promise.all([wiki.multiSearch('Treaty of Versailles', options), wiki.multiSearch('Treaty of Versailles', options)]);
     expect([first.metadata.outcomes.wikipedia, second.metadata.outcomes.wikipedia].sort()).toEqual(['answered', 'limited']);
     expect(seen).toEqual(['wikipedia']);
+    expect(asked).toHaveLength(1);
+  });
+});
+
+describe("multiSearch: a count given back is the count taken", () => {
+  it("a wiki refusal after the service's rate-limit window rolled over gives nothing back to the new window", async () => {
+    let open: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    let runs = 0;
+    // A limiter that grants the first request, holds it after its onSend while the test moves on, then refuses it; and
+    // grants every later request at once.
+    const limiter = {
+      block: () => {},
+      run: async <T>(task: () => Promise<T>, _signal?: AbortSignal, beforeStart?: () => void | Promise<void>): Promise<T> => {
+        runs += 1;
+        if (runs === 1) {
+          await beforeStart?.();
+          await gate;
+          throw new LimiterRefused('blocked');
+        }
+        await beforeStart?.();
+        return task();
+      },
+    } as unknown as SourceLimiter;
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter, origin }, rateLimit: { maxRequests: 1, windowMs: 100 } });
+    const ask = { providers: ['wikipedia'], fallback: false };
+    const first = wiki.multiSearch('Treaty of Versailles', ask);
+    await vi.waitFor(() => expect(runs).toBe(1), { timeout: 2_000 });
+    // The first request's window ends; a second request opens the next one and spends it.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const second = await wiki.multiSearch('Treaty of Versailles', ask);
+    expect(second.metadata.outcomes).toEqual({ wikipedia: 'answered' });
+    open();
+    expect((await first).metadata.outcomes).toEqual({ wikipedia: 'limited' });
+    const third = await wiki.multiSearch('Treaty of Versailles', ask);
+    expect(third.metadata.outcomes).toEqual({ wikipedia: 'limited' });
+    expect(asked).toHaveLength(1);
+  });
+
+  it('a request the caller aborts after it left keeps its count, whatever the reason the caller gives', async () => {
+    scripts = { tavily: { hang: true } };
+    const limited = service({ rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    const controller = new AbortController();
+    const pending = limited.multiSearch('treaty', { providers: ['tavily'], fallback: false, signal: controller.signal });
+    await vi.waitFor(() => expect(asked).toHaveLength(1), { timeout: 2_000 });
+    const reason = new LimiterRefused('caller');
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    // The aborted request's own end settles after the call's rejection.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const next = await limited.multiSearch('treaty', { providers: ['tavily'], fallback: false });
+    expect(next.metadata.outcomes).toEqual({ tavily: 'limited' });
     expect(asked).toHaveLength(1);
   });
 });
