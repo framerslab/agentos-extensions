@@ -149,10 +149,10 @@ const response = await search.multiSearch('Treaty of Versailles signed', {
 | Option | What it does | When left out |
 |---|---|---|
 | `providers` | The providers to ask, in this order. A provider named but not configured answers `skipped` and is sent nothing. `wikipedia` is asked only when the service enables it and it is named. | Every configured provider, `wikipedia` among them when enabled. |
-| `fallback` | `false` leaves DuckDuckGo out. With `true`, DuckDuckGo is asked after the other providers. | `true` |
+| `fallback` | `false` leaves DuckDuckGo out, even when `providers` names it. With `true`, DuckDuckGo is asked after the other providers. | `true` |
 | `signal` | Ends every provider's request; the call rejects with the signal's reason, whether it aborts before or during the call. | No signal. |
-| `onSend(provider)` | Awaited once before each provider's request is sent. `false` or a throw skips that provider alone, with nothing sent to it, and the others go on. For `wikipedia` it runs once the wiki's limiter has granted the request. | Every provider is sent its request. |
-| `deadlineMs` | Each provider's own bound, counted from the start of the call. A provider that has not answered by then, or is still waiting on `onSend`, answers `late`: its request is aborted, nothing is sent to it if it had not been, and its results are dropped. The others' results stand. | No bound beyond Tavily's and Firecrawl's own 15-second timers and the wiki's `timeoutMs`. |
+| `onSend(provider)` | Awaited once before each provider's request is sent, and called in the order the providers are named, DuckDuckGo last. `false` or a throw skips that provider alone, with nothing sent to it, and the others go on. It is not called for a provider that is not configured or is past its rate limit, nor once the call has aborted or passed its deadline. For `wikipedia` it runs once the wiki's limiter has granted the request. | Every provider is sent its request. |
+| `deadlineMs` | Each provider's own bound, counted from the start of the call. A provider that has not answered by then, or is still waiting on `onSend`, answers `late`: its request is aborted, nothing is sent to it if it had not been, and its results are dropped. The clock is read again at the moment a request would leave and when its answer comes, so `deadlineMs: 0`, or an `onSend` that holds the thread past the deadline, sends nothing. The others' results stand. | No bound beyond Tavily's and Firecrawl's own 15-second timers and the wiki's `timeoutMs`. |
 | `perProvider` | How many results each provider is asked for. `maxResults` stays the cap on the merged list, so a host that filters the merged list passes a cap that drops nothing. | `maxResults` |
 | `maxResults` | The most results the merged list answers. | 10 |
 
@@ -162,10 +162,10 @@ const response = await search.multiSearch('Treaty of Versailles signed', {
 |---|---|
 | `answered` | It returned at least one result. |
 | `empty` | It returned without an error and with no result. |
-| `failed` | Its request failed: an error status, a network error, a body that would not parse. |
+| `failed` | Its request failed: an error status (DuckDuckGo's included), a network error, a body that would not parse, or Tavily's or Firecrawl's own 15-second timer. A `search` reads those timers as no results; `multiSearch` never reads a timeout as a search that found nothing. |
 | `late` | It had not answered by `deadlineMs`. |
 | `skipped` | Nothing was sent to it: it is not configured, or `onSend` answered `false` or threw. |
-| `limited` | Nothing was sent to it: the service's `rateLimit` or the wiki's limiter refused it. |
+| `limited` | Nothing was sent to it: the service's `rateLimit` or the wiki's limiter refused it. A request counts against `rateLimit` only when it leaves, so a provider `onSend` skipped, or one late before it left, spends none of it. |
 
 `metadata.providersQueried` lists every provider the call considered, in order, and each of them is either in `providersSucceeded` (answered) or in `providersFailed` (any other outcome), as before. A call with none of these options asks every configured provider and DuckDuckGo, as it did before they existed.
 
