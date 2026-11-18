@@ -39,6 +39,14 @@ export interface SourceDocument {
   publisher?: string;
   /** The page's own date, in milliseconds since 1970, where it states one. */
   pageDate?: number;
+  /** The provider word that answered the read, such as `wikipedia`; for a web page, the first of `foundThrough`. */
+  provider?: string;
+  /** Every provider word that found the page, in the order the search named its providers. */
+  foundThrough?: string[];
+  /** What kind of source it is: an open word, one of `SOURCE_KINDS` or any other the host reads (`isSourceWord`). */
+  kind?: string;
+  /** The site's icon as a data address (PNG, ICO, JPEG or WebP) of at most 8,192 characters. */
+  icon?: string;
 }
 
 /** One passage: a sentence of an article, shaped as AgentOS's `VerificationSource`, with its attribution and its place. */
@@ -56,6 +64,14 @@ export interface CitationSource {
   block: number;
   start: number;
   end: number;
+  /** The document's provider word, where it has one. */
+  provider?: string;
+  /** The document's finders, where it has them: a list of the passage's own. */
+  foundThrough?: string[];
+  /** The document's kind, where it has one. */
+  kind?: string;
+  /** The document's icon, where it has one. */
+  icon?: string;
 }
 
 /** A search's outcome: hits, the limiter's refusal (nothing was sent), or a failure with the status when one came. */

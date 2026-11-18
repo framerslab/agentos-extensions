@@ -8,7 +8,10 @@
 
 import type { CitationSource, SourceDocument } from './types.js';
 
-/** Every sentence of the document's blocks, in order, as a passage; `cut` answers a block's sentences as offsets. */
+/**
+ * Every sentence of the document's blocks, in order, as a passage; `cut` answers a block's sentences as offsets. Each
+ * passage carries the document's provider, finders (a list of its own), kind and icon where the document has them.
+ */
 export function citationSources(document: SourceDocument, cut: (text: string) => Array<{ start: number; end: number }>): CitationSource[] {
   const out: CitationSource[] = [];
   document.blocks.forEach((text, block) => {
@@ -25,6 +28,10 @@ export function citationSources(document: SourceDocument, cut: (text: string) =>
         block,
         start,
         end,
+        ...(document.provider !== undefined ? { provider: document.provider } : {}),
+        ...(document.foundThrough !== undefined ? { foundThrough: [...document.foundThrough] } : {}),
+        ...(document.kind !== undefined ? { kind: document.kind } : {}),
+        ...(document.icon !== undefined ? { icon: document.icon } : {}),
       });
     }
   });

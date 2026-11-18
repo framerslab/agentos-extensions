@@ -100,6 +100,40 @@ The provider reads page HTML from `/api/rest_v1/page/html/{key}` (`PAGE_PATH`), 
 
 A `SourceDocument` is what a provider's `read` answers: `site` (the source's name as a reader sees it), `key`, `title`, `url` (the address an attribution links to), `revision` (null when the source names none), `readAt` (when it was fetched, in milliseconds), `licence` (`name` and `url`) and `blocks`. Two fields are optional, for a source that reads them from the page: `publisher`, the site's name as the page states it, and `pageDate`, the page's own date in milliseconds. Wikipedia's provider sets neither; `@framers/agentos-ext-citation-check`'s web page source sets each where a page states it.
 
+Four more optional fields label the source:
+
+| Field | What it holds | Wikipedia's provider |
+|---|---|---|
+| `provider` | The provider word that answered the read; for a web page, the first of `foundThrough` | `'wikipedia'` |
+| `foundThrough` | Every provider word that found the page, in the order the search named its providers | not set |
+| `kind` | What kind of source it is: an open word | `'encyclopedia'` |
+| `icon` | The site's icon as a data address (PNG, ICO, JPEG or WebP) of at most 8,192 characters | not set |
+
+`citationSources` copies each of them a document has onto every passage, `foundThrough` as a list of the passage's own. `@framers/agentos-ext-citation-check`'s web page source sets `kind` for every page it reads, `provider` and `foundThrough` for a page its search answered with at least one finder named, and `icon` when the host asks for it. A page the search answered as a bare address carries no `provider` or `foundThrough`, so a reader of a document handles both fields being absent.
+
+## A source's kind
+
+```ts
+import { isSourceWord, kindOfHost, SOURCE_KINDS } from '@framers/agentos-ext-public-sources';
+
+kindOfHost('www.cdc.gov'); // 'official'
+kindOfHost('arxiv.org'); // 'paper'
+kindOfHost('harbour.example.org'); // 'page'
+kindOfHost('harbour.example.org', { 'example.org': 'news' }); // 'news'
+isSourceWord('Brave.Search'); // false
+```
+
+`kindOfHost(host, overrides?)` reads a page's kind from its host alone, with no request. A host is read case-folded, with a trailing dot and a leading `www.` removed, and a rule for a name holds for every name under it. The host's `overrides` come first, the longest name that matches deciding; an override whose kind is not a source word throws a `RangeError`. Then, in order:
+
+1. `encyclopedia`: Wikimedia's hosts (Wikinews aside, which is `news`), and the reference works `britannica.com`, `plato.stanford.edu` and `encyclopedia.com`;
+2. `paper`: identifier, journal and preprint hosts such as `doi.org`, `arxiv.org`, `pubmed.ncbi.nlm.nih.gov` and `nature.com` (a journal host under `.gov` among them);
+3. `official`: `.gov`, `.gov.<cc>`, `.edu`, `.int` and `.mil` hosts, and international bodies such as `un.org` and `europa.eu`;
+4. `news`: news hosts such as `apnews.com`, `bbc.co.uk` and `wikinews.org`;
+5. `forum`: forums, question sites and social networks such as `reddit.com` and `stackoverflow.com`;
+6. `page`: any other host.
+
+`SOURCE_KINDS` lists those six. A kind is an open word, so a host may read a page as any other: `isSourceWord(word)` holds a provider or a kind word to a lower-case letter, then up to 31 lower-case letters, digits, `_` or `-`.
+
 ## API
 
 | Export | What it is |
@@ -109,8 +143,9 @@ A `SourceDocument` is what a provider's `read` answers: `site` (the source's nam
 | `SourceLimiter`, `LimiterRefused`, `retryAfterMs` | The limiter, its refusal and the `Retry-After` reading |
 | `htmlToBlocks(html, { budget, mode })` | HTML as blocks of plain text, white space collapsed, in NFC: an article's prose (`article`, the default) or everything a page shows (`page`) |
 | `citationSources(document, cut)` | A fetched article as passages with their attribution and place |
+| `kindOfHost(host, overrides?)`, `SOURCE_KINDS`, `isSourceWord(word)` | A page's kind by its host, the kinds it answers, and the words a provider or a kind may be |
 | `wikipediaUserAgent`, `articleUrl`, `WIKIPEDIA_LICENCE`, `SEARCH_PATH`, `PAGE_PATH` | The User-Agent, the article's address, the licence and the paths the provider uses |
-| `SourceHit`, `SourceDocument`, `CitationSource`, `SourceLicence`, `SearchOutcome`, `ReadOutcome`, `CallOptions`, `WikipediaOptions`, `WikipediaClient`, `LimiterOptions`, `BlockMode`, `HtmlToBlocksOptions` | The types of the hits, documents, passages, outcomes and options |
+| `SourceHit`, `SourceDocument`, `CitationSource`, `SourceKind`, `SourceLicence`, `SearchOutcome`, `ReadOutcome`, `CallOptions`, `WikipediaOptions`, `WikipediaClient`, `LimiterOptions`, `BlockMode`, `HtmlToBlocksOptions` | The types of the hits, documents, passages, outcomes and options |
 
 ## License
 

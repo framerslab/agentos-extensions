@@ -28,6 +28,8 @@ const LD_BLOCKS = 20;
 const LD_NODES = 500;
 /** The most `<link rel="license">`s one page keeps, and the most `<a>`s of each kind a licence is read from. */
 const LICENCE_ELEMENTS_MAX = 1_000;
+/** The most `<link rel="icon">`s one page keeps. */
+const ICON_LINKS_MAX = 32;
 /** Elements whose content is not read for tags. */
 const OPAQUE: ReadonlySet<string> = new Set(['script', 'style', 'template', 'noscript', 'textarea', 'title']);
 
@@ -45,6 +47,8 @@ export interface MarkupScan {
   metas: Map<string, string>;
   /** Each `<link>` whose `rel` names `license`, its attributes, in document order; at most 1,000. */
   links: Attributes[];
+  /** Each `<link>` whose `rel` names `icon` (`icon`, `shortcut icon`), its attributes, in document order; at most 32. */
+  icons: Attributes[];
   /**
    * Each `<a>` a licence is read from, in document order: one whose `rel` names `license`, with the start of its
    * content as written, and one whose address, resolved against the page's own, is on creativecommons.org, with no
@@ -130,7 +134,7 @@ function onCreativeCommons(href: string | undefined, base: string): boolean {
  * @param baseUrl - The page's own address, which an anchor's address is resolved against.
  */
 export function scanMarkup(html: string, baseUrl: string): MarkupScan {
-  const scan: MarkupScan = { title: null, metas: new Map(), links: [], anchors: [], jsonLd: [] };
+  const scan: MarkupScan = { title: null, metas: new Map(), links: [], icons: [], anchors: [], jsonLd: [] };
   let licenceAnchors = 0;
   let deedAnchors = 0;
   let at = 0;
@@ -169,6 +173,7 @@ export function scanMarkup(html: string, baseUrl: string): MarkupScan {
       const marked = relNames(attributes, 'license');
       if (name === 'link') {
         if (marked && scan.links.length < LICENCE_ELEMENTS_MAX) scan.links.push(attributes);
+        if (relNames(attributes, 'icon') && scan.icons.length < ICON_LINKS_MAX) scan.icons.push(attributes);
       } else if (marked) {
         if (licenceAnchors < LICENCE_ELEMENTS_MAX) {
           licenceAnchors += 1;
@@ -193,9 +198,16 @@ export function scanMarkup(html: string, baseUrl: string): MarkupScan {
   return scan;
 }
 
-/** Whether an element's `rel` names a link type, its tokens read without case. */
+/**
+ * Whether an element's `rel` names a link type: its tokens split on ASCII white space alone and read without ASCII case,
+ * as HTML reads them, so a no-break space (`&nbsp;` or U+00A0) joins one token.
+ */
 export function relNames(attributes: Attributes, type: string): boolean {
-  return (attributes.get('rel') ?? '').toLowerCase().split(/\s+/u).includes(type);
+  // Its character references read first: `rel="&#105;con"` names the icon as `rel="icon"` does.
+  return decodeHTMLAttribute(attributes.get('rel') ?? '')
+    .replace(/[A-Z]/gu, (letter) => letter.toLowerCase())
+    .split(/[\t\n\f\r ]+/u)
+    .includes(type);
 }
 
 /** An address as an attribute writes it, its references read and resolved against the page's own; null when it does not parse or is not http or https. */

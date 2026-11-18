@@ -13,6 +13,8 @@
  */
 
 import {
+  isSourceWord,
+  kindOfHost,
   LimiterRefused,
   type CallOptions,
   type PublicSourceProvider,
@@ -27,10 +29,17 @@ import type { CitationLogger } from './types.js';
 /** robots.txt as the provider reads it when the host names no rule: the `*` group, 2,000 ms, 512,000 bytes, ten minutes kept. */
 export const DEFAULT_ROBOTS: Readonly<RobotsRule> = Object.freeze({ token: '*', timeoutMs: 2_000, maxBytes: 512_000, cacheMs: 600_000 });
 
+/**
+ * One page a host's search found: its address, or its address with the provider words that found it, in the order the
+ * search named its providers, as `foundThrough`, or as `providers` (the field a web-search `multiSearch` result names
+ * them in, so its results can be answered as they come). `foundThrough` is read when both are given.
+ */
+export type WebSearchAnswer = string | { url: string; foundThrough?: readonly string[]; providers?: readonly string[] };
+
 /** How the provider searches and reads. */
 export interface WebPageSourceOptions {
-  /** The host's search: a short phrase in, page addresses out, best first. A throw answers the search as failed. */
-  search: (phrase: string, signal?: AbortSignal) => Promise<readonly string[]>;
+  /** The host's search: a short phrase in, the pages it found out, best first. A throw answers the search as failed. */
+  search: (phrase: string, signal?: AbortSignal) => Promise<readonly WebSearchAnswer[]>;
   /** The request pages go through; AgentOS's checked egress with `egress` when left out. */
   transport?: Transport;
   /** The checked egress policy when no transport is given: `hosted` (the default), public https addresses alone, or `local`. */
@@ -57,6 +66,15 @@ export interface WebPageSourceOptions {
   now?: () => number;
   /** Where the reader writes its events. */
   logger?: CitationLogger;
+  /**
+   * Whether each page's icon is read, as `readPage`'s `icon` reads it: one more request, to the page's own origin. Not
+   * read when left out.
+   */
+  icon?: boolean;
+  /** The most bytes of an icon read; 65,536 when left out. */
+  iconMaxBytes?: number;
+  /** The host's own reading of a page's kind by its host, which `kindOfHost` puts before its table. */
+  kindOverrides?: Readonly<Record<string, string>>;
 }
 
 /** The most hits a search answers when the call names no limit. */
@@ -86,6 +104,17 @@ function keyOf(address: unknown): string | null {
   }
 }
 
+/** A search answer as an address and the source words of the providers that found it, each once, in order. */
+function answerOf(answer: unknown): { address: unknown; foundThrough: string[] } {
+  if (typeof answer === 'string' || answer === null || typeof answer !== 'object') return { address: answer, foundThrough: [] };
+  const { url, foundThrough, providers } = answer as { url?: unknown; foundThrough?: unknown; providers?: unknown };
+  // `foundThrough` first; else a web-search `multiSearch` result's `providers`.
+  const finders = Array.isArray(foundThrough) ? foundThrough : Array.isArray(providers) ? providers : [];
+  const words: string[] = [];
+  for (const word of finders) if (typeof word === 'string' && isSourceWord(word) && !words.includes(word)) words.push(word);
+  return { address: url, foundThrough: words };
+}
+
 /** A page's host without a leading "www.", in lower case. */
 function siteOf(url: string): string {
   try {
@@ -111,10 +140,16 @@ export class WebPageSourceProvider implements PublicSourceProvider {
   private transport: Promise<Transport> | null = null;
   /** The phrase each hit this provider's search answered was found by, held as long as the hit is. */
   private readonly phrases = new WeakMap<SourceHit, string>();
+  /** The provider words that found each hit this provider's search answered, where the search named them. */
+  private readonly finders = new WeakMap<SourceHit, string[]>();
+  private readonly iconMaxBytes: number;
+  /** The host's kind overrides, copied and checked when the provider was made. */
+  private readonly kindOverrides: Readonly<Record<string, string>> | undefined;
 
   /**
    * @param options - The host's search and how pages are read.
    * @throws {TypeError} For a search that is not a function, or a bound that is not a whole number of at least 1.
+   * @throws {RangeError} For a kind override that is not a source word.
    */
   constructor(options: WebPageSourceOptions) {
     if (typeof options.search !== 'function') throw new TypeError('a web page source needs a search function');
@@ -126,6 +161,11 @@ export class WebPageSourceProvider implements PublicSourceProvider {
     this.textBudget = whole('textBudget', options.textBudget, 300_000);
     this.robots = options.robots === undefined ? DEFAULT_ROBOTS : options.robots;
     this.now = options.now ?? Date.now;
+    this.iconMaxBytes = whole('iconMaxBytes', options.iconMaxBytes, 65_536);
+    // The overrides as given now, checked once: a host that changes its record later changes no read. An override that
+    // is not a source word is refused here rather than at the first read.
+    this.kindOverrides = options.kindOverrides === undefined ? undefined : Object.freeze({ ...options.kindOverrides });
+    if (this.kindOverrides !== undefined) kindOfHost('', this.kindOverrides);
   }
 
   /** The transport, built once: the host's, or AgentOS's checked egress. */
@@ -139,9 +179,10 @@ export class WebPageSourceProvider implements PublicSourceProvider {
    * Searches for a short phrase: a cancellation that came first is thrown before anything runs, then `onSend` is
    * awaited once and the host's search runs, and its addresses answer
    * as hits (`key` the address without its fragment, `title` the address), each page once, at most `limit` (3 when
-   * left out), an address that is not http or https passed over. `limited` when `onSend` throws a limiter's refusal
-   * (nothing was sent), `failed` when it throws anything else or the search throws. The caller's own cancellation is
-   * thrown.
+   * left out), an address that is not http or https passed over. A page found at two forms of its address that share a
+   * key keeps the providers of both that found it, each once, in the order they came, those that are not source words
+   * left out. `limited` when `onSend` throws a limiter's refusal (nothing was sent), `failed` when it throws anything
+   * else or the search throws. The caller's own cancellation is thrown.
    */
   async search(phrase: string, options: CallOptions & { limit?: number } = {}): Promise<SearchOutcome> {
     const limit = options.limit ?? DEFAULT_LIMIT;
@@ -156,32 +197,47 @@ export class WebPageSourceProvider implements PublicSourceProvider {
       }
     }
     options.signal?.throwIfAborted();
-    let addresses: readonly unknown[];
+    let answers: readonly unknown[];
     try {
-      addresses = await this.searchFn(phrase, options.signal);
+      answers = await this.searchFn(phrase, options.signal);
     } catch {
       if (options.signal?.aborted) throw options.signal.reason;
       return { kind: 'failed', status: null };
     }
     if (options.signal?.aborted) throw options.signal.reason;
     const hits: SourceHit[] = [];
-    const seen = new Set<string>();
-    for (const address of Array.isArray(addresses) ? addresses : []) {
-      if (hits.length >= limit) break;
+    const byKey = new Map<string, SourceHit>();
+    for (const answer of Array.isArray(answers) ? answers : []) {
+      const { address, foundThrough } = answerOf(answer);
       const key = keyOf(address);
-      if (key === null || seen.has(key)) continue;
-      seen.add(key);
+      if (key === null) continue;
+      const known = byKey.get(key);
+      if (known !== undefined) {
+        // The same page found again: its finders join the first's.
+        const finders = this.finders.get(known);
+        if (finders === undefined) {
+          if (foundThrough.length > 0) this.finders.set(known, [...foundThrough]);
+        } else {
+          for (const word of foundThrough) if (!finders.includes(word)) finders.push(word);
+        }
+        continue;
+      }
+      if (hits.length >= limit) continue;
       const hit: SourceHit = { key, title: (address as string).trim() };
+      byKey.set(key, hit);
       this.phrases.set(hit, phrase);
+      if (foundThrough.length > 0) this.finders.set(hit, [...foundThrough]);
       hits.push(hit);
     }
     return { kind: 'hits', hits };
   }
 
   /**
-   * Reads a hit's page: `document` with `site` the host without "www.", `revision` null, `readAt` the clock's, and the
-   * page's title, licence, publisher and date as read, or `skipped` with the status when one came. The caller's own
-   * cancellation is thrown.
+   * Reads a hit's page: `document` with `site` the host without "www.", `revision` null, `readAt` the clock's, the
+   * page's title, licence, publisher and date as read, its `kind` by `kindOfHost` (the host's overrides first), for a
+   * hit this provider's search found with providers named `foundThrough` and `provider` (the first of them), and its
+   * `icon` when the host asks for one; or `skipped` with the status when one came. The caller's own cancellation is
+   * thrown.
    *
    * @throws The caller's cancellation reason; an `Error` when no transport is given and the installed AgentOS has no
    * checked egress.
@@ -205,8 +261,20 @@ export class WebPageSourceProvider implements PublicSourceProvider {
       ...(allowUrl !== undefined ? { allowUrl: (address: string) => allowUrl(address, phrase) } : {}),
       ...(this.robots !== null ? { robots: this.robots } : {}),
       ...(fallback !== undefined ? { fallback } : {}),
+      ...(this.options.icon === true ? { icon: true, iconMaxBytes: this.iconMaxBytes } : {}),
     });
     if (page.document === null) return { kind: 'skipped', status: page.status.status };
-    return { kind: 'document', document: { ...page.document, site: siteOf(page.document.url), revision: null } };
+    const site = siteOf(page.document.url);
+    const finders = this.finders.get(hit);
+    return {
+      kind: 'document',
+      document: {
+        ...page.document,
+        site,
+        revision: null,
+        ...(finders !== undefined && finders.length > 0 ? { provider: finders[0] as string, foundThrough: [...finders] } : {}),
+        kind: kindOfHost(site, this.kindOverrides),
+      },
+    };
   }
 }

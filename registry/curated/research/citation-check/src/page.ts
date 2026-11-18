@@ -17,12 +17,13 @@
  */
 
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
+import { decodeHTMLAttribute } from 'entities';
 import { citationSources, htmlToBlocks, type CitationSource, type SourceDocument, type SourceLicence } from '@framers/agentos-ext-public-sources';
 import { browserHeaders, type ScrapeInput, type ScrapeResult } from '@framers/agentos-ext-web-scraper';
 import { collapse, sentenceSpans } from '@framers/agentos-ext-grounding-guard/values';
 import { licenceOf } from './licence.js';
 import { withoutInvisible } from './match.js';
-import { cutText, jsonLdNodes, pageDateOf, pageTitle, publisherOf, scanMarkup } from './meta.js';
+import { cutText, jsonLdNodes, pageDateOf, pageTitle, publisherOf, resolveHttp, scanMarkup } from './meta.js';
 import { readRobots, robotsAllows, type RobotsRule } from './robots.js';
 import type { CitationLogger, PageFailure, PageStatus } from './types.js';
 
@@ -64,12 +65,20 @@ export interface TransportRules {
   robots?: RobotsRule;
 }
 
+/** What one request's caller will read of its answer. */
+export interface TransportLimits {
+  /** The most bytes of the body the caller reads: a transport that holds the body before `read` refuses it past them. */
+  maxBytes?: number;
+}
+
 /**
  * One GET of an address under a signal. Given rules, the transport applies them to the address and to every redirect
  * target before its request, and throws {@link PageRefusal} for one they refuse; a transport of the host's own that
- * follows redirects applies them too, or the reader checks the first address alone.
+ * follows redirects applies them too, or the reader checks the first address alone. Given limits, a transport that
+ * downloads the body before `read` (as the checked egress does) stops at them; one that streams it in `read` needs
+ * nothing more, since `read(cap)` stops there.
  */
-export type Transport = (url: string, signal: AbortSignal, rules?: TransportRules) => Promise<TransportAnswer>;
+export type Transport = (url: string, signal: AbortSignal, rules?: TransportRules, limits?: TransportLimits) => Promise<TransportAnswer>;
 
 /** A failure a transport names itself, such as the egress policy's refusal. */
 export class PageRefusal extends Error {
@@ -328,15 +337,41 @@ export async function egressTransport(profile: EgressProfile, bounds: { timeoutM
     profile === 'local'
       ? egress.localEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: bounds.maxBytes })
       : egress.hostedEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: bounds.maxBytes });
-  const transport: Transport = async (url, signal, rules) => {
+  const headersToSend = requestHeaders(userAgent, 'identity');
+  /**
+   * One request for a caller that names how much it reads, such as an icon's read: the answer's headers first,
+   * a redirect's body never read, any other body refused past `cap` as it arrives. Its connection ends with the call.
+   */
+  const cappedRequest = async (url: string, signal: AbortSignal, cap: number): Promise<{ status: number; headers: unknown; body: Uint8Array }> => {
+    const own = new AbortController();
+    try {
+      const answer = await egress.checkedStream({ url, method: 'GET', headers: headersToSend, policy, signal: AbortSignal.any([signal, own.signal]), onRedirect: 'return' });
+      const headers = answer.headers as Record<string, string | string[] | undefined>;
+      if (answer.status >= 300 && answer.status < 400 && headerOf(headers, 'location') !== null) return { status: answer.status, headers, body: new Uint8Array(0) };
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      for await (const chunk of answer.body) {
+        total += chunk.byteLength;
+        if (total > cap) throw new PageRefusal('too_large');
+        chunks.push(chunk);
+      }
+      return { status: answer.status, headers, body: Buffer.concat(chunks) };
+    } finally {
+      own.abort();
+    }
+  };
+  const transport: Transport = async (url, signal, rules, limits) => {
+    const wanted = limits?.maxBytes;
+    const capped = wanted !== undefined && Number.isInteger(wanted) && wanted >= 0;
+    const cap = capped ? Math.min(wanted, bounds.maxBytes) : bounds.maxBytes;
+    const send = (address: string): Promise<{ status: number; headers: unknown; body: Uint8Array }> =>
+      capped ? cappedRequest(address, signal, cap) : egress.checkedRequest({ url: address, method: 'GET', headers: headersToSend, policy, signal, onRedirect: 'return' });
     let current = url;
     for (let hop = 0; ; hop += 1) {
       if (hasRules(rules)) await checkAddress(current, rules, transport, signal);
-      const answer = await egress
-        .checkedRequest({ url: current, method: 'GET', headers: requestHeaders(userAgent, 'identity'), policy, signal, onRedirect: 'return' })
-        .catch((error: unknown) => {
-          throw egressFailure(error) ?? error;
-        });
+      const answer = await send(current).catch((error: unknown) => {
+        throw egressFailure(error) ?? error;
+      });
       const headers = answer.headers as Record<string, string | string[] | undefined>;
       const location = headerOf(headers, 'location');
       if (answer.status >= 300 && answer.status < 400 && location !== null) {
@@ -344,7 +379,7 @@ export async function egressTransport(profile: EgressProfile, bounds: { timeoutM
         current = redirectTarget(location, current);
         continue;
       }
-      const body = answer.status >= 200 && answer.status < 300 ? decodedBody(answer.body, headerOf(headers, 'content-encoding'), bounds.maxBytes) : answer.body;
+      const body = answer.status >= 200 && answer.status < 300 ? decodedBody(answer.body, headerOf(headers, 'content-encoding'), cap) : answer.body;
       return {
         status: answer.status,
         finalUrl: current,
@@ -492,6 +527,18 @@ export interface PageReaderOptions {
    * these rules: the reader asks it only for an address they cleared.
    */
   fallback?: PageFallbackReader;
+  /**
+   * Whether to read the page's icon once its text is read: from the page's own origin alone, after its redirects (its
+   * first `<link rel="icon">` at that origin that is not an SVG, by its `type` or its address, else that origin's
+   * `/favicon.ico`, never a declared icon at another host), through the same transport, under `allowUrl` and `robots`,
+   * under a deadline of its own (`timeoutMs`, as each request has, so it can add up to `timeoutMs` to the read), at
+   * most `iconMaxBytes` read. A PNG, ICO, JPEG or WebP
+   * whose data address holds at most 8,192 characters is kept on the document and on each passage as `icon`; any other
+   * answer, a refusal or a failure leaves the icon out, and the page is read as it is without one. Not read when left out.
+   */
+  icon?: boolean;
+  /** The most bytes of an icon read; 65,536 when left out. */
+  iconMaxBytes?: number;
 }
 
 /** A page as the check reads it: its status, and when it was read, its document, its blocks and its sentences as passages. */
@@ -518,14 +565,32 @@ interface PageMeta {
   publisher: string | null;
   pageDate: number | null;
   licence: SourceLicence | null;
+  /** The addresses its `<link rel="icon">`s declare, their references read and resolved, in document order, SVGs left out. */
+  icons: string[];
+}
+
+/** Whether an icon's address names an SVG by its path, as `/favicon.svg` or `/mark.svg?v=2` does. */
+function drawnIcon(address: string): boolean {
+  try {
+    return new URL(address).pathname.toLowerCase().endsWith('.svg');
+  } catch {
+    return false;
+  }
 }
 
 /** The title, the publisher's name, the page's own date and its licence, from its markup (null for plain text) and its `Last-Modified`. */
 function pageMeta(html: string | null, finalUrl: string, lastModified: string | null): PageMeta {
-  if (html === null) return { title: null, publisher: null, pageDate: pageDateOf(new Map(), [], lastModified), licence: null };
+  if (html === null) return { title: null, publisher: null, pageDate: pageDateOf(new Map(), [], lastModified), licence: null, icons: [] };
   const scan = scanMarkup(html, finalUrl);
   const nodes = jsonLdNodes(scan.jsonLd);
-  return { title: pageTitle(scan), publisher: publisherOf(scan.metas, nodes), pageDate: pageDateOf(scan.metas, nodes, lastModified), licence: licenceOf(scan, nodes, finalUrl) };
+  // As every address the page writes: its character references read (`&amp;` is `&`), resolved against the page's. An
+  // SVG, which the reader could not keep, is passed over, by its declared type (its references read) or its address,
+  // for the next icon.
+  const icons = scan.icons
+    .filter((attributes) => mediaType(decodeHTMLAttribute(attributes.get('type') ?? '')) !== 'image/svg+xml')
+    .map((attributes) => resolveHttp(attributes.get('href'), finalUrl))
+    .filter((href): href is string => href !== null && !drawnIcon(href));
+  return { title: pageTitle(scan), publisher: publisherOf(scan.metas, nodes), pageDate: pageDateOf(scan.metas, nodes, lastModified), licence: licenceOf(scan, nodes, finalUrl), icons };
 }
 
 /** A page that was read, as a document and its passages. */
@@ -551,13 +616,15 @@ function pageRead(url: string, finalUrl: string, status: number, via: 'fetch' | 
     ...(pageDate !== null ? { pageDate } : {}),
   };
   const passages = citationSources(document, sentenceSpans);
-  return {
+  const read: PageRead = {
     status: { url, outcome: 'read', finalUrl, status, failure: null, detail: null, via, passages: passages.length },
     blocks,
     passages,
     document,
     pageDate,
   };
+  declaredIcons.set(read, meta?.icons ?? []);
+  return read;
 }
 
 /** One attempt's outcome: the page, or the failure with what came with it. */
@@ -690,16 +757,130 @@ async function scrape(url: string, scraper: PageScraper, options: PageReaderOpti
   return pageRead(url, finalUrl, status, 'fallback', blocks, options.now(), pageMeta(html, finalUrl, null));
 }
 
+/** The most bytes of an icon read, and the longest data address one is kept as. */
+const ICON_MAX_BYTES = 65_536;
+const ICON_ADDRESS_MAX = 8_192;
+
+/** The icons each page read declared, by the read, for its icon's address. */
+const declaredIcons = new WeakMap<PageRead, readonly string[]>();
+
+/** An icon's image type by its first bytes, as a data address names it: PNG, ICO, JPEG or WebP; null for any other. */
+function iconType(bytes: Uint8Array): string | null {
+  const starts = (...lead: number[]): boolean => bytes.length >= lead.length && lead.every((byte, index) => bytes[index] === byte);
+  const ascii = (from: number, to: number): string => Buffer.from(bytes.subarray(from, to)).toString('latin1');
+  if (starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return 'png';
+  if (starts(0x00, 0x00, 0x01, 0x00)) return 'x-icon';
+  if (starts(0xff, 0xd8, 0xff)) return 'jpeg';
+  if (bytes.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'webp';
+  return null;
+}
+
+/** Whether an answer's type may hold an icon: an image type, a generic binary type, or none. */
+function iconServedAs(contentType: string | null): boolean {
+  const type = mediaType(contentType);
+  return type === '' || type.startsWith('image/') || type === 'application/octet-stream';
+}
+
+/**
+ * The address a page's icon is read from: the first icon the page declares at its own origin (after its redirects),
+ * SVGs passed over already, else that origin's `/favicon.ico`; null for a page that is not http or https.
+ */
+function iconAddress(pageUrl: string, declared: readonly string[]): string | null {
+  let origin: string;
+  try {
+    const page = new URL(pageUrl);
+    if (page.protocol !== 'http:' && page.protocol !== 'https:') return null;
+    origin = page.origin;
+  } catch {
+    return null;
+  }
+  for (const href of declared) {
+    try {
+      const address = new URL(href, pageUrl);
+      if (address.origin !== origin) continue;
+      address.hash = '';
+      return address.href;
+    } catch {
+      // An address that does not parse names no icon.
+    }
+  }
+  return `${origin}/favicon.ico`;
+}
+
+/**
+ * A page's icon as a data address, or null: one request to the page's own origin, every hop held to that origin and to
+ * the reader's rules, under a deadline of its own (`timeoutMs`, as each request has) and the caller's signal; see
+ * {@link PageReaderOptions.icon}. Throws only the caller's own cancellation.
+ */
+async function readIcon(pageUrl: string, declared: readonly string[], options: PageReaderOptions): Promise<string | null> {
+  const address = iconAddress(pageUrl, declared);
+  if (address === null) return null;
+  const { origin } = new URL(address);
+  const sameOrigin = (url: string): boolean => {
+    try {
+      return new URL(url).origin === origin;
+    } catch {
+      return false;
+    }
+  };
+  const { allowUrl } = options;
+  const rules: TransportRules = {
+    allowUrl: (url) => sameOrigin(url) && (allowUrl === undefined || allowUrl(url) === true),
+    ...(options.robots !== undefined ? { robots: options.robots } : {}),
+  };
+  const cap = options.iconMaxBytes ?? ICON_MAX_BYTES;
+  const deadline = AbortSignal.timeout(options.timeoutMs);
+  const signal = options.signal ? AbortSignal.any([deadline, options.signal]) : deadline;
+  let answer: TransportAnswer;
+  try {
+    // A transport of the host's own may apply no rules, so the address is checked here before it is asked.
+    if (!checkingTransports.has(options.transport)) await checkAddress(address, rules, options.transport, signal);
+    // The cap goes with the request, so a transport that holds the body before `read` stops at it too.
+    answer = await options.transport(address, signal, rules, { maxBytes: cap });
+  } catch {
+    if (options.signal?.aborted) throw options.signal.reason;
+    return null;
+  }
+  try {
+    const declaredLength = Number(answer.header('content-length') ?? '');
+    if (answer.status !== 200 || !sameOrigin(answer.finalUrl) || !iconServedAs(answer.header('content-type')) || (Number.isFinite(declaredLength) && declaredLength > cap)) {
+      await answer.discard();
+      return null;
+    }
+    const bytes = await answer.read(cap);
+    const type = bytes === null ? null : iconType(bytes);
+    if (bytes === null || type === null) return null;
+    const data = `data:image/${type};base64,${Buffer.from(bytes).toString('base64')}`;
+    return data.length <= ICON_ADDRESS_MAX ? data : null;
+  } catch {
+    await answer.discard().catch(() => undefined);
+    if (options.signal?.aborted) throw options.signal.reason;
+    return null;
+  }
+}
+
 /**
  * Reads one page: the rules checked when given, one request, then for a 200 with no text one read of its address after
  * redirects through the fallback reader when given, and, when no rules are given, for a failure the scraper may mend (a
  * deadline, no connection, an error status other than 404 and 410, a page with no text) one try through the fallback
- * scraper. Answers a status for a page that is not read; throws only the caller's own cancellation.
+ * scraper; then, with `icon`, one request for its icon. Answers a status for a page that is not read; throws only the
+ * caller's own cancellation.
  *
  * @param url - The address to fetch, from {@link pageKey}.
  * @param options - How to read it.
  */
 export async function readPage(url: string, options: PageReaderOptions): Promise<PageRead> {
+  const page = await readPageText(url, options);
+  if (options.icon !== true || page.document === null) return page;
+  const icon = await readIcon(page.document.url, declaredIcons.get(page) ?? [], options);
+  // A cancellation that came while the icon's answer was put away, which ends no request, still ends the read.
+  options.signal?.throwIfAborted();
+  if (icon === null) return page;
+  return { ...page, document: { ...page.document, icon }, passages: page.passages.map((passage) => ({ ...passage, icon })) };
+}
+
+/** A page's text and its document, as `readPage` reads them before its icon. */
+async function readPageText(url: string, options: PageReaderOptions): Promise<PageRead> {
   // A signal that has already fired never fires again, so a transport waiting on it would wait for good.
   options.signal?.throwIfAborted();
   const first = await attempt(url, options);

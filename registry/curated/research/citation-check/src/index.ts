@@ -38,10 +38,11 @@ export {
   type Transport,
   type TransportAnswer,
   type TransportRules,
+  type TransportLimits,
 } from './page.js';
 export { readRobots, robotsAllows, parseRobots, ROBOTS_PARSING_FLOOR, type RobotsRule, type RobotsFile, type RobotsGroup, type RobotsLine, type ReadRobotsOptions } from './robots.js';
 export { readLicence } from './licence.js';
-export { WebPageSourceProvider, DEFAULT_ROBOTS, type WebPageSourceOptions } from './web-source.js';
+export { WebPageSourceProvider, DEFAULT_ROBOTS, type WebPageSourceOptions, type WebSearchAnswer } from './web-source.js';
 export { FirecrawlPageReader, FIRECRAWL_SCRAPE_URL, type FirecrawlPageReaderOptions } from './firecrawl.js';
 export { checkCitations, checkCitationDocument, CitationSetupError, type CitationCheckOptions } from './runner.js';
 export { renderCitationLog, citationReportFails, FAILING_VERDICTS, type CitationReportOptions } from './report.js';
