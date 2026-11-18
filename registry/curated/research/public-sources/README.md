@@ -96,6 +96,25 @@ Wikipedia's page on [reusing its content](https://en.wikipedia.org/wiki/Wikipedi
 
 The provider reads page HTML from `/api/rest_v1/page/html/{key}` (`PAGE_PATH`), the cached interface the robot policy names. [RESTBase](https://www.mediawiki.org/wiki/Wikimedia_REST_API), the service behind it, is being deprecated: pass `pagePath: '/w/rest.php/v1/page/{key}/html'` to read the same HTML from MediaWiki's own REST API. A read uses the search hit's `key`, so it follows no redirect; a title that redirects answers 307 at both paths, and the read answers `skipped`.
 
+## arXiv
+
+```ts
+import { arxivLimiter, ArxivSourceProvider } from '@framers/agentos-ext-public-sources';
+
+const arxiv = new ArxivSourceProvider({
+  client: { name: 'MyApp', version: '1.2.0', contact: 'https://example.org/contact' },
+  limiter: arxivLimiter(), // one for every caller in the process
+});
+const found = await arxiv.search('treaty dates archival records', { limit: 2 });
+if (found.kind === 'hits' && found.hits[0]) {
+  const paper = await arxiv.read(found.hits[0]); // its title and abstract, under CC0 1.0
+}
+```
+
+`ArxivSourceProvider` reads papers' titles and abstracts through [arXiv's API](https://info.arxiv.org/help/api/user-manual.html), never a paper's own text. `search(phrase, { limit, signal, onSend })` asks the query endpoint (`https://export.arxiv.org/api/query`, the `origin` option for tests) for every word of the phrase in any field (`all:`, up to 12 words, joined with `AND`) and answers at most `limit` papers (2 when left out) as hits keyed by their arXiv id, such as `2301.01234v2`. `read(hit)` asks for that id (`id_list`), takes the entry that is that paper (the version the key names, or for a key with no version, the version the feed gives) and answers a document with `site` and `publisher` "arXiv", `provider` `arxiv`, `kind` `paper`, `url` the abstract page (`https://arxiv.org/abs/<id>`), `revision` the version read, `pageDate` the entry's last update, `licence` CC0 1.0 and as `blocks` the title, then the abstract's paragraphs. The answer is read from the API's Atom feed: each `<entry>`'s `<id>`, `<title>`, `<summary>` (the abstract) and `<updated>` ([the manual's "Details of Atom Results Returned"](https://info.arxiv.org/help/api/user-manual.html#_details_of_atom_results_returned)). arXiv's error entry, an answer that is not a whole feed (one cut short included), a key that is not an arXiv id (no request), a 429 or 503 (which blocks the limiter until `Retry-After`) and any other failure answer `failed` or `skipped`, as for Wikipedia.
+
+arXiv's [terms of use for its APIs](https://info.arxiv.org/help/api/tou.html) ask for "no more than one request every three seconds" and "a single connection at a time", across "all of the machines under your control as a whole", and put descriptive metadata, title and abstract among it, under CC0 1.0. The provider takes the host's limiter and has no default: `arxivLimiter()` holds the rule within one process (one request at a time, 3,000 ms between two starts, a wait of up to 3,500 ms for its turn, so a read straight after its search is sent about three seconds later), and a host of several processes or machines passes a limiter that holds it across them. Each request's deadline, `timeoutMs` (3,000), counts from the moment its `onSend` is called, so it covers the host's own wait there, an `onSend` that never settles included, the limiter's spacing after it, the request and its body; `maxBytes` (1,000,000) caps an answer, refused as it streams. A request past either is aborted and its slot in the limiter released, so a stalled answer never holds the limiter for the next search.
+
 ## A document's fields
 
 A `SourceDocument` is what a provider's `read` answers: `site` (the source's name as a reader sees it), `key`, `title`, `url` (the address an attribution links to), `revision` (null when the source names none), `readAt` (when it was fetched, in milliseconds), `licence` (`name` and `url`) and `blocks`. Two fields are optional, for a source that reads them from the page: `publisher`, the site's name as the page states it, and `pageDate`, the page's own date in milliseconds. Wikipedia's provider sets neither; `@framers/agentos-ext-citation-check`'s web page source sets each where a page states it.
@@ -143,9 +162,10 @@ isSourceWord('Brave.Search'); // false
 | `SourceLimiter`, `LimiterRefused`, `retryAfterMs` | The limiter, its refusal and the `Retry-After` reading |
 | `htmlToBlocks(html, { budget, mode })` | HTML as blocks of plain text, white space collapsed, in NFC: an article's prose (`article`, the default) or everything a page shows (`page`) |
 | `citationSources(document, cut)` | A fetched article as passages with their attribution and place |
+| `ArxivSourceProvider`, `arxivLimiter()`, `ARXIV_LICENCE`, `ARXIV_ORIGIN`, `ARXIV_QUERY_PATH` | arXiv's provider, a limiter that keeps arXiv's rule in one process, the licence of its metadata, and the endpoint |
 | `kindOfHost(host, overrides?)`, `SOURCE_KINDS`, `isSourceWord(word)` | A page's kind by its host, the kinds it answers, and the words a provider or a kind may be |
 | `wikipediaUserAgent`, `articleUrl`, `WIKIPEDIA_LICENCE`, `SEARCH_PATH`, `PAGE_PATH` | The User-Agent, the article's address, the licence and the paths the provider uses |
-| `SourceHit`, `SourceDocument`, `CitationSource`, `SourceKind`, `SourceLicence`, `SearchOutcome`, `ReadOutcome`, `CallOptions`, `WikipediaOptions`, `WikipediaClient`, `LimiterOptions`, `BlockMode`, `HtmlToBlocksOptions` | The types of the hits, documents, passages, outcomes and options |
+| `SourceHit`, `SourceDocument`, `CitationSource`, `SourceKind`, `SourceLicence`, `SearchOutcome`, `ReadOutcome`, `CallOptions`, `WikipediaOptions`, `WikipediaClient`, `ArxivOptions`, `LimiterOptions`, `BlockMode`, `HtmlToBlocksOptions` | The types of the hits, documents, passages, outcomes and options |
 
 ## License
 
