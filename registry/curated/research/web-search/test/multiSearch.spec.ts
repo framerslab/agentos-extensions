@@ -851,3 +851,63 @@ describe('multiSearch: the rate limit counts a wiki request when its limiter sta
     expect(asked).toHaveLength(3);
   });
 });
+
+describe('multiSearch: a held unit counts only while its request can still leave', () => {
+  it.each([
+    ['no deadline', undefined],
+    ['a deadline', 60_000],
+  ])("a replacement started in the caller's abort handler, while a wiki request holds the last unit, is sent (%s)", async (_label, deadlineMs) => {
+    let inHook: () => void = () => {};
+    const hooked = new Promise<void>((resolve) => {
+      inHook = resolve;
+    });
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter: new SourceLimiter({ spacingMs: 0 }), origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    const controller = new AbortController();
+    let replacement: ReturnType<SearchProviderService['multiSearch']> | undefined;
+    // The caller's own handler, added before the call, runs before any listener the call adds to the signal.
+    controller.signal.addEventListener('abort', () => {
+      replacement = wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false });
+    });
+    const pending = wiki.multiSearch('Treaty of Versailles', {
+      providers: ['wikipedia'],
+      fallback: false,
+      signal: controller.signal,
+      ...(deadlineMs === undefined ? {} : { deadlineMs }),
+      // The hook never answers: the request holds the last unit until the abort ends it, and never leaves.
+      onSend: () => {
+        inHook();
+        return new Promise<boolean>(() => {});
+      },
+    });
+    await hooked;
+    const reason = new Error('the caller stopped');
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    if (replacement === undefined) throw new Error('the abort handler did not run');
+    expect((await replacement).metadata.outcomes).toEqual({ wikipedia: 'answered' });
+    expect(asked.map((one) => one.provider)).toEqual(['wikipedia']);
+  });
+
+  it('a replacement started once the clock passes a held wiki request’s deadline, before its timer runs, is sent', async () => {
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter: new SourceLimiter({ spacingMs: 0 }), origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    let replacement: ReturnType<SearchProviderService['multiSearch']> | undefined;
+    const first = await wiki.multiSearch('Treaty of Versailles', {
+      providers: ['wikipedia'],
+      fallback: false,
+      deadlineMs: 50,
+      // The hook holds the thread past the deadline, so no timer has run, then starts a replacement and answers true.
+      onSend: () => {
+        const until = Date.now() + 80;
+        while (Date.now() < until) {
+          // Holding the thread.
+        }
+        replacement = wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false });
+        return true;
+      },
+    });
+    expect(first.metadata.outcomes).toEqual({ wikipedia: 'late' });
+    if (replacement === undefined) throw new Error('the hook did not run');
+    expect((await replacement).metadata.outcomes).toEqual({ wikipedia: 'answered' });
+    expect(asked.map((one) => one.provider)).toEqual(['wikipedia']);
+  });
+});
