@@ -1232,7 +1232,9 @@ export class SearchProviderService {
               resolve('late');
             }, Math.max(0, deadlineAt - Date.now()));
           });
-    const own = anyOf([options.signal, deadline?.signal]);
+    // The signal this call started with, whatever the caller later does to its options object.
+    const callerSignal = options.signal;
+    const own = anyOf([callerSignal, deadline?.signal]);
     /** Whether the deadline has passed by the clock, which a thread held past it reads before the timer can run. */
     const pastDeadline = (): boolean => {
       if (deadline === undefined) return false;
@@ -1245,7 +1247,7 @@ export class SearchProviderService {
      * run) and the deadline by the clock (its timer may not have run yet).
      */
     const canLeave = (): boolean =>
-      options.signal?.aborted !== true && (deadline === undefined || (!deadline.signal.aborted && Date.now() < deadlineAt));
+      callerSignal?.aborted !== true && (deadline === undefined || (!deadline.signal.aborted && Date.now() < deadlineAt));
     /** Throws when the request may no longer leave: the caller aborted, or the deadline passed. */
     const halt = (): void => {
       pastDeadline();
@@ -1333,7 +1335,7 @@ export class SearchProviderService {
       (results) => (pastDeadline() ? end('late') : end(results.length > 0 ? 'answered' : 'empty', results)),
       (error: unknown) => {
         // The clock first, as on an answer: a hook that held the thread past the deadline is late whatever it said.
-        if (pastDeadline() && options.signal?.aborted !== true) return end('late');
+        if (pastDeadline() && callerSignal?.aborted !== true) return end('late');
         const thrown = error instanceof CallerStop ? error.error : error;
         if (thrown === SKIPPED) return end('skipped');
         if (isRefusal(thrown)) return end('limited');
