@@ -243,6 +243,44 @@ describe('ClaimChecker.check', () => {
     expect(asked.map((one) => one.prompt).join('\n')).not.toContain('Jane Roe');
   });
 
+  it('a passage the host edits while the judge is pending is decided, marked and cited as it was read', async () => {
+    const { embed } = fakeEmbed();
+    const lead = passage(LEAD, 'encyclopedia:Treaty_of_Versailles');
+    const url = lead.url;
+    const asked: string[] = [];
+    // The host corrects the passage while the judge answers about it.
+    const judge: ClaimJudge = async ({ prompt }) => {
+      asked.push(prompt);
+      lead.content = 'The Treaty of Versailles was a peace treaty signed in 1918.';
+      lead.url = 'https://elsewhere.example.org/treaty';
+      lead.title = 'Elsewhere';
+      return { value: { relation: 'differs', quote: QUOTE }, usage: { in: 1, out: 1 } };
+    };
+    const outcome = await new ClaimChecker({ embed, judge, checker }).check(CLAIM, [lead], { signal: signal() });
+    expect(outcome.kind).toBe('decided');
+    if (outcome.kind !== 'decided') return;
+    expect(outcome.named).toBe(lead);
+    expect(outcome.decision.texts).toEqual([LEAD]);
+    const mark = outcome.decision.marks[0];
+    expect(mark === null || mark === undefined ? '' : outcome.decision.texts[0]?.slice(mark.start, mark.end)).toBe('1919');
+    expect(outcome.verdict.sourceRef).toBe(url);
+  });
+
+  it('a passage the host replaces right after the call is judged and cited as it was when the call began', async () => {
+    const { embed, batches } = fakeEmbed();
+    const { judge, asked } = fakeJudge({ relation: 'differs', quote: QUOTE });
+    const lead = passage(LEAD, 'encyclopedia:Treaty_of_Versailles');
+    const url = lead.url;
+    const pending = new ClaimChecker({ embed, judge, checker }).check(CLAIM, [lead], { signal: signal() });
+    lead.content = 'Something else entirely, about Versailles.';
+    lead.url = 'https://elsewhere.example.org/other';
+    lead.title = 'Elsewhere';
+    const outcome = await pending;
+    expect(batches).toEqual([[CLAIM.statement, LEAD]]);
+    expect(asked[0]?.prompt).toBe(claimJudgePrompt(CLAIM.heardSentence, CLAIM.statement, 'Treaty of Versailles', LEAD));
+    expect(outcome.kind === 'decided' ? outcome.verdict.sourceRef : null).toBe(url);
+  });
+
   it('compares at most maxPassages passages, in the order the checker ranks them', async () => {
     const { embed, batches } = fakeEmbed();
     const { judge } = fakeJudge({ relation: 'none', quote: '' });
