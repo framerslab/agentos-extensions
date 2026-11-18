@@ -17,6 +17,7 @@
  */
 
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
+import { decodeHTMLAttribute } from 'entities';
 import { citationSources, htmlToBlocks, type CitationSource, type SourceDocument, type SourceLicence } from '@framers/agentos-ext-public-sources';
 import { browserHeaders, type ScrapeInput, type ScrapeResult } from '@framers/agentos-ext-web-scraper';
 import { collapse, sentenceSpans } from '@framers/agentos-ext-grounding-guard/values';
@@ -530,7 +531,8 @@ export interface PageReaderOptions {
    * Whether to read the page's icon once its text is read: from the page's own origin alone, after its redirects (its
    * first `<link rel="icon">` at that origin that is not an SVG, by its `type` or its address, else that origin's
    * `/favicon.ico`, never a declared icon at another host), through the same transport, under `allowUrl` and `robots`,
-   * under a deadline of its own (`timeoutMs`, as each request has), at most `iconMaxBytes` read. A PNG, ICO, JPEG or WebP
+   * under a deadline of its own (`timeoutMs`, as each request has, so it can add up to `timeoutMs` to the read), at
+   * most `iconMaxBytes` read. A PNG, ICO, JPEG or WebP
    * whose data address holds at most 8,192 characters is kept on the document and on each passage as `icon`; any other
    * answer, a refusal or a failure leaves the icon out, and the page is read as it is without one. Not read when left out.
    */
@@ -582,9 +584,10 @@ function pageMeta(html: string | null, finalUrl: string, lastModified: string | 
   const scan = scanMarkup(html, finalUrl);
   const nodes = jsonLdNodes(scan.jsonLd);
   // As every address the page writes: its character references read (`&amp;` is `&`), resolved against the page's. An
-  // SVG, which the reader could not keep, is passed over, by its declared type or its address, for the next icon.
+  // SVG, which the reader could not keep, is passed over, by its declared type (its references read) or its address,
+  // for the next icon.
   const icons = scan.icons
-    .filter((attributes) => mediaType(attributes.get('type') ?? null) !== 'image/svg+xml')
+    .filter((attributes) => mediaType(decodeHTMLAttribute(attributes.get('type') ?? '')) !== 'image/svg+xml')
     .map((attributes) => resolveHttp(attributes.get('href'), finalUrl))
     .filter((href): href is string => href !== null && !drawnIcon(href));
   return { title: pageTitle(scan), publisher: publisherOf(scan.metas, nodes), pageDate: pageDateOf(scan.metas, nodes, lastModified), licence: licenceOf(scan, nodes, finalUrl), icons };
