@@ -109,7 +109,7 @@ Four more optional fields label the source:
 | `kind` | What kind of source it is: an open word | `'encyclopedia'` |
 | `icon` | The site's icon as a data address (PNG, ICO, JPEG or WebP) of at most 8,192 characters | not set |
 
-`citationSources` copies each of them a document has onto every passage, `foundThrough` as a list of the passage's own. `@framers/agentos-ext-citation-check`'s web page source sets `provider`, `foundThrough` and `kind` for a page, and `icon` when the host asks for it.
+`citationSources` copies each of them a document has onto every passage, `foundThrough` as a list of the passage's own. `@framers/agentos-ext-citation-check`'s web page source sets `kind` for every page it reads, `provider` and `foundThrough` for a page its search answered with at least one finder named, and `icon` when the host asks for it. A page the search answered as a bare address carries no `provider` or `foundThrough`, so a reader of a document handles both fields being absent.
 
 ## A source's kind
 

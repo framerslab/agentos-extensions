@@ -873,6 +873,8 @@ export async function readPage(url: string, options: PageReaderOptions): Promise
   const page = await readPageText(url, options);
   if (options.icon !== true || page.document === null) return page;
   const icon = await readIcon(page.document.url, declaredIcons.get(page) ?? [], options);
+  // A cancellation that came while the icon's answer was put away, which ends no request, still ends the read.
+  options.signal?.throwIfAborted();
   if (icon === null) return page;
   return { ...page, document: { ...page.document, icon }, passages: page.passages.map((passage) => ({ ...passage, icon })) };
 }
