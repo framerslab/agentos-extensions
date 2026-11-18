@@ -22,7 +22,7 @@ import { browserHeaders, type ScrapeInput, type ScrapeResult } from '@framers/ag
 import { collapse, sentenceSpans } from '@framers/agentos-ext-grounding-guard/values';
 import { licenceOf } from './licence.js';
 import { withoutInvisible } from './match.js';
-import { cutText, jsonLdNodes, pageDateOf, pageTitle, publisherOf, scanMarkup } from './meta.js';
+import { cutText, jsonLdNodes, pageDateOf, pageTitle, publisherOf, resolveHttp, scanMarkup } from './meta.js';
 import { readRobots, robotsAllows, type RobotsRule } from './robots.js';
 import type { CitationLogger, PageFailure, PageStatus } from './types.js';
 
@@ -64,12 +64,20 @@ export interface TransportRules {
   robots?: RobotsRule;
 }
 
+/** What one request's caller will read of its answer. */
+export interface TransportLimits {
+  /** The most bytes of the body the caller reads: a transport that holds the body before `read` refuses it past them. */
+  maxBytes?: number;
+}
+
 /**
  * One GET of an address under a signal. Given rules, the transport applies them to the address and to every redirect
  * target before its request, and throws {@link PageRefusal} for one they refuse; a transport of the host's own that
- * follows redirects applies them too, or the reader checks the first address alone.
+ * follows redirects applies them too, or the reader checks the first address alone. Given limits, a transport that
+ * downloads the body before `read` (as the checked egress does) stops at them; one that streams it in `read` needs
+ * nothing more, since `read(cap)` stops there.
  */
-export type Transport = (url: string, signal: AbortSignal, rules?: TransportRules) => Promise<TransportAnswer>;
+export type Transport = (url: string, signal: AbortSignal, rules?: TransportRules, limits?: TransportLimits) => Promise<TransportAnswer>;
 
 /** A failure a transport names itself, such as the egress policy's refusal. */
 export class PageRefusal extends Error {
@@ -324,16 +332,22 @@ export async function egressTransport(profile: EgressProfile, bounds: { timeoutM
   const egress = await import('@framers/agentos/safety/egress').catch(() => {
     throw new Error('reading pages through checked egress needs @framers/agentos 0.13.120 or later; update it, or pass a fetch');
   });
-  const policy =
+  const policyFor = (maxBytes: number) =>
     profile === 'local'
-      ? egress.localEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: bounds.maxBytes })
-      : egress.hostedEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: bounds.maxBytes });
-  const transport: Transport = async (url, signal, rules) => {
+      ? egress.localEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: maxBytes })
+      : egress.hostedEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: maxBytes });
+  const policy = policyFor(bounds.maxBytes);
+  const transport: Transport = async (url, signal, rules, limits) => {
+    // A caller that reads fewer bytes than the bounds, such as an icon's read, has the body refused past them as it
+    // arrives, so no more of it is downloaded.
+    const wanted = limits?.maxBytes;
+    const cap = wanted !== undefined && Number.isInteger(wanted) && wanted >= 0 && wanted < bounds.maxBytes ? wanted : bounds.maxBytes;
+    const requestPolicy = cap === bounds.maxBytes ? policy : policyFor(cap);
     let current = url;
     for (let hop = 0; ; hop += 1) {
       if (hasRules(rules)) await checkAddress(current, rules, transport, signal);
       const answer = await egress
-        .checkedRequest({ url: current, method: 'GET', headers: requestHeaders(userAgent, 'identity'), policy, signal, onRedirect: 'return' })
+        .checkedRequest({ url: current, method: 'GET', headers: requestHeaders(userAgent, 'identity'), policy: requestPolicy, signal, onRedirect: 'return' })
         .catch((error: unknown) => {
           throw egressFailure(error) ?? error;
         });
@@ -344,7 +358,7 @@ export async function egressTransport(profile: EgressProfile, bounds: { timeoutM
         current = redirectTarget(location, current);
         continue;
       }
-      const body = answer.status >= 200 && answer.status < 300 ? decodedBody(answer.body, headerOf(headers, 'content-encoding'), bounds.maxBytes) : answer.body;
+      const body = answer.status >= 200 && answer.status < 300 ? decodedBody(answer.body, headerOf(headers, 'content-encoding'), cap) : answer.body;
       return {
         status: answer.status,
         finalUrl: current,
@@ -528,7 +542,7 @@ interface PageMeta {
   publisher: string | null;
   pageDate: number | null;
   licence: SourceLicence | null;
-  /** The addresses its `<link rel="icon">`s declare, as written, in document order. */
+  /** The addresses its `<link rel="icon">`s declare, their references read and resolved, in document order. */
   icons: string[];
 }
 
@@ -537,7 +551,8 @@ function pageMeta(html: string | null, finalUrl: string, lastModified: string | 
   if (html === null) return { title: null, publisher: null, pageDate: pageDateOf(new Map(), [], lastModified), licence: null, icons: [] };
   const scan = scanMarkup(html, finalUrl);
   const nodes = jsonLdNodes(scan.jsonLd);
-  const icons = scan.icons.map((attributes) => (attributes.get('href') ?? '').trim()).filter((href) => href !== '');
+  // As every address the page writes: its character references read (`&amp;` is `&`), resolved against the page's.
+  const icons = scan.icons.map((attributes) => resolveHttp(attributes.get('href'), finalUrl)).filter((href): href is string => href !== null);
   return { title: pageTitle(scan), publisher: publisherOf(scan.metas, nodes), pageDate: pageDateOf(scan.metas, nodes, lastModified), licence: licenceOf(scan, nodes, finalUrl), icons };
 }
 
@@ -783,7 +798,8 @@ async function readIcon(pageUrl: string, declared: readonly string[], options: P
   try {
     // A transport of the host's own may apply no rules, so the address is checked here before it is asked.
     if (!checkingTransports.has(options.transport)) await checkAddress(address, rules, options.transport, signal);
-    answer = await options.transport(address, signal, rules);
+    // The cap goes with the request, so a transport that holds the body before `read` stops at it too.
+    answer = await options.transport(address, signal, rules, { maxBytes: cap });
   } catch {
     if (options.signal?.aborted) throw options.signal.reason;
     return null;
