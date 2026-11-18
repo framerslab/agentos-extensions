@@ -272,6 +272,16 @@ function snapshot(): <P extends ClaimPassage>(passage: P) => PassageSentence<P> 
   };
 }
 
+/** The first sentence of each text, in order. */
+function firstOfEachText<S extends { text: string }>(sentences: readonly S[]): S[] {
+  const seen = new Set<string>();
+  return sentences.filter((sentence) => {
+    if (seen.has(sentence.text)) return false;
+    seen.add(sentence.text);
+    return true;
+  });
+}
+
 /** `a`, then each of `b` not in it. */
 function unite<T>(a: readonly T[], b: readonly T[]): T[] {
   const seen = new Set(a);
@@ -378,7 +388,8 @@ export class ClaimChecker {
    * 1. the grounding guard's `passages` keeps the sentences of `given` about the claim; none ends `no_passage`, with
    *    nothing sent anywhere;
    * 2. AgentOS's `CitationVerifier`, both its thresholds 0 and its `embedFn` the host's `embed` (one call for the claim
-   *    and the first `maxPassages` sentences kept), names the best of them by cosine; none ends `no_best`;
+   *    and the first `maxPassages` sentences kept, one a text: a text two sources share is compared as the first of
+   *    them, whose title and kind the judge then reads), names the best of them by cosine; none ends `no_best`;
    * 3. the judge is asked once about that sentence, under {@link claimJudgeSystem} for its kind, with
    *    {@link claimJudgePrompt}; `none` ends `judge_none`;
    * 4. the judge's quote must hold one to {@link CLAIM_QUOTE_MAX_WORDS} words and stand in the sentence word for word
@@ -417,17 +428,13 @@ export class ClaimChecker {
     // 1. The sentences about the claim that may be sent.
     const kept = this.checker.passages(claim.heard, given.map((passage) => sentenceOf(passage))).found;
     if (kept.length === 0) return ended('no_passage');
-    const compared = kept.slice(0, this.maxPassages);
+    // One passage a text, the first found: the verifier hands its NLI function the text alone, so the judge reads the
+    // title and the kind of the very passage the outcome names. Every passage found still meets the rule in step 5.
+    const compared = firstOfEachText(kept).slice(0, this.maxPassages);
     const found = unite(kept, (options.found ?? []).map((passage) => sentenceOf(passage)));
 
-    // The title and the kind the judge reads, by the sentence the verifier hands its NLI function: a text two passages
-    // of different titles or kinds share reads as no title, and as a source of no known kind.
-    const about = new Map<string, { title: string; kind: string }>();
-    for (const sentence of compared) {
-      const known = about.get(sentence.text);
-      const { title, kind } = sentence;
-      about.set(sentence.text, known === undefined ? { title, kind } : { title: known.title === title ? title : '', kind: known.kind === kind ? kind : '' });
-    }
+    // The title and the kind the judge reads, by the sentence the verifier hands its NLI function.
+    const about = new Map(compared.map((sentence) => [sentence.text, { title: sentence.title, kind: sentence.kind }] as const));
 
     const [{ CitationVerifier }, { verifyQuotes }] = await untilAbort(
       Promise.all([import('@framers/agentos/cognition/rag/citation/index'), import('@framers/agentos-ext-grounding-guard')]),
