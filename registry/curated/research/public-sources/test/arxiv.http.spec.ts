@@ -185,6 +185,42 @@ describe('ArxivSourceProvider.search', () => {
     expect((await arxiv.search('treaty')).kind).toBe('hits');
   }, 2_000);
 
+  it('rejects with nothing left unhandled for an onSend that aborts the call and throws at once', async () => {
+    const stray: unknown[] = [];
+    const note = (error: unknown): void => {
+      stray.push(error);
+    };
+    process.on('unhandledRejection', note);
+    try {
+      const controller = new AbortController();
+      const reason = new Error('the caller stopped');
+      const pending = provider().search('treaty', {
+        signal: controller.signal,
+        onSend: () => {
+          controller.abort(reason);
+          controller.signal.throwIfAborted();
+        },
+      });
+      await expect(pending).rejects.toBe(reason);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(stray).toEqual([]);
+      expect(asked).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', note);
+    }
+  });
+
+  it('calls onSend on the options object it was given', async () => {
+    const options = {
+      count: 0,
+      onSend(this: { count: number }) {
+        this.count += 1;
+      },
+    };
+    expect((await provider().search('treaty', options)).kind).toBe('hits');
+    expect(options.count).toBe(1);
+  });
+
   it('sends nothing for an onSend that settles after the deadline', async () => {
     const outcome = await provider({ timeoutMs: 80 }).search('treaty', { onSend: () => new Promise<void>((resolve) => setTimeout(resolve, 200)) });
     expect(outcome).toEqual({ kind: 'failed', status: null });
@@ -305,6 +341,14 @@ describe('ArxivSourceProvider.read', () => {
     expect(await provider().read({ key: '2301.01234v1', title: 'x' })).toEqual({ kind: 'skipped', status: 200 });
     const latest = await provider().read({ key: '2301.01234', title: 'x' });
     expect(latest).toMatchObject({ kind: 'document', document: { key: '2301.01234v2', revision: 'v2', url: 'https://arxiv.org/abs/2301.01234v2' } });
+  });
+
+  it('asks for an older id by its preferred form and reads the paper the feed names by it', async () => {
+    script = (response) => atom(response, feed([{ id: 'math/0611800v2', title: 'An older paper', summary: 'Its abstract.' }]));
+    const paper = await provider().read({ key: 'math.CA/0611800v2', title: 'x' });
+    expect(asked[0]?.query.get('id_list')).toBe('math/0611800v2');
+    expect(paper).toMatchObject({ kind: 'document', document: { key: 'math/0611800v2', url: 'https://arxiv.org/abs/math/0611800v2', revision: 'v2' } });
+    expect(await provider().read({ key: 'math.CA/0611800v1', title: 'x' })).toEqual({ kind: 'skipped', status: 200 });
   });
 
   it('skips a feed cut short', async () => {
