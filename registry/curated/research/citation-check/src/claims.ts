@@ -91,6 +91,11 @@ export interface ClaimCheckerOptions {
 export type ClaimDecision<P extends ClaimPassage = ClaimPassage> = Omit<Decision, 'sentences'> & {
   /** The passages the relation rests on: one for "matches" and "differs", two for "disagree". */
   sentences: P[];
+  /**
+   * Each passage's text as the call read it, at the same index as `sentences`: the text `marks` and `pairs` index, and
+   * the text that was compared, whatever the host has done to the passage since.
+   */
+  texts: string[];
 };
 
 /**
@@ -109,9 +114,12 @@ export type ClaimCheckOutcome<P extends ClaimPassage = ClaimPassage> =
   | { kind: 'decided'; decision: ClaimDecision<P>; named: P; quote: string; verdict: ClaimVerdict; judged: number; usage: ClaimUsage }
   | { kind: 'ended'; reason: 'no_passage' | 'no_best' | 'judge_none' | 'quote' | 'undecided'; judged: number; usage: ClaimUsage };
 
-/** A passage as the grounding guard's sentence, with the passage it stands for. */
+/** A passage as the grounding guard's sentence, as the call read it, with the passage it stands for. */
 interface PassageSentence<P extends ClaimPassage> extends SourceSentence {
   passage: P;
+  title: string;
+  kind: string;
+  url: string | undefined;
 }
 
 /** The judge's instruction's words for a kind of source: what the sentence is from, and the title above it. */
@@ -257,7 +265,7 @@ function snapshot(): <P extends ClaimPassage>(passage: P) => PassageSentence<P> 
   return <P extends ClaimPassage>(passage: P): PassageSentence<P> => {
     let sentence = sentences.get(passage);
     if (sentence === undefined) {
-      sentence = { text: passage.content, group: passage.group, passage };
+      sentence = { text: passage.content, group: passage.group, title: passage.title, kind: passage.kind, url: passage.url, passage };
       sentences.set(passage, sentence);
     }
     return sentence as PassageSentence<P>;
@@ -320,10 +328,10 @@ export class ClaimChecker {
   private readonly checker: ClaimCheckerOptions['checker'];
   private readonly maxPassages: number;
   /**
-   * What a decided check keeps for `agree` and `revisit`, by the outcome `check` answered: every passage it found (the
-   * held-back ones among them) and the decided sentence's text as it was decided, which the decision's offsets read.
+   * What a decided check keeps for `agree` and `revisit`, by the outcome `check` answered: every passage it found, the
+   * held-back ones among them.
    */
-  private readonly decided = new WeakMap<object, { found: ClaimPassage[]; text: string }>();
+  private readonly decided = new WeakMap<object, { found: ClaimPassage[] }>();
 
   /**
    * @param options - The embeddings call, the judge, the grounding guard's checker, and the most passages compared.
@@ -338,9 +346,13 @@ export class ClaimChecker {
     this.maxPassages = maxPassages;
   }
 
-  /** A decision with the host's passages in place of the grounding guard's sentences. */
+  /** A decision with the host's passages in place of the grounding guard's sentences, and their texts as read. */
   private toHost<P extends ClaimPassage>(decision: Decision): ClaimDecision<P> {
-    return { ...decision, sentences: decision.sentences.map((sentence) => (sentence as PassageSentence<P>).passage) };
+    return {
+      ...decision,
+      sentences: decision.sentences.map((sentence) => (sentence as PassageSentence<P>).passage),
+      texts: decision.sentences.map((sentence) => sentence.text),
+    };
   }
 
   /** Every passage found for a decided check; the decision's own passages when the outcome is not one `check` answered. */
@@ -402,7 +414,7 @@ export class ClaimChecker {
     const about = new Map<string, { title: string; kind: string }>();
     for (const sentence of compared) {
       const known = about.get(sentence.text);
-      const { title, kind } = sentence.passage;
+      const { title, kind } = sentence;
       about.set(sentence.text, known === undefined ? { title, kind } : { title: known.title === title ? title : '', kind: known.kind === kind ? kind : '' });
     }
 
@@ -452,7 +464,7 @@ export class ClaimChecker {
     const verified = await untilAbort(
       verifier.verify(
         [claim.statement],
-        compared.map((sentence) => ({ content: sentence.text, title: sentence.passage.title, ...(sentence.passage.url === undefined ? {} : { url: sentence.passage.url }) })),
+        compared.map((sentence) => ({ content: sentence.text, title: sentence.title, ...(sentence.url === undefined ? {} : { url: sentence.url }) })),
       ),
       signal,
     );
@@ -484,7 +496,7 @@ export class ClaimChecker {
       judged: state.judged,
       usage: { ...usage },
     };
-    this.decided.set(outcome, { found: found.map((sentence) => sentence.passage), text: decision.sentences[0]?.text ?? named.text });
+    this.decided.set(outcome, { found: found.map((sentence) => sentence.passage) });
     return outcome;
   }
 
@@ -514,7 +526,7 @@ export class ClaimChecker {
     const lead = firstPairs[0];
     if (lead === undefined) return [];
     // The first decision's marks and pairs are offsets into its sentence as it was decided.
-    const firstSentence = this.decided.get(first)?.text ?? (decision.sentences[0] ?? first.named).content;
+    const firstSentence = decision.texts?.[0] ?? (decision.sentences[0] ?? first.named).content;
     // Every passage as it is now, the first check's included (a host may have changed one since).
     const sentenceOf = snapshot();
     const later = more.map((passage) => sentenceOf(passage));

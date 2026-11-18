@@ -263,7 +263,8 @@ const outcome = await checker.check(
   passages,
   { signal: AbortSignal.timeout(10_000) },
 );
-// outcome.kind 'decided': outcome.decision.relation 'differs', the pair 1918 beside 1919, outcome.named the passage,
+// outcome.kind 'decided': outcome.decision.relation 'differs', the pair 1918 beside 1919 (offsets into
+// outcome.decision.texts[0], the sentence as read), outcome.named the passage,
 // outcome.quote 'signed on 28 June 1919', outcome.verdict the verifier's ClaimVerdict, outcome.usage the tokens
 // outcome.kind 'ended': outcome.reason 'no_passage' | 'no_best' | 'judge_none' | 'quote' | 'undecided'
 ```
@@ -299,7 +300,7 @@ Passages that arrive after the first decision, from slower sources, are decided 
 
 In both, every passage of `more` and `found` takes part in the veto, as `check`'s `found` does, whatever its length: the 40-word and 600-character limits hold only for a passage that may be sent or join.
 
-Each call reads every passage once, as it is when the call begins, and never again: a host that redacts a passage in place between calls sends only the redacted text from then on, and a change made while a call runs reaches only later calls. `agree` and `revisit` read the first check's passages as they are when they are called, so a passage the host moved to another source is read in that source.
+Each call reads every passage once, as it is when the call begins (its text, group, title, kind and address), and never again: a host that redacts a passage in place between calls sends only the redacted text from then on, and a change made while a call runs reaches only later calls. `agree` and `revisit` read the first check's passages as they are when they are called, so a passage the host moved to another source is read in that source. A decision's `sentences` are the host's own passage objects, and its `texts` hold each one's text as the call read it, at the same index: `marks` and `pairs` index `texts`, whatever the host has done to a passage since.
 
 `usage` counts the judge's tokens in and out and the embeddings' tokens apart; `judged` is the judge calls made (0 or 1). An abort rejects `check` with the signal's reason at once, whatever is pending; a failed embeddings call or judge rejects with its own error.
 
