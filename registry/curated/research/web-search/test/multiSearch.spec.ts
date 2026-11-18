@@ -960,6 +960,34 @@ describe('multiSearch: a held unit counts only while its request can still leave
     expect(retry.metadata.outcomes).toEqual({ wikipedia: 'answered' });
   });
 
+  it('honours an onSend the options object inherits, called on that object', async () => {
+    class Options {
+      providers = ['serper'];
+      fallback = false;
+      calls = 0;
+      onSend(): boolean {
+        this.calls += 1;
+        return false;
+      }
+    }
+    const options = new Options();
+    const answer = await service().multiSearch('Treaty of Versailles', options);
+    expect(answer.metadata.outcomes).toEqual({ serper: 'skipped' });
+    expect(options.calls).toBe(1);
+    expect(asked).toEqual([]);
+  });
+
+  it("rejects with an aborted signal's reason before it reads the other options", async () => {
+    const reason = new Error('the caller stopped');
+    const options = {
+      signal: AbortSignal.abort(reason),
+      get onSend(): () => boolean {
+        throw new Error('onSend was read');
+      },
+    };
+    await expect(service().multiSearch('Treaty of Versailles', options)).rejects.toBe(reason);
+  });
+
   it('a replacement started once the clock passes a held wiki request’s deadline, before its timer runs, is sent', async () => {
     const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter: new SourceLimiter({ spacingMs: 0 }), origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
     let replacement: ReturnType<SearchProviderService['multiSearch']> | undefined;
