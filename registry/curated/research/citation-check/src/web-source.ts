@@ -143,6 +143,8 @@ export class WebPageSourceProvider implements PublicSourceProvider {
   /** The provider words that found each hit this provider's search answered, where the search named them. */
   private readonly finders = new WeakMap<SourceHit, string[]>();
   private readonly iconMaxBytes: number;
+  /** The host's kind overrides, copied and checked when the provider was made. */
+  private readonly kindOverrides: Readonly<Record<string, string>> | undefined;
 
   /**
    * @param options - The host's search and how pages are read.
@@ -160,8 +162,10 @@ export class WebPageSourceProvider implements PublicSourceProvider {
     this.robots = options.robots === undefined ? DEFAULT_ROBOTS : options.robots;
     this.now = options.now ?? Date.now;
     this.iconMaxBytes = whole('iconMaxBytes', options.iconMaxBytes, 65_536);
-    // An override that is not a source word is refused here rather than at the first read.
-    if (options.kindOverrides !== undefined) kindOfHost('', options.kindOverrides);
+    // The overrides as given now, checked once: a host that changes its record later changes no read. An override that
+    // is not a source word is refused here rather than at the first read.
+    this.kindOverrides = options.kindOverrides === undefined ? undefined : Object.freeze({ ...options.kindOverrides });
+    if (this.kindOverrides !== undefined) kindOfHost('', this.kindOverrides);
   }
 
   /** The transport, built once: the host's, or AgentOS's checked egress. */
@@ -269,7 +273,7 @@ export class WebPageSourceProvider implements PublicSourceProvider {
         site,
         revision: null,
         ...(finders !== undefined && finders.length > 0 ? { provider: finders[0] as string, foundThrough: [...finders] } : {}),
-        kind: kindOfHost(site, this.options.kindOverrides),
+        kind: kindOfHost(site, this.kindOverrides),
       },
     };
   }

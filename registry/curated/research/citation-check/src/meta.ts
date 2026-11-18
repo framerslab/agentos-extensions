@@ -200,7 +200,8 @@ export function scanMarkup(html: string, baseUrl: string): MarkupScan {
 
 /** Whether an element's `rel` names a link type, its tokens read without case. */
 export function relNames(attributes: Attributes, type: string): boolean {
-  return (attributes.get('rel') ?? '').toLowerCase().split(/\s+/u).includes(type);
+  // Its character references read first: `rel="&#105;con"` names the icon as `rel="icon"` does.
+  return decodeHTMLAttribute(attributes.get('rel') ?? '').toLowerCase().split(/\s+/u).includes(type);
 }
 
 /** An address as an attribute writes it, its references read and resolved against the page's own; null when it does not parse or is not http or https. */
