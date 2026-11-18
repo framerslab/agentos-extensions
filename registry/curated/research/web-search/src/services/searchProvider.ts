@@ -215,8 +215,8 @@ export interface MultiSearchResult extends SearchResult {
  * What became of one provider in a `multiSearch`:
  * - `answered`: it returned at least one result;
  * - `empty`: it returned without an error and with no result;
- * - `failed`: its request failed (an error status, a network error, a body that would not parse, Tavily's or
- *   Firecrawl's own 15-second timer);
+ * - `failed`: its request failed (an error status, a network error, a body that would not parse, Firecrawl's
+ *   `success: false`, Tavily's or Firecrawl's own 15-second timer);
  * - `late`: it had not answered by `deadlineMs`, so its request was aborted and its results dropped;
  * - `skipped`: nothing was sent to it, because it is not configured or `onSend` answered `false` or threw;
  * - `limited`: nothing was sent to it, because the service's rate limit or the wiki's limiter refused it.
@@ -1065,6 +1065,9 @@ export class SearchProviderService {
         success: boolean;
         data?: Array<{ url: string; title?: string; description?: string; markdown?: string }>;
       };
+      // Firecrawl answers a refusal it reports in the body (no credits left, a bad request) with `success: false`: a
+      // failure to a `multiSearch`, which never reads one as a search that found nothing. A `search` reads it as before.
+      if (strict && data.success === false) throw new Error('Firecrawl answered success: false');
 
       return (data.data ?? []).map((r, i) => ({
         title: r.title ?? r.url,
