@@ -156,6 +156,8 @@ const response = await search.multiSearch('Treaty of Versailles signed', {
 | `perProvider` | How many results each provider is asked for. `maxResults` stays the cap on the merged list, so a host that filters the merged list passes a cap that drops nothing. | `maxResults` |
 | `maxResults` | The most results the merged list answers. | 10 |
 
+The call reads its options once, when it is called, the signal first: an aborted signal rejects before any other option is read. `onSend` is called on the options object, so a method the object inherits keeps its `this`, and a hook that changes the options object changes nothing for the call already running.
+
 `metadata.outcomes` names what became of each provider queried:
 
 | Outcome | Meaning |
