@@ -30,7 +30,7 @@ beforeAll(async () => {
     }
     if (path === '/history') {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      response.end(htmlPage('<title>Port history</title><link rel="icon" href="/big.png">', '<p>The harbour opened in 1887.</p>'));
+      response.end(htmlPage('<title>Port history</title><link rel="icon" href="/big.png">', '<p>The harbour opened in 1887.</p>').body as string);
       return;
     }
     if (path !== '/big.png') {
