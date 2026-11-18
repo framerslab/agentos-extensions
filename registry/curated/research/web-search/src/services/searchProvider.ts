@@ -223,7 +223,9 @@ export interface MultiSearchResult extends SearchResult {
  *
  * A request is counted against the service's rate limit only when it leaves, so a skipped or late provider spends none.
  * A wiki request holds its unit from the moment its limiter grants it, before its `onSend`, until it leaves or ends
- * unsent, so a request beside it is refused before its limiter stamps a start.
+ * unsent, so a request beside it is refused before its limiter stamps a start. The unit counts only while the request
+ * can still leave: once the caller has aborted or the deadline has passed by the clock, a request beside it finds the
+ * unit free, before any listener or timer of the held request has run.
  */
 export type ProviderOutcome = 'answered' | 'empty' | 'failed' | 'late' | 'skipped' | 'limited';
 
@@ -334,8 +336,11 @@ function anyOf(signals: Array<AbortSignal | undefined>): AbortSignal | undefined
 export class SearchProviderService {
   private config: SearchProviderConfig;
   private rateLimitState: Map<string, RateWindow>;
-  /** Units of each provider's rate limit held by wiki requests past their `onSend` that have not left yet. */
-  private readonly rateLimitHeld = new Map<string, number>();
+  /**
+   * Units of each provider's rate limit held by wiki requests past their `onSend` that have not left yet, each as a
+   * check of whether its request can still leave.
+   */
+  private readonly rateLimitHeld = new Map<string, Set<() => boolean>>();
   /** The `wikipedia` provider, built once when the config enables it. */
   private wikipedia: WikipediaSourceProvider | null = null;
   private wikipediaLimiter: RefusalKeeper | null = null;
@@ -589,11 +594,18 @@ export class SearchProviderService {
     return this.takeRateLimit(provider);
   }
 
-  /** Whether a provider is within its rate limit, counting nothing: the units held for requests not yet sent count. */
+  /**
+   * Whether a provider is within its rate limit, counting nothing: the units held for requests not yet sent count, each
+   * only while its request can still leave.
+   */
   private rateLimitOpen(provider: string): boolean {
     const state = this.rateLimitState.get(provider);
     const counted = state === undefined || Date.now() > state.resetTime ? 0 : state.count;
-    return counted + (this.rateLimitHeld.get(provider) ?? 0) < this.config.rateLimit!.maxRequests;
+    let held = 0;
+    for (const canLeave of this.rateLimitHeld.get(provider) ?? []) {
+      if (canLeave()) held += 1;
+    }
+    return counted + held < this.config.rateLimit!.maxRequests;
   }
 
   /** Counts one request against a provider's rate limit; false, counting nothing, when it is past the limit. */
@@ -611,20 +623,29 @@ export class SearchProviderService {
 
   /**
    * Holds one unit of a provider's rate limit for a request that has not left yet: counted against the limit by every
-   * other request while held, and in no window until `spend` counts it in the window the request leaves in. `release`
-   * gives it back, as the signal's abort does at once. Null, holding nothing, when the provider is past its limit.
+   * other request while held and while `canLeave` answers true, and in no window until `spend` counts it in the window
+   * the request leaves in. `release` gives it back, as the signal's abort does once its listener runs; `canLeave` is read
+   * at every other request's check, so a request that can no longer leave holds nothing before then. Null, holding
+   * nothing, when the provider is past its limit.
    */
-  private holdRateLimit(provider: string, signal: AbortSignal | undefined): RateHold | null {
+  private holdRateLimit(provider: string, signal: AbortSignal | undefined, canLeave: () => boolean): RateHold | null {
     if (!this.rateLimitOpen(provider)) return null;
-    this.rateLimitHeld.set(provider, (this.rateLimitHeld.get(provider) ?? 0) + 1);
+    // A check of its own, so two holds are never one entry.
+    const live = (): boolean => canLeave();
+    let holds = this.rateLimitHeld.get(provider);
+    if (holds === undefined) {
+      holds = new Set();
+      this.rateLimitHeld.set(provider, holds);
+    }
+    holds.add(live);
     let held = true;
     const end = (): void => {
       if (!held) return;
       held = false;
       signal?.removeEventListener('abort', onAbort);
-      const left = (this.rateLimitHeld.get(provider) ?? 1) - 1;
-      if (left > 0) this.rateLimitHeld.set(provider, left);
-      else this.rateLimitHeld.delete(provider);
+      const left = this.rateLimitHeld.get(provider);
+      left?.delete(live);
+      if (left?.size === 0) this.rateLimitHeld.delete(provider);
     };
     // An event named abort on a signal that did not abort is no abort.
     const onAbort = (): void => {
@@ -1215,6 +1236,13 @@ export class SearchProviderService {
       if (!deadline.signal.aborted && Date.now() >= deadlineAt) deadline.abort(new ProviderLate(provider));
       return deadline.signal.aborted;
     };
+    /**
+     * Whether the request can still leave, read without changing anything, for another request's count of the units
+     * held: the caller's own signal (an `AbortSignal.any` of it may not read aborted yet while the caller's listeners
+     * run) and the deadline by the clock (its timer may not have run yet).
+     */
+    const canLeave = (): boolean =>
+      options.signal?.aborted !== true && (deadline === undefined || (!deadline.signal.aborted && Date.now() < deadlineAt));
     /** Throws when the request may no longer leave: the caller aborted, or the deadline passed. */
     const halt = (): void => {
       pastDeadline();
@@ -1272,7 +1300,7 @@ export class SearchProviderService {
         const onSend = async (): Promise<void> => {
           halt();
           hold?.release();
-          const held = this.holdRateLimit(provider, own);
+          const held = this.holdRateLimit(provider, own, canLeave);
           if (held === null) throw new LimiterRefused('wait');
           hold = held;
           try {

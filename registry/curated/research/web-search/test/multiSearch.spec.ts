@@ -23,6 +23,8 @@ interface Script {
   delayMs?: number;
   /** Never answer: the request stays open until the client ends it. */
   hang?: boolean;
+  /** A JSON body answered with 200 in place of the provider's results. */
+  body?: unknown;
 }
 
 interface Asked {
@@ -103,7 +105,7 @@ async function handle(request: IncomingMessage, response: ServerResponse): Promi
       return;
     }
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify(answer(provider, script.urls ?? generated(provider, count))));
+    response.end(JSON.stringify(script.body ?? answer(provider, script.urls ?? generated(provider, count))));
   };
   if (script.delayMs !== undefined) {
     const timer = setTimeout(send, script.delayMs);
@@ -483,6 +485,15 @@ describe('multiSearch: failures read as failures', () => {
     expect(response.metadata.outcomes).toEqual({ tavily: 'failed', firecrawl: 'failed', serper: 'answered' });
     const pinned = await timing.search('treaty', { provider: 'tavily' });
     expect(pinned.results).toEqual([]);
+  });
+
+  it("Firecrawl answering 200 with success: false is failed, while success: true with no results is empty", async () => {
+    scripts.firecrawl = { body: { success: false, error: 'Insufficient credits to perform this request.' } };
+    const refused = await service().multiSearch('Treaty of Versailles', { providers: ['firecrawl'], fallback: false });
+    expect(refused.metadata.outcomes).toEqual({ firecrawl: 'failed' });
+    scripts.firecrawl = { urls: [] };
+    const none = await service().multiSearch('Treaty of Versailles', { providers: ['firecrawl'], fallback: false });
+    expect(none.metadata.outcomes).toEqual({ firecrawl: 'empty' });
   });
 
   it("DuckDuckGo's instant answer endpoint answering an error status is failed, not empty", async () => {
