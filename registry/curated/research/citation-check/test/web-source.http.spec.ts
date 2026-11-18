@@ -146,6 +146,7 @@ describe('WebPageSourceProvider.read', () => {
         blocks: ['The harbour opened in 1887.'],
         publisher: 'Harbour Gazette',
         pageDate: Date.UTC(2025, 2, 4, 5, 6, 7),
+        kind: 'page',
       },
     });
   });
