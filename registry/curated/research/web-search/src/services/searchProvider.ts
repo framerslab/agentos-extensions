@@ -129,8 +129,8 @@ function isRefusal(error: unknown): boolean {
  */
 class RefusalKeeper extends SourceLimiter {
   private readonly refusals = new WeakMap<AbortSignal, unknown>();
-  /** The calls whose request the limiter started (keyed by the call's own signal). */
-  private readonly started = new WeakSet<AbortSignal>();
+  /** Checks run when the limiter starts a call's request (keyed by the call's own signal); a throw there sends nothing. */
+  private readonly atStart = new WeakMap<AbortSignal, () => void>();
 
   constructor(private readonly inner: SourceLimiter) {
     super();
@@ -141,12 +141,13 @@ class RefusalKeeper extends SourceLimiter {
   }
 
   async run<T>(task: () => Promise<T>, signal?: AbortSignal, beforeStart?: () => void | Promise<void>): Promise<T> {
-    const marked = signal === undefined ? task : (): Promise<T> => {
-      this.started.add(signal);
+    const check = signal === undefined ? undefined : this.atStart.get(signal);
+    const started = check === undefined ? task : (): Promise<T> => {
+      check();
       return task();
     };
     try {
-      return await this.inner.run(marked, signal, beforeStart);
+      return await this.inner.run(started, signal, beforeStart);
     } catch (error) {
       if (signal !== undefined && isRefusal(error)) this.refusals.set(signal, error);
       throw error;
@@ -158,9 +159,9 @@ class RefusalKeeper extends SourceLimiter {
     return this.refusals.get(signal);
   }
 
-  /** Whether the limiter started the request of the call with this signal. */
-  began(signal: AbortSignal): boolean {
-    return this.started.has(signal);
+  /** Runs `check` when the limiter starts the request of the call with this signal, after every wait it adds there. */
+  onStart(signal: AbortSignal, check: () => void): void {
+    this.atStart.set(signal, check);
   }
 }
 
@@ -327,8 +328,8 @@ export class SearchProviderService {
   private wikipedia: WikipediaSourceProvider | null = null;
   private wikipediaLimiter: RefusalKeeper | null = null;
   private wikipediaOrigin = WIKIPEDIA_ORIGIN;
-  /** Each `wikipedia` call's own signal, by the options object it was given, which the limiter keys its start by. */
-  private readonly wikipediaCallSignals = new WeakMap<SearchOptions, AbortSignal>();
+  /** A `multiSearch` wiki request's last check, run when its limiter starts it, by the options object it was given. */
+  private readonly wikipediaStarts = new WeakMap<SearchOptions, () => void>();
 
   /**
    * Creates an instance of SearchProviderService
@@ -446,7 +447,8 @@ export class SearchProviderService {
     }
     // A signal of this call's own keys the limiter's refusal to it, and follows the caller's abort with its reason.
     const callSignal = call.signal === undefined ? new AbortController().signal : AbortSignal.any([call.signal]);
-    this.wikipediaCallSignals.set(call, callSignal);
+    const atStart = this.wikipediaStarts.get(call);
+    if (atStart !== undefined) this.wikipediaLimiter.onStart(callSignal, atStart);
     let thrown: { error: unknown } | null = null;
     const hook = call.onSend;
     const onSend =
@@ -499,7 +501,11 @@ export class SearchProviderService {
     const { signal } = call;
 
     // The wikipedia provider runs `onSend` inside its limiter; every other provider runs it here, before its request.
-    if (provider !== 'wikipedia') await this.beforeSend(call);
+    // With no hook nothing is awaited, so a request leaves in the same turn as its caller's last check.
+    if (provider !== 'wikipedia') {
+      if (call.onSend !== undefined) await this.beforeSend(call);
+      else call.signal?.throwIfAborted();
+    }
 
     switch (provider) {
       case 'wikipedia':
@@ -568,7 +574,7 @@ export class SearchProviderService {
    * @returns {Promise<boolean>} True if within limits
    */
   private async checkRateLimit(provider: string): Promise<boolean> {
-    return this.takeRateLimit(provider) !== null;
+    return this.takeRateLimit(provider);
   }
 
   /** Whether a provider is within its rate limit, counting nothing. */
@@ -577,34 +583,22 @@ export class SearchProviderService {
     return state === undefined || Date.now() > state.resetTime || state.count < this.config.rateLimit!.maxRequests;
   }
 
-  /**
-   * Gives back one request counted in `window`, for a request that never left. A window that has since ended, and a
-   * new one in its place, are left as they are: the count goes back to the window it was taken from or nowhere.
-   */
-  private releaseRateLimit(provider: string, window: RateWindow): void {
-    if (this.rateLimitState.get(provider) === window && window.count > 0) window.count -= 1;
-  }
-
-  /**
-   * Counts one request against a provider's rate limit and answers the window it was counted in; null, counting
-   * nothing, when it is past the limit.
-   */
-  private takeRateLimit(provider: string): RateWindow | null {
+  /** Counts one request against a provider's rate limit; false, counting nothing, when it is past the limit. */
+  private takeRateLimit(provider: string): boolean {
     const now = Date.now();
     const state = this.rateLimitState.get(provider);
 
     if (!state || now > state.resetTime) {
-      const window: RateWindow = { count: 1, resetTime: now + this.config.rateLimit!.windowMs };
-      this.rateLimitState.set(provider, window);
-      return window;
+      this.rateLimitState.set(provider, { count: 1, resetTime: now + this.config.rateLimit!.windowMs });
+      return true;
     }
 
     if (state.count >= this.config.rateLimit!.maxRequests) {
-      return null;
+      return false;
     }
 
     state.count++;
-    return state;
+    return true;
   }
 
   /**
@@ -1198,37 +1192,14 @@ export class SearchProviderService {
         return false;
       }
     };
-    /** The rate-limit window this provider's request was counted in, once it was. */
-    let charged: RateWindow | null = null;
-    /** The options a `wikipedia` request was made with, by which the service knows whether its limiter started it. */
-    let wikiCall: SearchOptions | null = null;
-    let refunded = false;
     /**
-     * The wiki's limiter can end a request after it was counted and before it started (a block that came during
-     * `onSend`, the caller's abort or the deadline during its wait): it never left, so the count goes back to the window
-     * it was taken from, once. On an abort or the deadline this runs inside the abort itself, before the call settles, so
-     * a caller that retries at once finds the count back. Every other provider's request leaves once counted.
+     * The last checks before the request leaves, in the same turn as the request, the rate limit counted only here: for
+     * the wiki, when its limiter starts the request, after every wait it adds, so a request that never starts counts
+     * nothing and one that waits past the end of a window counts in the window it leaves in.
      */
-    const refundUnsent = (): void => {
-      if (refunded || charged === null || wikiCall === null) return;
-      const callSignal = this.wikipediaCallSignals.get(wikiCall);
-      if (callSignal === undefined || this.wikipediaLimiter?.began(callSignal) === true) return;
-      refunded = true;
-      this.releaseRateLimit(provider, charged);
-    };
-    /** The abort's own refund: only for a signal that is aborted, never for an event named abort alone. */
-    const onAbort = (): void => {
-      if (own?.aborted !== true) return;
-      own.removeEventListener('abort', onAbort);
-      refundUnsent();
-    };
-    if (provider === 'wikipedia') own?.addEventListener('abort', onAbort);
-    /** The last checks before the request leaves, the rate limit counted only here. */
     const dispatch = (): void => {
       halt();
-      if (provider === 'duckduckgo') return;
-      charged = this.takeRateLimit(provider);
-      if (charged === null) throw new LimiterRefused('wait');
+      if (provider !== 'duckduckgo' && !this.takeRateLimit(provider)) throw new LimiterRefused('wait');
     };
 
     const work = (async (): Promise<SearchResult[]> => {
@@ -1237,15 +1208,17 @@ export class SearchProviderService {
       if (provider !== 'duckduckgo' && !this.rateLimitOpen(provider)) throw new LimiterRefused('wait');
       if (provider === 'wikipedia') {
         // public-sources runs this once its limiter has granted the request; a throw there sends nothing. The deadline,
-        // the signal and the rate limit are read again first, since the limiter may have queued the request.
+        // the signal and the rate limit are read again first, since the limiter may have queued the request; the count
+        // itself is taken when the limiter starts the request (`dispatch`).
         const onSend = async (): Promise<void> => {
           halt();
           if (!this.rateLimitOpen(provider)) throw new LimiterRefused('wait');
           if (!(await permitted())) throw SKIPPED;
-          dispatch();
+          halt();
         };
-        wikiCall = { signal: own, onSend };
-        return (await this.searchWithProvider(query, provider, count, startTime, undefined, wikiCall, true)).results;
+        const call: SearchOptions = { signal: own, onSend };
+        this.wikipediaStarts.set(call, dispatch);
+        return (await this.searchWithProvider(query, provider, count, startTime, undefined, call, true)).results;
       }
       // The deadline or the caller's abort ends the wait for the hook; nothing is sent after either.
       if (!(await untilAbort(permitted(), own))) throw SKIPPED;
@@ -1256,7 +1229,6 @@ export class SearchProviderService {
     const settled = work.then(
       (results) => (pastDeadline() ? end('late') : end(results.length > 0 ? 'answered' : 'empty', results)),
       (error: unknown) => {
-        refundUnsent();
         // The clock first, as on an answer: a hook that held the thread past the deadline is late whatever it said.
         if (pastDeadline() && options.signal?.aborted !== true) return end('late');
         const thrown = error instanceof CallerStop ? error.error : error;
@@ -1269,7 +1241,6 @@ export class SearchProviderService {
       return await (late === undefined ? settled : Promise.race([settled, late.then(() => end('late'))]));
     } finally {
       clearTimeout(timer);
-      if (provider === 'wikipedia') own?.removeEventListener('abort', onAbort);
     }
   }
 

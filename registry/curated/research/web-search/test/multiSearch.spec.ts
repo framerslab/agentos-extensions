@@ -573,8 +573,8 @@ describe('multiSearch: the order of the hooks, the deadline on a skip, and the w
   });
 });
 
-describe("multiSearch: a count given back is the count taken", () => {
-  it("a wiki refusal after the service's rate-limit window rolled over gives nothing back to the new window", async () => {
+describe('multiSearch: the rate limit counts only the requests that leave', () => {
+  it('a wiki request its limiter holds past the end of a window and then refuses spends nothing of the next window', async () => {
     let open: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       open = resolve;
@@ -610,12 +610,12 @@ describe("multiSearch: a count given back is the count taken", () => {
     expect(asked).toHaveLength(1);
   });
 
-  it('a wiki request its limiter refused after it was counted gets its count back even when the caller aborts first', async () => {
+  it('a wiki request its limiter refuses after onSend, the caller aborting first, spends none of the rate limit', async () => {
     const controller = new AbortController();
     const reason = new Error('the caller stopped');
     let runs = 0;
-    // The first request: counted in its onSend, then the caller aborts and the limiter refuses it, nothing sent. Every
-    // later request is granted at once.
+    // The first request: past its onSend the caller aborts and the limiter refuses it, nothing sent. Every later request
+    // is granted at once.
     const limiter = {
       block: () => {},
       run: async <T>(task: () => Promise<T>, _signal?: AbortSignal, beforeStart?: () => void | Promise<void>): Promise<T> => {
@@ -637,8 +637,8 @@ describe("multiSearch: a count given back is the count taken", () => {
   });
 
   /**
-   * A limiter that counts the first request in its onSend and then holds it, noticing the end of its signal only after
-   * 20 ms, as a limiter in the middle of other work does; every later request is granted at once.
+   * A limiter that holds the first request after its onSend, noticing the end of its signal only after 20 ms, as a
+   * limiter in the middle of other work does; every later request is granted at once.
    */
   function slowToNotice(counted: () => void): SourceLimiter {
     let runs = 0;
@@ -656,7 +656,7 @@ describe("multiSearch: a count given back is the count taken", () => {
     } as unknown as SourceLimiter;
   }
 
-  it('a counted wiki request the caller aborts in its limiter is given back before the call rejects: a retry at once is sent', async () => {
+  it('a wiki request the caller aborts while it waits in its limiter spends none of the rate limit: a retry at once is sent', async () => {
     let counted: () => void = () => {};
     const inLimiter = new Promise<void>((resolve) => {
       counted = resolve;
@@ -672,7 +672,7 @@ describe("multiSearch: a count given back is the count taken", () => {
     expect(retry.metadata.outcomes).toEqual({ wikipedia: 'answered' });
   });
 
-  it('a counted wiki request late in its limiter is given back before the call answers: a retry at once is sent', async () => {
+  it('a wiki request late while it waits in its limiter spends none of the rate limit: a retry at once is sent', async () => {
     const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter: slowToNotice(() => {}), origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
     const late = await wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false, deadlineMs: 100 });
     expect(late.metadata.outcomes).toEqual({ wikipedia: 'late' });
@@ -680,7 +680,7 @@ describe("multiSearch: a count given back is the count taken", () => {
     expect(retry.metadata.outcomes).toEqual({ wikipedia: 'answered' });
   });
 
-  it("an abort event on a signal that did not abort gives nothing back: the request still leaves and keeps its count", async () => {
+  it('an abort event on a signal that did not abort changes nothing: the request still leaves and keeps its count', async () => {
     // The real limiter, 200 ms between starts: the hook stamps a start of its own, so the counted request waits there.
     const limiter = new SourceLimiter({ spacingMs: 200 });
     const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter, origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
@@ -739,12 +739,12 @@ describe('abort listeners: none is left on the caller signal once it aborts', ()
     expect(asked).toEqual([]);
   });
 
-  it('a multiSearch aborted while a counted wiki request never leaves its limiter leaves no listener', async () => {
+  it('a multiSearch aborted while a wiki request never leaves its limiter leaves no listener', async () => {
     let counted: () => void = () => {};
     const inLimiter = new Promise<void>((resolve) => {
       counted = resolve;
     });
-    // A limiter that counts the request in its onSend and then never settles, whatever happens to its signal.
+    // A limiter that holds the request after its onSend and never settles, whatever happens to its signal.
     const limiter = {
       block: () => {},
       run: async <T>(_task: () => Promise<T>, _signal?: AbortSignal, beforeStart?: () => void | Promise<void>): Promise<T> => {
