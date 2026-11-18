@@ -357,6 +357,27 @@ describe('ClaimChecker: later passages, by code alone', () => {
     expect(claims.agree(first, CLAIM, [other])).toEqual([]);
   });
 
+  it("agree reads the decided text through a host's shallow copy of the decision, check's and revisit's alike", async () => {
+    const { embed } = fakeEmbed();
+    const { judge } = fakeJudge({ relation: 'differs', quote: QUOTE });
+    const claims = new ClaimChecker({ embed, judge, checker });
+    const lead = passage(LEAD, 'encyclopedia:Treaty_of_Versailles');
+    const first = await firstDiffers(claims, lead);
+    const same = passage('The Treaty of Versailles was signed in 1919.', 'page:history', 'page', 'History');
+    const other = passage('The Treaty of Versailles was signed in 1920.', 'page:other', 'page', 'Other');
+    // The host copies the decision to redact its text, and keeps the copy in the outcome.
+    first.decision = { ...first.decision, texts: [LEAD.replace('1919', '1920')] };
+    expect(claims.agree(first, CLAIM, [same])).toEqual([same]);
+    expect(claims.agree(first, CLAIM, [other])).toEqual([]);
+    // revisit's decision, after the host added words before the value, copied and redacted the same way.
+    lead.content = `In the Hall of Mirrors, ${LEAD.charAt(0).toLowerCase()}${LEAD.slice(1)}`;
+    const again = claims.revisit(first, CLAIM, [lead]);
+    if (again === null) throw new Error('expected the decision to stand');
+    first.decision = { ...again, texts: again.texts.map((text) => text.replace('1919', '1920')) };
+    expect(claims.agree(first, CLAIM, [same])).toEqual([same]);
+    expect(claims.agree(first, CLAIM, [other])).toEqual([]);
+  });
+
   it("agree reads the text of the decision it is given: revisit's, once the host puts it in the outcome's place", async () => {
     const { embed } = fakeEmbed();
     const { judge } = fakeJudge({ relation: 'differs', quote: QUOTE });
