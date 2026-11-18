@@ -356,6 +356,23 @@ describe('ClaimChecker: later passages, by code alone', () => {
     expect(claims.agree(first, CLAIM, [same])).toEqual([same]);
     expect(claims.agree(first, CLAIM, [other])).toEqual([]);
   });
+
+  it("agree reads the text of the decision it is given: revisit's, once the host puts it in the outcome's place", async () => {
+    const { embed } = fakeEmbed();
+    const { judge } = fakeJudge({ relation: 'differs', quote: QUOTE });
+    const claims = new ClaimChecker({ embed, judge, checker });
+    const lead = passage(LEAD, 'encyclopedia:Treaty_of_Versailles');
+    const first = await firstDiffers(claims, lead);
+    // The host adds words before the value, reads the decision again, and keeps the new one in the outcome.
+    lead.content = `In the Hall of Mirrors, ${LEAD.charAt(0).toLowerCase()}${LEAD.slice(1)}`;
+    const again = claims.revisit(first, CLAIM, [lead]);
+    if (again === null) throw new Error('expected the decision to stand');
+    first.decision = again;
+    const same = passage('The Treaty of Versailles was signed in 1919.', 'page:history', 'page', 'History');
+    const other = passage('The Treaty of Versailles was signed in 1920.', 'page:other', 'page', 'Other');
+    expect(claims.agree(first, CLAIM, [same])).toEqual([same]);
+    expect(claims.agree(first, CLAIM, [other])).toEqual([]);
+  });
 });
 
 describe('ClaimChecker: the veto reads every passage, however long', () => {
