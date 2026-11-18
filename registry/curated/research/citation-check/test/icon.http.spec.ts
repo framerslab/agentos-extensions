@@ -94,6 +94,23 @@ const TRANSPORTS: Array<[string, () => Promise<Transport>]> = [
   ['checked egress', async () => egressTransport('local', { timeoutMs: 5_000, maxBytes: 5_000_000 })],
 ];
 
+describe('an icon through checked egress whose own cap is the same as the icon cap', () => {
+  it('follows a redirect whose body is past both, and keeps the icon it lands on', async () => {
+    const transport = await egressTransport('local', { timeoutMs: 5_000, maxBytes: 65_536 });
+    const read = await readPage(`${origin}/moved-history`, {
+      transport,
+      scraper: null,
+      timeoutMs: 5_000,
+      maxBytes: 65_536,
+      textBudget: 300_000,
+      now: () => NOW,
+      icon: true,
+      iconMaxBytes: 65_536,
+    });
+    expect(read.document?.icon).toBe(`data:image/png;base64,${SMALL_PNG.toString('base64')}`);
+  });
+});
+
 describe.each(TRANSPORTS)("an icon past its cap, through %s", (_name, make) => {
   it("ends the icon's connection soon after iconMaxBytes, under a page cap of 5 MB; the page is read as before", async () => {
     const transport = await make();

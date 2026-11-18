@@ -338,7 +338,7 @@ export async function egressTransport(profile: EgressProfile, bounds: { timeoutM
       : egress.hostedEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: bounds.maxBytes });
   const headersToSend = requestHeaders(userAgent, 'identity');
   /**
-   * One request for a caller that reads fewer bytes than the bounds, such as an icon's read: the answer's headers first,
+   * One request for a caller that names how much it reads, such as an icon's read: the answer's headers first,
    * a redirect's body never read, any other body refused past `cap` as it arrives. Its connection ends with the call.
    */
   const cappedRequest = async (url: string, signal: AbortSignal, cap: number): Promise<{ status: number; headers: unknown; body: Uint8Array }> => {
@@ -361,8 +361,8 @@ export async function egressTransport(profile: EgressProfile, bounds: { timeoutM
   };
   const transport: Transport = async (url, signal, rules, limits) => {
     const wanted = limits?.maxBytes;
-    const capped = wanted !== undefined && Number.isInteger(wanted) && wanted >= 0 && wanted < bounds.maxBytes;
-    const cap = capped ? wanted : bounds.maxBytes;
+    const capped = wanted !== undefined && Number.isInteger(wanted) && wanted >= 0;
+    const cap = capped ? Math.min(wanted, bounds.maxBytes) : bounds.maxBytes;
     const send = (address: string): Promise<{ status: number; headers: unknown; body: Uint8Array }> =>
       capped ? cappedRequest(address, signal, cap) : egress.checkedRequest({ url: address, method: 'GET', headers: headersToSend, policy, signal, onRedirect: 'return' });
     let current = url;
