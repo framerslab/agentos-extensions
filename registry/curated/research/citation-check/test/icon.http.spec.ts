@@ -12,6 +12,7 @@ import { htmlPage } from './stub-transport';
 const NOW = Date.UTC(2026, 10, 11, 9, 0, 0);
 const CHUNK = 16_384;
 const CHUNKS = 64;
+const SMALL_PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(56, 7)]);
 
 let server: Server;
 let origin = '';
@@ -31,6 +32,22 @@ beforeAll(async () => {
     if (path === '/history') {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       response.end(htmlPage('<title>Port history</title><link rel="icon" href="/big.png">', '<p>The harbour opened in 1887.</p>').body as string);
+      return;
+    }
+    if (path === '/moved-history') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(htmlPage('<title>Port history</title><link rel="icon" href="/moved.png">', '<p>The harbour opened in 1887.</p>').body as string);
+      return;
+    }
+    if (path === '/moved.png') {
+      // A redirect whose own body is larger than an icon may be.
+      response.writeHead(302, { location: '/small.png', 'content-type': 'text/html' });
+      response.end(Buffer.alloc(200_000, 0x20));
+      return;
+    }
+    if (path === '/small.png') {
+      response.writeHead(200, { 'content-type': 'image/png' });
+      response.end(SMALL_PNG);
       return;
     }
     if (path !== '/big.png') {
@@ -96,5 +113,20 @@ describe.each(TRANSPORTS)("an icon past its cap, through %s", (_name, make) => {
     for (let wait = 0; wait < 50 && !icon.cut && icon.sent < CHUNK * CHUNKS; wait += 1) await new Promise((resolve) => setTimeout(resolve, 20));
     expect(icon.cut).toBe(true);
     expect(icon.sent).toBeLessThan(CHUNK * CHUNKS / 4);
+  });
+
+  it("follows a redirect whose own body is past iconMaxBytes, and keeps the icon it lands on", async () => {
+    const transport = await make();
+    const read = await readPage(`${origin}/moved-history`, {
+      transport,
+      scraper: null,
+      timeoutMs: 5_000,
+      maxBytes: 5_000_000,
+      textBudget: 300_000,
+      now: () => NOW,
+      icon: true,
+      iconMaxBytes: 65_536,
+    });
+    expect(read.document?.icon).toBe(`data:image/png;base64,${SMALL_PNG.toString('base64')}`);
   });
 });
