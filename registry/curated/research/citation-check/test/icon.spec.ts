@@ -284,6 +284,23 @@ describe('the icon read, its cap, its cancellation and the kind overrides, as th
     await expect(read).rejects.toBe(reason);
   });
 
+  it('takes no icon from a rel whose tokens a no-break space joins, written or as &nbsp;, and reads /favicon.ico', async () => {
+    for (const rel of ['apple-touch&nbsp;icon', 'apple-touch\u00a0icon']) {
+      const icon = ico();
+      const stub = stubTransport(
+        (url) =>
+          NO_ROBOTS(url) ??
+          (url === 'https://harbour.example.test/favicon.ico'
+            ? image(icon, 'image/x-icon')
+            : url === PAGE
+              ? htmlPage(`<link rel="${rel}" href="/touch.png">`, '<p>The harbour opened in 1887.</p>')
+              : undefined),
+      );
+      expect((await documentOf(provider({ transport: stub.transport, icon: true }))).icon).toBe(dataAddress('x-icon', icon));
+      expect(stub.urls()).not.toContain('https://harbour.example.test/touch.png');
+    }
+  });
+
   it('reads with the kind overrides it was given, whatever the host does to its record after', async () => {
     const stub = stubTransport((url) => NO_ROBOTS(url) ?? (url === PAGE ? htmlPage('<title>Port history</title>', '<p>The harbour opened in 1887.</p>') : undefined));
     const overrides: Record<string, string> = { 'example.test': 'news' };

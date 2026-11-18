@@ -255,6 +255,16 @@ describe('what a read page carries', () => {
     expect(page.passages[0]?.licence).toEqual(licence);
   });
 
+  it('splits a rel on ASCII white space alone: a no-break space, written or as &nbsp;, joins one token and declares no licence', async () => {
+    const licence = { name: 'CC BY-SA 4.0', url: 'https://creativecommons.org/licenses/by-sa/4.0/' };
+    for (const rel of ['alternate&nbsp;license', 'alternate license']) {
+      const page = await read(
+        htmlPage(`<link rel="${rel}" href="https://pages.example.test/terms"><link rel="license" href="https://creativecommons.org/licenses/by-sa/4.0/">`, '<p>The harbour opened in 1887.</p>'),
+      );
+      expect(page.document?.licence).toEqual(licence);
+    }
+  });
+
   it('carries a Creative Commons deed linked from the footer, and the unread licence for a page that states none', async () => {
     const footer = await read(htmlPage('', '<p>The harbour opened in 1887.</p><footer>Text under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a></footer>'));
     expect(footer.document?.licence).toEqual({ name: 'CC BY 4.0', url: 'https://creativecommons.org/licenses/by/4.0/' });
