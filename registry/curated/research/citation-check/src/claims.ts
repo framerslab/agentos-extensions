@@ -333,8 +333,9 @@ export class ClaimChecker {
    */
   private readonly decided = new WeakMap<object, { found: ClaimPassage[] }>();
   /**
-   * The texts each decision this checker answered was decided on, by the decision (`check`'s and `revisit`'s alike),
-   * which the host's copy in `decision.texts` may since have been changed from.
+   * The texts each decision this checker answered was decided on (`check`'s and `revisit`'s alike), which the host's
+   * copy in `decision.texts` may since have been changed from. Kept by the decision's `pairs`, the offsets that index
+   * them: a host's shallow copy of a decision keeps that array, and every decision the grounding guard makes has its own.
    */
   private readonly decisionTexts = new WeakMap<object, readonly string[]>();
 
@@ -359,7 +360,7 @@ export class ClaimChecker {
       sentences: decision.sentences.map((sentence) => (sentence as PassageSentence<P>).passage),
       texts: [...texts],
     };
-    this.decisionTexts.set(host, texts);
+    if (Array.isArray(host.pairs)) this.decisionTexts.set(host.pairs, texts);
     return host;
   }
 
@@ -535,10 +536,10 @@ export class ClaimChecker {
     const firstPairs = Array.isArray(decision.pairs) ? decision.pairs : [];
     const lead = firstPairs[0];
     if (lead === undefined) return [];
-    // The decision's marks and pairs are offsets into its sentence as it was decided: the text kept for a decision this
-    // checker answered (`check`'s, or `revisit`'s the host put in its place), whatever the host has written into
-    // `decision.texts` since.
-    const firstSentence = this.decisionTexts.get(decision)?.[0] ?? decision.texts?.[0] ?? (decision.sentences[0] ?? first.named).content;
+    // The decision's marks and pairs are offsets into its sentence as it was decided: the text kept with those pairs for
+    // a decision this checker answered (`check`'s, or `revisit`'s the host put in its place, a shallow copy of either
+    // included), whatever the host has written into `decision.texts` since.
+    const firstSentence = this.decisionTexts.get(firstPairs)?.[0] ?? decision.texts?.[0] ?? (decision.sentences[0] ?? first.named).content;
     // Every passage as it is now, the first check's included (a host may have changed one since).
     const sentenceOf = snapshot();
     const later = more.map((passage) => sentenceOf(passage));
