@@ -1100,13 +1100,18 @@ export class SearchProviderService {
    * failure is its outcome.
    */
   async multiSearch(query: string, options: MultiSearchOptions = {}): Promise<MultiSearchResponse> {
+    const { signal } = options;
+    signal?.throwIfAborted();
     const startTime = Date.now();
     const maxResults = options.maxResults || 10;
     const perProvider = options.perProvider || maxResults;
-    // What this call was given: a hook that changes the options object afterwards changes nothing here.
-    const call: MultiSearchOptions = { ...options };
-    const { signal } = call;
-    signal?.throwIfAborted();
+    // What every provider reads, each read once here: a hook that changes the options object afterwards changes nothing.
+    const onSend = options.onSend;
+    const call: MultiSearchOptions = {
+      signal,
+      deadlineMs: options.deadlineMs,
+      onSend: onSend === undefined ? undefined : (provider) => onSend.call(options, provider),
+    };
 
     const configured = this.getAvailableProviders();
     // DuckDuckGo is the fallback alone: `fallback: false` leaves it out whether or not the providers name it, and with
