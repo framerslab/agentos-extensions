@@ -343,6 +343,19 @@ describe('ClaimChecker: later passages, by code alone', () => {
     expect(claims.agree(first, CLAIM, [sameSource])).toEqual([]);
     expect(asked).toHaveLength(1);
   });
+
+  it('agree reads the first sentence as check read it, whatever the host writes into decision.texts after', async () => {
+    const { embed } = fakeEmbed();
+    const { judge } = fakeJudge({ relation: 'differs', quote: QUOTE });
+    const claims = new ClaimChecker({ embed, judge, checker });
+    const first = await firstDiffers(claims, passage(LEAD, 'encyclopedia:Treaty_of_Versailles'));
+    // The host rewrites the decided text in place, as a redaction or a reformat would.
+    first.decision.texts[0] = LEAD.replace('1919', '1920');
+    const same = passage('The Treaty of Versailles was signed in 1919.', 'page:history', 'page', 'History');
+    const other = passage('The Treaty of Versailles was signed in 1920.', 'page:other', 'page', 'Other');
+    expect(claims.agree(first, CLAIM, [same])).toEqual([same]);
+    expect(claims.agree(first, CLAIM, [other])).toEqual([]);
+  });
 });
 
 describe('ClaimChecker: the veto reads every passage, however long', () => {
