@@ -332,25 +332,45 @@ export async function egressTransport(profile: EgressProfile, bounds: { timeoutM
   const egress = await import('@framers/agentos/safety/egress').catch(() => {
     throw new Error('reading pages through checked egress needs @framers/agentos 0.13.120 or later; update it, or pass a fetch');
   });
-  const policyFor = (maxBytes: number) =>
+  const policy =
     profile === 'local'
-      ? egress.localEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: maxBytes })
-      : egress.hostedEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: maxBytes });
-  const policy = policyFor(bounds.maxBytes);
+      ? egress.localEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: bounds.maxBytes })
+      : egress.hostedEgressPolicy({ timeoutMs: bounds.timeoutMs, maxResponseBytes: bounds.maxBytes });
+  const headersToSend = requestHeaders(userAgent, 'identity');
+  /**
+   * One request for a caller that reads fewer bytes than the bounds, such as an icon's read: the answer's headers first,
+   * a redirect's body never read, any other body refused past `cap` as it arrives. Its connection ends with the call.
+   */
+  const cappedRequest = async (url: string, signal: AbortSignal, cap: number): Promise<{ status: number; headers: unknown; body: Uint8Array }> => {
+    const own = new AbortController();
+    try {
+      const answer = await egress.checkedStream({ url, method: 'GET', headers: headersToSend, policy, signal: AbortSignal.any([signal, own.signal]), onRedirect: 'return' });
+      const headers = answer.headers as Record<string, string | string[] | undefined>;
+      if (answer.status >= 300 && answer.status < 400 && headerOf(headers, 'location') !== null) return { status: answer.status, headers, body: new Uint8Array(0) };
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      for await (const chunk of answer.body) {
+        total += chunk.byteLength;
+        if (total > cap) throw new PageRefusal('too_large');
+        chunks.push(chunk);
+      }
+      return { status: answer.status, headers, body: Buffer.concat(chunks) };
+    } finally {
+      own.abort();
+    }
+  };
   const transport: Transport = async (url, signal, rules, limits) => {
-    // A caller that reads fewer bytes than the bounds, such as an icon's read, has the body refused past them as it
-    // arrives, so no more of it is downloaded.
     const wanted = limits?.maxBytes;
-    const cap = wanted !== undefined && Number.isInteger(wanted) && wanted >= 0 && wanted < bounds.maxBytes ? wanted : bounds.maxBytes;
-    const requestPolicy = cap === bounds.maxBytes ? policy : policyFor(cap);
+    const capped = wanted !== undefined && Number.isInteger(wanted) && wanted >= 0 && wanted < bounds.maxBytes;
+    const cap = capped ? wanted : bounds.maxBytes;
+    const send = (address: string): Promise<{ status: number; headers: unknown; body: Uint8Array }> =>
+      capped ? cappedRequest(address, signal, cap) : egress.checkedRequest({ url: address, method: 'GET', headers: headersToSend, policy, signal, onRedirect: 'return' });
     let current = url;
     for (let hop = 0; ; hop += 1) {
       if (hasRules(rules)) await checkAddress(current, rules, transport, signal);
-      const answer = await egress
-        .checkedRequest({ url: current, method: 'GET', headers: requestHeaders(userAgent, 'identity'), policy: requestPolicy, signal, onRedirect: 'return' })
-        .catch((error: unknown) => {
-          throw egressFailure(error) ?? error;
-        });
+      const answer = await send(current).catch((error: unknown) => {
+        throw egressFailure(error) ?? error;
+      });
       const headers = answer.headers as Record<string, string | string[] | undefined>;
       const location = headerOf(headers, 'location');
       if (answer.status >= 300 && answer.status < 400 && location !== null) {
