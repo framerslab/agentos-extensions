@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { gzipSync } from 'node:zlib';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { ARXIV_LICENCE, ArxivSourceProvider, arxivLimiter, citationSources, SourceLimiter, type ArxivOptions } from '../src/index';
+import { ARXIV_LICENCE, ArxivSourceProvider, arxivLimiter, citationSources, LimiterRefused, SourceLimiter, type ArxivOptions } from '../src/index';
 
 // arXiv's provider over Node's own fetch against a stand-in for arXiv's API on the loopback address: an Atom feed for a
 // search and for one paper by its id, the error entry, a 503 with Retry-After, a body that stalls, an answer past the
@@ -219,6 +219,23 @@ describe('ArxivSourceProvider.search', () => {
     };
     expect((await provider().search('treaty', options)).kind).toBe('hits');
     expect(options.count).toBe(1);
+  });
+
+  it('reads onSend once, so a refusal it gives on that read sends nothing', async () => {
+    let reads = 0;
+    const options = {
+      get onSend(): (() => void) | undefined {
+        reads += 1;
+        return reads === 1
+          ? () => {
+              throw new LimiterRefused('caller');
+            }
+          : undefined;
+      },
+    };
+    expect(await provider().search('treaty', options)).toEqual({ kind: 'limited' });
+    expect(reads).toBe(1);
+    expect(asked).toEqual([]);
   });
 
   it('sends nothing for an onSend that settles after the deadline', async () => {
