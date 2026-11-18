@@ -109,6 +109,24 @@ describe('ClaimChecker.check', () => {
     ]);
   });
 
+  it('compares one passage per text, so the judge reads the title and kind of the passage the outcome names', async () => {
+    const { embed, batches } = fakeEmbed();
+    const { judge, asked } = fakeJudge({ relation: 'differs', quote: QUOTE });
+    // A page that copies the encyclopedia's sentence word for word, under its own title and kind.
+    const mirror = passage(LEAD, 'web:mirror.example.net', 'page', 'Versailles, mirrored');
+    const lead = passage(LEAD, 'encyclopedia:Treaty_of_Versailles');
+    const outcome = await new ClaimChecker({ embed, judge, checker }).check(CLAIM, [mirror, lead], { signal: signal() });
+
+    expect(outcome.kind).toBe('decided');
+    if (outcome.kind !== 'decided') return;
+    expect(outcome.decision.relation).toBe('differs');
+    expect([mirror, lead]).toContain(outcome.named);
+    expect(batches).toEqual([[CLAIM.statement, LEAD]]);
+    expect(asked).toEqual([
+      { system: claimJudgeSystem(outcome.named.kind), prompt: claimJudgePrompt(CLAIM.heardSentence, CLAIM.statement, outcome.named.title, LEAD) },
+    ]);
+  });
+
   it('decides "matches" for the year heard as written in the sentence', async () => {
     const { embed } = fakeEmbed();
     const { judge } = fakeJudge({ relation: 'matches', quote: QUOTE });
