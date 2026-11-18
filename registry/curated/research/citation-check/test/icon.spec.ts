@@ -91,6 +91,39 @@ describe("a page's icon", () => {
     expect(stub.urls()).toContain('https://harbour.example.test/favicon.ico');
   });
 
+  it('passes over a declared SVG icon, which it could not keep, for the next declared icon, else /favicon.ico', async () => {
+    const icon = png();
+    const fallback = ico();
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    const answers = (url: string): StubAnswer | undefined =>
+      NO_ROBOTS(url) ??
+      (url === 'https://harbour.example.test/favicon.svg' || url === 'https://harbour.example.test/mark.svg'
+        ? image(svg, 'image/svg+xml')
+        : url === 'https://harbour.example.test/mark.png'
+          ? image(icon, 'image/png')
+          : url === 'https://harbour.example.test/favicon.ico'
+            ? image(fallback, 'image/x-icon')
+            : undefined);
+
+    // An SVG declared by its type, then a PNG: the PNG is read, and the SVG never asked for.
+    const typed = stubTransport(
+      (url) =>
+        answers(url) ??
+        (url === PAGE
+          ? htmlPage('<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="icon" href="/mark.png">', '<p>The harbour opened in 1887.</p>')
+          : undefined),
+    );
+    expect((await documentOf(provider({ transport: typed.transport, icon: true }))).icon).toBe(dataAddress('png', icon));
+    expect(typed.urls()).not.toContain('https://harbour.example.test/favicon.svg');
+
+    // An SVG declared by its address alone: the origin's /favicon.ico is read in its place.
+    const named = stubTransport(
+      (url) => answers(url) ?? (url === PAGE ? htmlPage('<link rel="icon" href="/mark.svg?v=2">', '<p>The harbour opened in 1887.</p>') : undefined),
+    );
+    expect((await documentOf(provider({ transport: named.transport, icon: true }))).icon).toBe(dataAddress('x-icon', fallback));
+    expect(named.urls().filter((url) => url.includes('.svg'))).toEqual([]);
+  });
+
   it('answers no icon past 65,536 bytes, on a host the rule refuses, or that robots.txt disallows; the page is read as before', async () => {
     const page = htmlPage('<title>Port history</title>', '<p>The harbour opened in 1887.</p>');
     const big = stubTransport((url) => NO_ROBOTS(url) ?? (url.endsWith('/favicon.ico') ? image(png(65_537), 'image/png') : page));

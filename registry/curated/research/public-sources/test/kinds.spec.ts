@@ -47,6 +47,9 @@ describe('kindOfHost', () => {
   it('reads news hosts as news, and forums and question sites as forums', () => {
     expect(kindOfHost('apnews.com')).toBe('news');
     expect(kindOfHost('www.bbc.co.uk')).toBe('news');
+    // Wikimedia's news site is news, not an encyclopedia.
+    expect(kindOfHost('en.wikinews.org')).toBe('news');
+    expect(kindOfHost('wikinews.org')).toBe('news');
     expect(kindOfHost('old.reddit.com')).toBe('forum');
     expect(kindOfHost('stackoverflow.com')).toBe('forum');
   });

@@ -144,10 +144,10 @@ isSourceWord('Brave.Search'); // false
 
 `kindOfHost(host, overrides?)` reads a page's kind from its host alone, with no request. A host is read case-folded, with a trailing dot and a leading `www.` removed, and a rule for a name holds for every name under it. The host's `overrides` come first, the longest name that matches deciding; an override whose kind is not a source word throws a `RangeError`. Then, in order:
 
-1. `encyclopedia`: Wikimedia's hosts, and the reference works `britannica.com`, `plato.stanford.edu` and `encyclopedia.com`;
+1. `encyclopedia`: Wikimedia's hosts (Wikinews aside, which is `news`), and the reference works `britannica.com`, `plato.stanford.edu` and `encyclopedia.com`;
 2. `paper`: identifier, journal and preprint hosts such as `doi.org`, `arxiv.org`, `pubmed.ncbi.nlm.nih.gov` and `nature.com` (a journal host under `.gov` among them);
 3. `official`: `.gov`, `.gov.<cc>`, `.edu`, `.int` and `.mil` hosts, and international bodies such as `un.org` and `europa.eu`;
-4. `news`: news hosts such as `apnews.com` and `bbc.co.uk`;
+4. `news`: news hosts such as `apnews.com`, `bbc.co.uk` and `wikinews.org`;
 5. `forum`: forums, question sites and social networks such as `reddit.com` and `stackoverflow.com`;
 6. `page`: any other host.
 

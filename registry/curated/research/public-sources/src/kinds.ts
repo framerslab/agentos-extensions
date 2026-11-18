@@ -20,8 +20,8 @@ export function isSourceWord(word: string): boolean {
   return typeof word === 'string' && SOURCE_WORD.test(word);
 }
 
-/** Wikimedia's hosts. */
-const WIKIMEDIA = ['wikipedia.org', 'wikimedia.org', 'wikidata.org', 'wikisource.org', 'wikiquote.org', 'wikibooks.org', 'wikinews.org', 'wikiversity.org', 'wikivoyage.org', 'wiktionary.org', 'mediawiki.org'];
+/** Wikimedia's hosts, less its news site, Wikinews, which is read as news. */
+const WIKIMEDIA = ['wikipedia.org', 'wikimedia.org', 'wikidata.org', 'wikisource.org', 'wikiquote.org', 'wikibooks.org', 'wikiversity.org', 'wikivoyage.org', 'wiktionary.org', 'mediawiki.org'];
 
 /** The reference works read as encyclopedias, beside Wikimedia's. */
 const ENCYCLOPEDIAS = ['britannica.com', 'plato.stanford.edu', 'encyclopedia.com'];
@@ -42,7 +42,7 @@ const NEWS = [
   'economist.com', 'bloomberg.com', 'aljazeera.com', 'cnn.com', 'nbcnews.com', 'cbsnews.com', 'abcnews.go.com', 'latimes.com', 'usatoday.com',
   'politico.com', 'axios.com', 'theatlantic.com', 'time.com', 'newsweek.com', 'pbs.org', 'cbc.ca', 'abc.net.au', 'dw.com', 'france24.com',
   'lemonde.fr', 'spiegel.de', 'independent.co.uk', 'telegraph.co.uk', 'thetimes.co.uk', 'irishtimes.com', 'scmp.com', 'japantimes.co.jp',
-  'thehindu.com', 'smh.com.au', 'nzherald.co.nz', 'theglobeandmail.com', 'afp.com', 'euronews.com',
+  'thehindu.com', 'smh.com.au', 'nzherald.co.nz', 'theglobeandmail.com', 'afp.com', 'euronews.com', 'wikinews.org',
 ];
 
 /** The forums, question sites and social networks read as forums. */
@@ -69,7 +69,7 @@ function officialHost(host: string): boolean {
 
 /**
  * A page's kind from its host. The host's `overrides` come first: a host or a name under it, the longest name that
- * matches deciding. Then, in order: the Wikimedia hosts and the reference works (`britannica.com`,
+ * matches deciding. Then, in order: the Wikimedia hosts (Wikinews aside) and the reference works (`britannica.com`,
  * `plato.stanford.edu`, `encyclopedia.com`) are `encyclopedia`; the identifier, journal and preprint hosts (`doi.org`,
  * `arxiv.org` and the others listed) are `paper`, a journal host under `.gov` among them; `.gov`, `.gov.<cc>`, `.edu`,
  * `.int`, `.mil` and the international bodies listed are `official`; the news hosts listed are `news`; the forums,
