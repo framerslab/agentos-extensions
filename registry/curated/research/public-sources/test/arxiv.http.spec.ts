@@ -57,6 +57,7 @@ const PAPERS = [
 interface Asked {
   query: URLSearchParams;
   headers: IncomingHttpHeaders;
+  at: number;
 }
 
 const asked: Asked[] = [];
@@ -73,7 +74,7 @@ function atom(response: ServerResponse, body: string, gzip = true): void {
 beforeAll(async () => {
   server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
-    asked.push({ query: url.searchParams, headers: request.headers });
+    asked.push({ query: url.searchParams, headers: request.headers, at: Date.now() });
     if (url.pathname !== '/api/query') {
       response.writeHead(404);
       response.end();
@@ -136,7 +137,7 @@ describe('ArxivSourceProvider.search', () => {
     expect(await provider().search('treaty')).toEqual({ kind: 'failed', status: 200 });
   });
 
-  it("sends one of two searches at once under arXiv's limiter; the other waits or is refused, never sent beside the first", async () => {
+  it("sends two searches at once under arXiv's limiter one after the other, three seconds apart, never side by side", async () => {
     let open = 0;
     let most = 0;
     script = (response) => {
@@ -150,8 +151,63 @@ describe('ArxivSourceProvider.search', () => {
     const arxiv = provider({ limiter: arxivLimiter() });
     const outcomes = await Promise.all([arxiv.search('treaty'), arxiv.search('treaty')]);
     expect(most).toBe(1);
-    expect(outcomes.map((outcome) => outcome.kind).sort()).toEqual(['hits', 'limited']);
+    expect(outcomes.map((outcome) => outcome.kind)).toEqual(['hits', 'hits']);
+    expect(asked).toHaveLength(2);
+    expect((asked[1]?.at ?? 0) - (asked[0]?.at ?? 0)).toBeGreaterThanOrEqual(2_900);
+  }, 10_000);
+
+  it("reads a paper straight after its search under arXiv's limiter, the read waiting out the three seconds", async () => {
+    const arxiv = provider({ limiter: arxivLimiter() });
+    const found = await arxiv.search('treaty', { limit: 1 });
+    if (found.kind !== 'hits' || found.hits[0] === undefined) throw new Error('expected a hit');
+    const paper = await arxiv.read(found.hits[0]);
+    expect(paper.kind).toBe('document');
+    expect(asked).toHaveLength(2);
+    expect((asked[1]?.at ?? 0) - (asked[0]?.at ?? 0)).toBeGreaterThanOrEqual(2_900);
+  }, 10_000);
+
+  it('ends at timeoutMs an onSend that never settles, sending nothing and freeing the limiter for the next search', async () => {
+    const arxiv = provider({ timeoutMs: 150 });
+    expect(await arxiv.search('treaty', { onSend: () => new Promise<void>(() => {}) })).toEqual({ kind: 'failed', status: null });
+    expect(asked).toEqual([]);
+    expect((await arxiv.search('treaty')).kind).toBe('hits');
     expect(asked).toHaveLength(1);
+  }, 2_000);
+
+  it("rejects with the caller's reason while onSend is pending, and frees the limiter", async () => {
+    const arxiv = provider();
+    const controller = new AbortController();
+    const reason = new Error('the caller stopped');
+    const pending = arxiv.search('treaty', { signal: controller.signal, onSend: () => new Promise<void>(() => {}) });
+    setTimeout(() => controller.abort(reason), 30);
+    await expect(pending).rejects.toBe(reason);
+    expect(asked).toEqual([]);
+    expect((await arxiv.search('treaty')).kind).toBe('hits');
+  }, 2_000);
+
+  it('sends nothing for an onSend that settles after the deadline', async () => {
+    const outcome = await provider({ timeoutMs: 80 }).search('treaty', { onSend: () => new Promise<void>((resolve) => setTimeout(resolve, 200)) });
+    expect(outcome).toEqual({ kind: 'failed', status: null });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(asked).toEqual([]);
+  }, 2_000);
+
+  it('answers failed for a feed cut short: no closing tag, or an entry left open', async () => {
+    const whole = feed(PAPERS.slice(0, 2));
+    for (const body of [
+      '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">',
+      whole.slice(0, whole.indexOf('</feed>')),
+      whole.slice(0, whole.lastIndexOf('</entry>')),
+      '<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>http://arxiv.org/abs/2301.01234v2</id><title>Cut</title></feed>',
+    ]) {
+      script = (response) => atom(response, body, false);
+      expect(await provider().search('treaty')).toEqual({ kind: 'failed', status: 200 });
+    }
+  });
+
+  it('leaves out an entry whose id is not an arXiv id', async () => {
+    script = (response) => atom(response, feed([{ id: 'not-a-paper', title: 'Not one', summary: 'x' }, { id: '2301.123', title: 'Too short', summary: 'x' }, PAPERS[2] as (typeof PAPERS)[number]]));
+    expect(await provider().search('treaty', { limit: 5 })).toEqual({ kind: 'hits', hits: [{ key: '2302.00001v1', title: 'A third paper' }] });
   });
 
   it('blocks the limiter on a 503 with Retry-After: the next search is limited with nothing sent', async () => {
@@ -235,7 +291,25 @@ describe('ArxivSourceProvider.read', () => {
     expect(await provider().read({ key: '1234.12345', title: 'x' })).toEqual({ kind: 'skipped', status: 200 });
     script = null;
     asked.length = 0;
-    expect(await provider().read({ key: '2301.01234v2&max_results=5000', title: 'x' })).toEqual({ kind: 'skipped', status: null });
+    for (const key of ['2301.01234v2&max_results=5000', 'not-a-paper', '2301.123', 'physics/01', '2301.01234v']) {
+      expect(await provider().read({ key, title: 'x' })).toEqual({ kind: 'skipped', status: null });
+    }
     expect(asked).toEqual([]);
+  });
+
+  it('skips a feed holding another paper or another version, and reads the version the feed gives for an id with none', async () => {
+    const other = PAPERS[2] as (typeof PAPERS)[number];
+    script = (response) => atom(response, feed([other]));
+    expect(await provider().read({ key: '2301.01234v2', title: 'x' })).toEqual({ kind: 'skipped', status: 200 });
+    script = (response) => atom(response, feed([PAPERS[0] as (typeof PAPERS)[number]]));
+    expect(await provider().read({ key: '2301.01234v1', title: 'x' })).toEqual({ kind: 'skipped', status: 200 });
+    const latest = await provider().read({ key: '2301.01234', title: 'x' });
+    expect(latest).toMatchObject({ kind: 'document', document: { key: '2301.01234v2', revision: 'v2', url: 'https://arxiv.org/abs/2301.01234v2' } });
+  });
+
+  it('skips a feed cut short', async () => {
+    const whole = feed([PAPERS[0] as (typeof PAPERS)[number]]);
+    script = (response) => atom(response, whole.slice(0, whole.indexOf('</feed>')), false);
+    expect(await provider().read({ key: '2301.01234v2', title: 'x' })).toEqual({ kind: 'skipped', status: 200 });
   });
 });
