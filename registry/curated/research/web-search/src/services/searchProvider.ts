@@ -1103,7 +1103,9 @@ export class SearchProviderService {
     const startTime = Date.now();
     const maxResults = options.maxResults || 10;
     const perProvider = options.perProvider || maxResults;
-    const { signal } = options;
+    // What this call was given: a hook that changes the options object afterwards changes nothing here.
+    const call: MultiSearchOptions = { ...options };
+    const { signal } = call;
     signal?.throwIfAborted();
 
     const configured = this.getAvailableProviders();
@@ -1115,7 +1117,7 @@ export class SearchProviderService {
 
     const ends = await untilAbort(
       Promise.all(
-        providers.map((provider) => this.askProvider(query, provider, askable.has(provider), perProvider, startTime, options)),
+        providers.map((provider) => this.askProvider(query, provider, askable.has(provider), perProvider, startTime, call)),
       ),
       signal,
     );
