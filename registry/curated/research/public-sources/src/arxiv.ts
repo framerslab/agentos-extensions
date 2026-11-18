@@ -24,6 +24,12 @@ export const ARXIV_QUERY_PATH = '/api/query';
 /** The most words of a phrase a search asks for. */
 const PHRASE_WORDS_MAX = 12;
 
+/** An arXiv id, its version optional: `2301.01234v2`, or the older `physics/0101001v1` and `math.GT/0309136`. */
+const ARXIV_ID = /^(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v[1-9]\d*)?$/u;
+
+/** An id's version at its end, such as `v2`. */
+const VERSION = /v\d+$/u;
+
 /** The provider's settings. */
 export interface ArxivOptions {
   /** Who is asking, sent as the User-Agent in the form `<name>/<version> (<contact>)`. */
@@ -46,9 +52,12 @@ export interface ArxivOptions {
   now?: () => number;
 }
 
-/** A limiter for arXiv's API in one process: one request at a time, at least 3,000 ms between two starts. */
+/**
+ * A limiter for arXiv's API in one process: one request at a time, at least 3,000 ms between two starts, and a wait of
+ * up to 3,500 ms for its turn, so a paper read straight after its search waits out the spacing and is sent.
+ */
 export function arxivLimiter(): SourceLimiter {
-  return new SourceLimiter({ concurrency: 1, spacingMs: 3_000, perMinute: 20 });
+  return new SourceLimiter({ concurrency: 1, spacingMs: 3_000, perMinute: 20, waitMs: 3_500 });
 }
 
 /** The deadline's reason, so a request it ended is told from the caller's own cancellation. */
@@ -73,11 +82,14 @@ function collapse(text: string): string {
 }
 
 /**
- * The entries of an Atom answer, each with its id, title, abstract and last update; null for an answer that is not an
- * Atom feed, or one that is arXiv's error entry.
+ * The entries of an Atom answer, each with its id, title, abstract and last update; null for an answer that is not a
+ * whole Atom feed (one cut short has no closing tag of its own for the feed, an entry or a field with text), or one that
+ * is arXiv's error entry.
  */
 function atomEntries(xml: string): AtomEntry[] | null {
   let feed = false;
+  let closed = false;
+  let cut = false;
   const entries: AtomEntry[] = [];
   let entry: Record<string, string> | null = null;
   let field: string | null = null;
@@ -97,7 +109,10 @@ function atomEntries(xml: string): AtomEntry[] | null {
       ontext(text) {
         if (entry !== null && field !== null) entry[field] += text;
       },
-      onclosetag() {
+      onclosetag(name, implied) {
+        const local = name.toLowerCase();
+        if (depth === 1 && local === 'feed' && !implied) closed = true;
+        if (implied && ((depth === 2 && local === 'entry') || (depth === 3 && entry !== null && field !== null && entry[field] !== ''))) cut = true;
         if (depth === 3) field = null;
         if (depth === 2 && entry !== null) {
           entries.push({ id: collapse(entry.id ?? ''), title: collapse(entry.title ?? ''), summary: entry.summary ?? '', updated: collapse(entry.updated ?? '') });
@@ -110,7 +125,7 @@ function atomEntries(xml: string): AtomEntry[] | null {
   );
   parser.write(xml.replace(/^\s*<\?xml[^>]*\?>/u, ''));
   parser.end();
-  if (!feed) return null;
+  if (!feed || !closed || cut) return null;
   if (entries.some((one) => one.title === 'Error' && /^https?:\/\/arxiv\.org\/api\/errors/u.test(one.id))) return null;
   return entries;
 }
@@ -119,7 +134,27 @@ function atomEntries(xml: string): AtomEntry[] | null {
 function paperId(address: string): string | null {
   const match = /^https?:\/\/arxiv\.org\/abs\/(.+)$/u.exec(address);
   const id = match?.[1];
-  return id !== undefined && /^[A-Za-z0-9.\-/]+$/u.test(id) ? id : null;
+  return id !== undefined && ARXIV_ID.test(id) ? id : null;
+}
+
+/** Whether an entry's id is the paper asked for: that version, or for a key with none, any version of it. */
+function isPaper(id: string, key: string): boolean {
+  return VERSION.test(key) ? id === key : id.replace(VERSION, '') === key;
+}
+
+/** Runs `work`, ending at once with the signal's reason when it aborts first, whether or not `work` ever settles. */
+async function untilAborted(work: () => void | Promise<void>, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  let onAbort: () => void = () => undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    await Promise.race([work(), aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 /** The abstract's paragraphs: split at blank lines, each with its white space collapsed. */
@@ -186,7 +221,8 @@ export class ArxivSourceProvider implements PublicSourceProvider {
    * answer, `limited` when the limiter or the caller's `onSend` refused (nothing was sent), or `failed` for a transport
    * failure, the deadline or a body past the cap. The deadline starts when `onSend` is called, so it covers the host's
    * own wait there, the limiter's spacing after it, the request and its body; the request is then aborted and the
-   * limiter's slot released. The caller's own cancellation is thrown.
+   * limiter's slot released, an `onSend` still pending included, and nothing is sent after it. The caller's own
+   * cancellation is thrown.
    */
   private async get<T>(query: string, options: CallOptions, consume: (response: Response) => Promise<T>): Promise<T | 'limited' | 'failed'> {
     const deadline = new AbortController();
@@ -213,7 +249,8 @@ export class ArxivSourceProvider implements PublicSourceProvider {
         signal,
         async () => {
           startClock();
-          await options.onSend?.();
+          const { onSend } = options;
+          if (onSend !== undefined) await untilAborted(onSend, signal);
         },
       );
     } catch (error) {
@@ -262,12 +299,13 @@ export class ArxivSourceProvider implements PublicSourceProvider {
    * `provider` `arxiv`, `kind` `paper`, `url` `https://arxiv.org/abs/<id>`, `revision` the version read (such as `v2`)
    * when the id names one, `pageDate` the entry's last update, `licence` CC0 1.0, and as `blocks` the title, then the
    * abstract's paragraphs. `limited` when the limiter refused (nothing was sent), or `skipped` with the status when one
-   * came: an answer that is not 200, past the cap or not a feed holding that paper, an error entry, a transport
-   * failure, the deadline, or an id that is not arXiv's (no request). The caller's own cancellation is thrown.
+   * came: an answer that is not 200, past the cap or not a whole feed holding that paper (the version the key names, or
+   * for a key with none, the version the feed gives), an error entry, a transport failure, the deadline, or a key that
+   * is not an arXiv id (no request). The caller's own cancellation is thrown.
    */
   async read(hit: SourceHit, options: Omit<CallOptions, 'onSend'> = {}): Promise<ReadOutcome> {
     const key = hit.key;
-    if (!/^[A-Za-z0-9.\-/]+$/u.test(key)) return { kind: 'skipped', status: null };
+    if (!ARXIV_ID.test(key)) return { kind: 'skipped', status: null };
     const outcome = await this.get(`id_list=${encodeURIComponent(key)}&start=0&max_results=1`, options, async (response): Promise<ReadOutcome> => {
       if (response.status !== 200) {
         await response.body?.cancel();
@@ -275,7 +313,10 @@ export class ArxivSourceProvider implements PublicSourceProvider {
       }
       const readAt = this.now();
       const text = await readCapped(response, this.maxBytes);
-      const entry = (text === null ? null : atomEntries(text))?.find((one) => paperId(one.id) !== null);
+      const entry = (text === null ? null : atomEntries(text))?.find((one) => {
+        const found = paperId(one.id);
+        return found !== null && isPaper(found, key);
+      });
       const id = entry === undefined ? null : paperId(entry.id);
       if (entry === undefined || id === null || entry.title === '') return { kind: 'skipped', status: 200 };
       const updated = Date.parse(entry.updated);
