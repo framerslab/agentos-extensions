@@ -122,6 +122,19 @@ describe("a page's icon", () => {
     );
     expect((await documentOf(provider({ transport: named.transport, icon: true }))).icon).toBe(dataAddress('x-icon', fallback));
     expect(named.urls().filter((url) => url.includes('.svg'))).toEqual([]);
+
+    // An SVG whose type is written with a character reference, at an address with no extension: passed over too.
+    const encoded = stubTransport(
+      (url) =>
+        answers(url) ??
+        (url === 'https://harbour.example.test/brand-mark'
+          ? image(svg, 'image/svg+xml')
+          : url === PAGE
+            ? htmlPage('<link rel="icon" type="image/svg&#43;xml" href="/brand-mark"><link rel="icon" href="/mark.png">', '<p>The harbour opened in 1887.</p>')
+            : undefined),
+    );
+    expect((await documentOf(provider({ transport: encoded.transport, icon: true }))).icon).toBe(dataAddress('png', icon));
+    expect(encoded.urls()).not.toContain('https://harbour.example.test/brand-mark');
   });
 
   it('answers no icon past 65,536 bytes, on a host the rule refuses, or that robots.txt disallows; the page is read as before', async () => {
