@@ -57,7 +57,7 @@
   "devDependencies": {
     "@framers/agentos": "workspace:^",
     "@framers/agentos-ext-account-sources": "workspace:^",
-    "@framers/sql-storage-adapter": "^0.9.5",
+    "@framers/sql-storage-adapter": "^0.9.7",
     "@types/node": "^20.12.12",
     "@vitest/coverage-v8": "^5.1.0",
     "rimraf": "^6.1.3",
