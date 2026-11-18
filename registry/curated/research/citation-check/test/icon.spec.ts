@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readPage, WebPageSourceProvider, type WebPageSourceOptions } from '../src/index';
+import { readPage, WebPageSourceProvider, type Transport, type WebPageSourceOptions } from '../src/index';
 import { htmlPage, stubTransport, type StubAnswer } from './stub-transport';
 
 // A page's icon and its label: the icon read from the page's own origin alone (a declared icon there, else its
@@ -236,5 +236,59 @@ describe("a web page's provider, finders and kind", () => {
     expect(outcome.hits.map((hit) => hit.key)).toEqual([PAGE]);
     const document = await web.read(outcome.hits[0]!);
     expect(document).toMatchObject({ kind: 'document', document: { provider: 'serper', foundThrough: ['serper', 'tavily'], kind: 'news' } });
+  });
+});
+
+describe('the icon read, its cap, its cancellation and the kind overrides, as the host gave them', () => {
+  it('reads an icon whose rel is written with a character reference', async () => {
+    const icon = png();
+    const stub = stubTransport(
+      (url) =>
+        NO_ROBOTS(url) ??
+        (url === 'https://harbour.example.test/mark.png'
+          ? image(icon, 'image/png')
+          : url === PAGE
+            ? htmlPage('<link rel="&#105;con" href="/mark.png">', '<p>The harbour opened in 1887.</p>')
+            : undefined),
+    );
+    expect((await documentOf(provider({ transport: stub.transport, icon: true }))).icon).toBe(dataAddress('png', icon));
+    expect(stub.urls()).not.toContain('https://harbour.example.test/favicon.ico');
+  });
+
+  it("holds the provider's icon to iconMaxBytes: a 64-byte icon is kept at 64 and not at 63", async () => {
+    const icon = png(64);
+    const answers = (url: string): StubAnswer | undefined =>
+      NO_ROBOTS(url) ?? (url.endsWith('/favicon.ico') ? image(icon, 'image/png') : htmlPage('<title>Port history</title>', '<p>The harbour opened in 1887.</p>'));
+    const under = stubTransport(answers);
+    expect(await documentOf(provider({ transport: under.transport, icon: true, iconMaxBytes: 63 }))).not.toHaveProperty('icon');
+    const at = stubTransport(answers);
+    expect((await documentOf(provider({ transport: at.transport, icon: true, iconMaxBytes: 64 }))).icon).toBe(dataAddress('png', icon));
+  });
+
+  it("rejects with the caller's reason when the caller aborts while the icon's answer is being discarded", async () => {
+    const controller = new AbortController();
+    const reason = new Error('the caller stopped');
+    const stub = stubTransport((url) => NO_ROBOTS(url) ?? (url === PAGE ? htmlPage('<title>Port history</title>', '<p>The harbour opened in 1887.</p>') : undefined));
+    const transport: Transport = async (url, signal, rules, limits) => {
+      const answer = await stub.transport(url, signal, rules, limits);
+      if (!url.endsWith('/favicon.ico')) return answer;
+      // The icon answers 404, and the caller stops while its body is discarded.
+      return {
+        ...answer,
+        discard: async () => {
+          controller.abort(reason);
+        },
+      };
+    };
+    const read = readPage(PAGE, { transport, scraper: null, timeoutMs: 2_000, maxBytes: 100_000, textBudget: 10_000, now: () => NOW, icon: true, signal: controller.signal });
+    await expect(read).rejects.toBe(reason);
+  });
+
+  it('reads with the kind overrides it was given, whatever the host does to its record after', async () => {
+    const stub = stubTransport((url) => NO_ROBOTS(url) ?? (url === PAGE ? htmlPage('<title>Port history</title>', '<p>The harbour opened in 1887.</p>') : undefined));
+    const overrides: Record<string, string> = { 'example.test': 'news' };
+    const web = provider({ transport: stub.transport, kindOverrides: overrides });
+    overrides['example.test'] = 'Local News';
+    expect((await documentOf(web)).kind).toBe('news');
   });
 });
