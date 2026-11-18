@@ -899,6 +899,35 @@ describe('multiSearch: a held unit counts only while its request can still leave
     expect(asked.map((one) => one.provider)).toEqual(['wikipedia']);
   });
 
+  it('a caller reusing its options object with an aborted signal leaves the held unit with the request still running', async () => {
+    let inHook: () => void = () => {};
+    const hooked = new Promise<void>((resolve) => {
+      inHook = resolve;
+    });
+    let answerHook: (value: boolean) => void = () => {};
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter: new SourceLimiter({ spacingMs: 0 }), origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    const options: { providers: string[]; fallback: boolean; signal: AbortSignal; onSend: () => Promise<boolean> } = {
+      providers: ['wikipedia'],
+      fallback: false,
+      signal: new AbortController().signal,
+      onSend: () => {
+        inHook();
+        return new Promise<boolean>((resolve) => {
+          answerHook = resolve;
+        });
+      },
+    };
+    const first = wiki.multiSearch('Treaty of Versailles', options);
+    await hooked;
+    // The first call goes on under the signal it started with; the object it was given now holds another.
+    options.signal = AbortSignal.abort(new Error('another call'));
+    const second = await wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false });
+    expect(second.metadata.outcomes).toEqual({ wikipedia: 'limited' });
+    answerHook(true);
+    expect((await first).metadata.outcomes).toEqual({ wikipedia: 'answered' });
+    expect(asked.map((one) => one.provider)).toEqual(['wikipedia']);
+  });
+
   it('a replacement started once the clock passes a held wiki request’s deadline, before its timer runs, is sent', async () => {
     const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter: new SourceLimiter({ spacingMs: 0 }), origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
     let replacement: ReturnType<SearchProviderService['multiSearch']> | undefined;
