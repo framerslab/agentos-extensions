@@ -1107,6 +1107,7 @@ export class SearchProviderService {
     const perProvider = options.perProvider || maxResults;
     // What every provider reads, each read once here: a hook that changes the options object afterwards changes nothing.
     const onSend = options.onSend;
+    const given = options.providers;
     const call: MultiSearchOptions = {
       signal,
       deadlineMs: options.deadlineMs,
@@ -1116,7 +1117,7 @@ export class SearchProviderService {
     const configured = this.getAvailableProviders();
     // DuckDuckGo is the fallback alone: `fallback: false` leaves it out whether or not the providers name it, and with
     // the fallback on it comes last, after every provider named.
-    const named = (options.providers === undefined ? configured : [...options.providers]).filter((provider) => provider !== 'duckduckgo');
+    const named = (given === undefined ? configured : [...given]).filter((provider) => provider !== 'duckduckgo');
     const providers = [...new Set(options.fallback === false ? named : [...named, 'duckduckgo'])];
     const askable = new Set([...configured, 'duckduckgo']);
 
