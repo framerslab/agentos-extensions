@@ -57,6 +57,23 @@ describe("a page's icon", () => {
     expect(read.passages.map((passage) => passage.icon)).toEqual([dataAddress('png', icon)]);
   });
 
+  it("reads a declared icon's address with its character references decoded", async () => {
+    const icon = png();
+    const stub = stubTransport(
+      (url) =>
+        NO_ROBOTS(url) ??
+        (url === 'https://harbour.example.test/icon?theme=dark&size=32'
+          ? image(icon, 'image/png')
+          : url === PAGE
+            ? htmlPage('<title>Port history</title><link rel="icon" href="/icon?theme=dark&amp;size=32">', '<p>The harbour opened in 1887.</p>')
+            : undefined),
+    );
+    const document = await documentOf(provider({ transport: stub.transport, icon: true }));
+    expect(document.icon).toBe(dataAddress('png', icon));
+    expect(stub.urls()).toContain('https://harbour.example.test/icon?theme=dark&size=32');
+    expect(stub.urls().filter((url) => url.includes('&amp;'))).toEqual([]);
+  });
+
   it("never requests a declared icon at another host, and reads the page's own /favicon.ico", async () => {
     const icon = ico();
     const stub = stubTransport(
@@ -137,6 +154,24 @@ describe("a web page's provider, finders and kind", () => {
     const bare = await web.read(outcome.hits[1]!);
     expect(bare).toMatchObject({ kind: 'document', document: { kind: 'official' } });
     expect(bare.kind === 'document' ? bare.document : {}).not.toHaveProperty('provider');
+  });
+
+  it("reads the finders of a page as web-search's multiSearch answers it, { url, providers }, when foundThrough is left out", async () => {
+    const stub = stubTransport((url) => NO_ROBOTS(url) ?? htmlPage('<title>Port history</title>', '<p>The harbour opened in 1887.</p>'));
+    const web = provider({
+      transport: stub.transport,
+      // A multiSearch result as it comes: its finders under `providers`, beside the fields the provider does not read.
+      search: async () => [{ url: PAGE, title: 'Port history', snippet: 'The harbour opened in 1887.', providers: ['serper', 'tavily'], agreementCount: 2 }],
+    });
+    const outcome = await web.search('harbour opening year');
+    if (outcome.kind !== 'hits') throw new Error('expected hits');
+    const document = await web.read(outcome.hits[0]!);
+    expect(document).toMatchObject({ kind: 'document', document: { provider: 'serper', foundThrough: ['serper', 'tavily'] } });
+    // foundThrough, when given, is read in place of providers.
+    const both = provider({ transport: stub.transport, search: async () => [{ url: PAGE, foundThrough: ['tavily'], providers: ['serper', 'tavily'] }] });
+    const found = await both.search('harbour opening year');
+    if (found.kind !== 'hits') throw new Error('expected hits');
+    expect(await both.read(found.hits[0]!)).toMatchObject({ kind: 'document', document: { provider: 'tavily', foundThrough: ['tavily'] } });
   });
 
   it("merges the finders of one page found at two forms of its address, keeps only source words, and reads the host's kind overrides", async () => {
