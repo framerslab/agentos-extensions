@@ -117,6 +117,14 @@ function untilAbort<T>(work: Promise<T>, signal: AbortSignal | undefined): Promi
   });
 }
 
+/** A unit of a provider's rate limit held for a request that has not left yet. */
+interface RateHold {
+  /** Counts the unit in the window the request leaves in; false when the limit refuses it. */
+  spend(): boolean;
+  /** Gives the unit back; nothing after the first `spend` or `release`. */
+  release(): void;
+}
+
 /** A `LimiterRefused`, whichever copy of public-sources threw it. */
 function isRefusal(error: unknown): boolean {
   return error instanceof LimiterRefused || (error as { name?: unknown } | null)?.name === 'LimiterRefused';
@@ -214,6 +222,8 @@ export interface MultiSearchResult extends SearchResult {
  * - `limited`: nothing was sent to it, because the service's rate limit or the wiki's limiter refused it.
  *
  * A request is counted against the service's rate limit only when it leaves, so a skipped or late provider spends none.
+ * A wiki request holds its unit from the moment its limiter grants it, before its `onSend`, until it leaves or ends
+ * unsent, so a request beside it is refused before its limiter stamps a start.
  */
 export type ProviderOutcome = 'answered' | 'empty' | 'failed' | 'late' | 'skipped' | 'limited';
 
@@ -324,6 +334,8 @@ function anyOf(signals: Array<AbortSignal | undefined>): AbortSignal | undefined
 export class SearchProviderService {
   private config: SearchProviderConfig;
   private rateLimitState: Map<string, RateWindow>;
+  /** Units of each provider's rate limit held by wiki requests past their `onSend` that have not left yet. */
+  private readonly rateLimitHeld = new Map<string, number>();
   /** The `wikipedia` provider, built once when the config enables it. */
   private wikipedia: WikipediaSourceProvider | null = null;
   private wikipediaLimiter: RefusalKeeper | null = null;
@@ -577,28 +589,55 @@ export class SearchProviderService {
     return this.takeRateLimit(provider);
   }
 
-  /** Whether a provider is within its rate limit, counting nothing. */
+  /** Whether a provider is within its rate limit, counting nothing: the units held for requests not yet sent count. */
   private rateLimitOpen(provider: string): boolean {
     const state = this.rateLimitState.get(provider);
-    return state === undefined || Date.now() > state.resetTime || state.count < this.config.rateLimit!.maxRequests;
+    const counted = state === undefined || Date.now() > state.resetTime ? 0 : state.count;
+    return counted + (this.rateLimitHeld.get(provider) ?? 0) < this.config.rateLimit!.maxRequests;
   }
 
   /** Counts one request against a provider's rate limit; false, counting nothing, when it is past the limit. */
   private takeRateLimit(provider: string): boolean {
+    if (!this.rateLimitOpen(provider)) return false;
     const now = Date.now();
     const state = this.rateLimitState.get(provider);
-
     if (!state || now > state.resetTime) {
       this.rateLimitState.set(provider, { count: 1, resetTime: now + this.config.rateLimit!.windowMs });
-      return true;
+    } else {
+      state.count++;
     }
-
-    if (state.count >= this.config.rateLimit!.maxRequests) {
-      return false;
-    }
-
-    state.count++;
     return true;
+  }
+
+  /**
+   * Holds one unit of a provider's rate limit for a request that has not left yet: counted against the limit by every
+   * other request while held, and in no window until `spend` counts it in the window the request leaves in. `release`
+   * gives it back, as the signal's abort does at once. Null, holding nothing, when the provider is past its limit.
+   */
+  private holdRateLimit(provider: string, signal: AbortSignal | undefined): RateHold | null {
+    if (!this.rateLimitOpen(provider)) return null;
+    this.rateLimitHeld.set(provider, (this.rateLimitHeld.get(provider) ?? 0) + 1);
+    let held = true;
+    const end = (): void => {
+      if (!held) return;
+      held = false;
+      signal?.removeEventListener('abort', onAbort);
+      const left = (this.rateLimitHeld.get(provider) ?? 1) - 1;
+      if (left > 0) this.rateLimitHeld.set(provider, left);
+      else this.rateLimitHeld.delete(provider);
+    };
+    // An event named abort on a signal that did not abort is no abort.
+    const onAbort = (): void => {
+      if (signal?.aborted === true) end();
+    };
+    signal?.addEventListener('abort', onAbort);
+    return {
+      release: end,
+      spend: (): boolean => {
+        end();
+        return this.takeRateLimit(provider);
+      },
+    };
   }
 
   /**
@@ -1143,7 +1182,7 @@ export class SearchProviderService {
    * that is not configured, that the rate limit refuses or that `onSend` skips is sent nothing; past the deadline its
    * request is aborted, or never sent, and its results dropped. Every check that decides whether the request leaves
    * runs again at the moment it would leave: the caller's signal, the deadline by the clock, and the rate limit, which
-   * counts the request only then.
+   * counts the request only then. A wiki request holds its unit of the rate limit from its `onSend` until then.
    */
   private async askProvider(
     query: string,
@@ -1201,24 +1240,57 @@ export class SearchProviderService {
       halt();
       if (provider !== 'duckduckgo' && !this.takeRateLimit(provider)) throw new LimiterRefused('wait');
     };
+    /** The unit of the rate limit a wiki request holds from its `onSend` until it leaves or ends unsent. */
+    let hold: RateHold | null = null;
+    /**
+     * The wiki's last checks, when its limiter starts the request: the deadline and the signal, then the unit it holds
+     * counted. The unit was held before the limiter stamped the start, so no other request can have taken it.
+     */
+    const startWiki = (): void => {
+      const held = hold;
+      hold = null;
+      try {
+        halt();
+      } catch (error) {
+        held?.release();
+        throw error;
+      }
+      // A host limiter that never runs `beforeStart` holds nothing: the count is taken here, as for any provider.
+      if (held === null ? !this.takeRateLimit(provider) : !held.spend()) throw new LimiterRefused('wait');
+    };
 
     const work = (async (): Promise<SearchResult[]> => {
       // Up to the hook nothing awaits, so the hooks run in the order the providers are named.
       halt();
       if (provider !== 'duckduckgo' && !this.rateLimitOpen(provider)) throw new LimiterRefused('wait');
       if (provider === 'wikipedia') {
-        // public-sources runs this once its limiter has granted the request; a throw there sends nothing. The deadline,
-        // the signal and the rate limit are read again first, since the limiter may have queued the request; the count
-        // itself is taken when the limiter starts the request (`dispatch`).
+        // public-sources runs this once its limiter has granted the request and before it stamps the request's start; a
+        // throw there sends nothing and spends no start. The deadline and the signal are read again first, since the
+        // limiter may have queued the request; then a unit of the rate limit is held for the request before the hook, so
+        // no request running beside it can take that unit and be refused after its limiter has stamped its start. The
+        // unit is counted when the limiter starts the request (`startWiki`), and given back when it ends unsent.
         const onSend = async (): Promise<void> => {
           halt();
-          if (!this.rateLimitOpen(provider)) throw new LimiterRefused('wait');
-          if (!(await permitted())) throw SKIPPED;
-          halt();
+          hold?.release();
+          const held = this.holdRateLimit(provider, own);
+          if (held === null) throw new LimiterRefused('wait');
+          hold = held;
+          try {
+            if (!(await permitted())) throw SKIPPED;
+            halt();
+          } catch (error) {
+            held.release();
+            throw error;
+          }
         };
         const call: SearchOptions = { signal: own, onSend };
-        this.wikipediaStarts.set(call, dispatch);
-        return (await this.searchWithProvider(query, provider, count, startTime, undefined, call, true)).results;
+        this.wikipediaStarts.set(call, startWiki);
+        try {
+          return (await this.searchWithProvider(query, provider, count, startTime, undefined, call, true)).results;
+        } finally {
+          // A request its limiter refused, or that failed before it left, gives its unit back.
+          hold?.release();
+        }
       }
       // The deadline or the caller's abort ends the wait for the hook; nothing is sent after either.
       if (!(await untilAbort(permitted(), own))) throw SKIPPED;
