@@ -329,10 +329,14 @@ export class ClaimChecker {
   private readonly maxPassages: number;
   /**
    * What a decided check keeps for `agree` and `revisit`, by the outcome `check` answered: every passage it found, the
-   * held-back ones among them, and the decision's texts as it read them, which the host's copy in `decision.texts` may
-   * since have been changed from.
+   * held-back ones among them.
    */
-  private readonly decided = new WeakMap<object, { found: ClaimPassage[]; texts: readonly string[] }>();
+  private readonly decided = new WeakMap<object, { found: ClaimPassage[] }>();
+  /**
+   * The texts each decision this checker answered was decided on, by the decision (`check`'s and `revisit`'s alike),
+   * which the host's copy in `decision.texts` may since have been changed from.
+   */
+  private readonly decisionTexts = new WeakMap<object, readonly string[]>();
 
   /**
    * @param options - The embeddings call, the judge, the grounding guard's checker, and the most passages compared.
@@ -349,11 +353,14 @@ export class ClaimChecker {
 
   /** A decision with the host's passages in place of the grounding guard's sentences, and their texts as read. */
   private toHost<P extends ClaimPassage>(decision: Decision): ClaimDecision<P> {
-    return {
+    const texts = decision.sentences.map((sentence) => sentence.text);
+    const host: ClaimDecision<P> = {
       ...decision,
       sentences: decision.sentences.map((sentence) => (sentence as PassageSentence<P>).passage),
-      texts: decision.sentences.map((sentence) => sentence.text),
+      texts: [...texts],
     };
+    this.decisionTexts.set(host, texts);
+    return host;
   }
 
   /** Every passage found for a decided check; the decision's own passages when the outcome is not one `check` answered. */
@@ -497,7 +504,7 @@ export class ClaimChecker {
       judged: state.judged,
       usage: { ...usage },
     };
-    this.decided.set(outcome, { found: found.map((sentence) => sentence.passage), texts: decision.sentences.map((sentence) => sentence.text) });
+    this.decided.set(outcome, { found: found.map((sentence) => sentence.passage) });
     return outcome;
   }
 
@@ -511,8 +518,9 @@ export class ClaimChecker {
    *    first check's and every one of `more`, whatever its length);
    * 3. its first value pair pairs the same heard value as the first decision's;
    * 4. for a "differs", its marked value is the first decision's as written; for a "matches", each of the first
-   *    decision's pairs finds its partner written alike, the first decision's sentence read as `check` read it, whatever
-   *    the host has written into `decision.texts` since.
+   *    decision's pairs finds its partner written alike, the decision's sentence read as the call that answered it
+   *    (`check`, or `revisit` for a decision the host put in the outcome's place) read it, whatever the host has
+   *    written into `decision.texts` since.
    *
    * A "disagree", a decision on the judge's quote alone, and a decision with no value pair take no passage.
    *
@@ -527,9 +535,10 @@ export class ClaimChecker {
     const firstPairs = Array.isArray(decision.pairs) ? decision.pairs : [];
     const lead = firstPairs[0];
     if (lead === undefined) return [];
-    // The first decision's marks and pairs are offsets into its sentence as it was decided: the text kept for an outcome
-    // `check` answered, whatever the host has written into `decision.texts` since.
-    const firstSentence = this.decided.get(first)?.texts[0] ?? decision.texts?.[0] ?? (decision.sentences[0] ?? first.named).content;
+    // The decision's marks and pairs are offsets into its sentence as it was decided: the text kept for a decision this
+    // checker answered (`check`'s, or `revisit`'s the host put in its place), whatever the host has written into
+    // `decision.texts` since.
+    const firstSentence = this.decisionTexts.get(decision)?.[0] ?? decision.texts?.[0] ?? (decision.sentences[0] ?? first.named).content;
     // Every passage as it is now, the first check's included (a host may have changed one since).
     const sentenceOf = snapshot();
     const later = more.map((passage) => sentenceOf(passage));
