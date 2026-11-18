@@ -335,7 +335,7 @@ export class ClaimChecker {
   /**
    * The texts each decision this checker answered was decided on (`check`'s and `revisit`'s alike), which the host's
    * copy in `decision.texts` may since have been changed from. Kept by the decision's `pairs`, the offsets that index
-   * them: a host's shallow copy of a decision keeps that array, and every decision the grounding guard makes has its own.
+   * them: every decision answered holds its own copy of that array, which a host's shallow copy of the decision keeps.
    */
   private readonly decisionTexts = new WeakMap<object, readonly string[]>();
 
@@ -357,6 +357,8 @@ export class ClaimChecker {
     const texts = decision.sentences.map((sentence) => sentence.text);
     const host: ClaimDecision<P> = {
       ...decision,
+      // Its own array, whatever the checker given reuses from one decision to the next.
+      ...(Array.isArray(decision.pairs) ? { pairs: [...decision.pairs] } : {}),
       sentences: decision.sentences.map((sentence) => (sentence as PassageSentence<P>).passage),
       texts: [...texts],
     };
