@@ -1011,3 +1011,24 @@ describe('multiSearch: a held unit counts only while its request can still leave
     expect(asked.map((one) => one.provider)).toEqual(['wikipedia']);
   });
 });
+
+describe('multiSearch: each option read once', () => {
+  it('reads every option once, so a getter that answers differently on a second read changes nothing', async () => {
+    const reads = new Map<string, number>();
+    const given = { providers: ['serper'], fallback: false, maxResults: 5, perProvider: 5, deadlineMs: 4_000, onSend: (): boolean => true };
+    const options = new Proxy(given, {
+      get(target, key, receiver) {
+        const name = String(key);
+        const count = (reads.get(name) ?? 0) + 1;
+        reads.set(name, count);
+        // A getter that answers once: a second read of the providers finds none.
+        if (name === 'providers' && count > 1) return undefined;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const response = await service().multiSearch('treaty', options);
+    expect(response.metadata.outcomes).toEqual({ serper: 'answered' });
+    const names = ['signal', 'maxResults', 'perProvider', 'onSend', 'deadlineMs', 'providers', 'fallback'];
+    expect(Object.fromEntries(names.map((name) => [name, reads.get(name) ?? 0]))).toEqual(Object.fromEntries(names.map((name) => [name, 1])));
+  });
+});
