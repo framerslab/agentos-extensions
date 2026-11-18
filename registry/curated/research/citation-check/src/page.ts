@@ -492,6 +492,16 @@ export interface PageReaderOptions {
    * these rules: the reader asks it only for an address they cleared.
    */
   fallback?: PageFallbackReader;
+  /**
+   * Whether to read the page's icon once its text is read: from the page's own origin alone, after its redirects (its
+   * first `<link rel="icon">` at that origin, else that origin's `/favicon.ico`, never a declared icon at another host),
+   * through the same transport, under `allowUrl` and `robots`, at most `iconMaxBytes` read. A PNG, ICO, JPEG or WebP
+   * whose data address holds at most 8,192 characters is kept on the document and on each passage as `icon`; any other
+   * answer, a refusal or a failure leaves the icon out, and the page is read as it is without one. Not read when left out.
+   */
+  icon?: boolean;
+  /** The most bytes of an icon read; 65,536 when left out. */
+  iconMaxBytes?: number;
 }
 
 /** A page as the check reads it: its status, and when it was read, its document, its blocks and its sentences as passages. */
@@ -518,14 +528,17 @@ interface PageMeta {
   publisher: string | null;
   pageDate: number | null;
   licence: SourceLicence | null;
+  /** The addresses its `<link rel="icon">`s declare, as written, in document order. */
+  icons: string[];
 }
 
 /** The title, the publisher's name, the page's own date and its licence, from its markup (null for plain text) and its `Last-Modified`. */
 function pageMeta(html: string | null, finalUrl: string, lastModified: string | null): PageMeta {
-  if (html === null) return { title: null, publisher: null, pageDate: pageDateOf(new Map(), [], lastModified), licence: null };
+  if (html === null) return { title: null, publisher: null, pageDate: pageDateOf(new Map(), [], lastModified), licence: null, icons: [] };
   const scan = scanMarkup(html, finalUrl);
   const nodes = jsonLdNodes(scan.jsonLd);
-  return { title: pageTitle(scan), publisher: publisherOf(scan.metas, nodes), pageDate: pageDateOf(scan.metas, nodes, lastModified), licence: licenceOf(scan, nodes, finalUrl) };
+  const icons = scan.icons.map((attributes) => (attributes.get('href') ?? '').trim()).filter((href) => href !== '');
+  return { title: pageTitle(scan), publisher: publisherOf(scan.metas, nodes), pageDate: pageDateOf(scan.metas, nodes, lastModified), licence: licenceOf(scan, nodes, finalUrl), icons };
 }
 
 /** A page that was read, as a document and its passages. */
@@ -551,13 +564,15 @@ function pageRead(url: string, finalUrl: string, status: number, via: 'fetch' | 
     ...(pageDate !== null ? { pageDate } : {}),
   };
   const passages = citationSources(document, sentenceSpans);
-  return {
+  const read: PageRead = {
     status: { url, outcome: 'read', finalUrl, status, failure: null, detail: null, via, passages: passages.length },
     blocks,
     passages,
     document,
     pageDate,
   };
+  declaredIcons.set(read, meta?.icons ?? []);
+  return read;
 }
 
 /** One attempt's outcome: the page, or the failure with what came with it. */
@@ -690,16 +705,127 @@ async function scrape(url: string, scraper: PageScraper, options: PageReaderOpti
   return pageRead(url, finalUrl, status, 'fallback', blocks, options.now(), pageMeta(html, finalUrl, null));
 }
 
+/** The most bytes of an icon read, and the longest data address one is kept as. */
+const ICON_MAX_BYTES = 65_536;
+const ICON_ADDRESS_MAX = 8_192;
+
+/** The icons each page read declared, by the read, for its icon's address. */
+const declaredIcons = new WeakMap<PageRead, readonly string[]>();
+
+/** An icon's image type by its first bytes, as a data address names it: PNG, ICO, JPEG or WebP; null for any other. */
+function iconType(bytes: Uint8Array): string | null {
+  const starts = (...lead: number[]): boolean => bytes.length >= lead.length && lead.every((byte, index) => bytes[index] === byte);
+  const ascii = (from: number, to: number): string => Buffer.from(bytes.subarray(from, to)).toString('latin1');
+  if (starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return 'png';
+  if (starts(0x00, 0x00, 0x01, 0x00)) return 'x-icon';
+  if (starts(0xff, 0xd8, 0xff)) return 'jpeg';
+  if (bytes.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'webp';
+  return null;
+}
+
+/** Whether an answer's type may hold an icon: an image type, a generic binary type, or none. */
+function iconServedAs(contentType: string | null): boolean {
+  const type = mediaType(contentType);
+  return type === '' || type.startsWith('image/') || type === 'application/octet-stream';
+}
+
+/**
+ * The address a page's icon is read from: the first icon the page declares at its own origin (after its redirects),
+ * else that origin's `/favicon.ico`; null for a page that is not http or https.
+ */
+function iconAddress(pageUrl: string, declared: readonly string[]): string | null {
+  let origin: string;
+  try {
+    const page = new URL(pageUrl);
+    if (page.protocol !== 'http:' && page.protocol !== 'https:') return null;
+    origin = page.origin;
+  } catch {
+    return null;
+  }
+  for (const href of declared) {
+    try {
+      const address = new URL(href, pageUrl);
+      if (address.origin !== origin) continue;
+      address.hash = '';
+      return address.href;
+    } catch {
+      // An address that does not parse names no icon.
+    }
+  }
+  return `${origin}/favicon.ico`;
+}
+
+/**
+ * A page's icon as a data address, or null: one request to the page's own origin, every hop held to that origin and to
+ * the reader's rules, under the page's deadline and the caller's signal; see {@link PageReaderOptions.icon}. Throws
+ * only the caller's own cancellation.
+ */
+async function readIcon(pageUrl: string, declared: readonly string[], options: PageReaderOptions): Promise<string | null> {
+  const address = iconAddress(pageUrl, declared);
+  if (address === null) return null;
+  const { origin } = new URL(address);
+  const sameOrigin = (url: string): boolean => {
+    try {
+      return new URL(url).origin === origin;
+    } catch {
+      return false;
+    }
+  };
+  const { allowUrl } = options;
+  const rules: TransportRules = {
+    allowUrl: (url) => sameOrigin(url) && (allowUrl === undefined || allowUrl(url) === true),
+    ...(options.robots !== undefined ? { robots: options.robots } : {}),
+  };
+  const cap = options.iconMaxBytes ?? ICON_MAX_BYTES;
+  const deadline = AbortSignal.timeout(options.timeoutMs);
+  const signal = options.signal ? AbortSignal.any([deadline, options.signal]) : deadline;
+  let answer: TransportAnswer;
+  try {
+    // A transport of the host's own may apply no rules, so the address is checked here before it is asked.
+    if (!checkingTransports.has(options.transport)) await checkAddress(address, rules, options.transport, signal);
+    answer = await options.transport(address, signal, rules);
+  } catch {
+    if (options.signal?.aborted) throw options.signal.reason;
+    return null;
+  }
+  try {
+    const declaredLength = Number(answer.header('content-length') ?? '');
+    if (answer.status !== 200 || !sameOrigin(answer.finalUrl) || !iconServedAs(answer.header('content-type')) || (Number.isFinite(declaredLength) && declaredLength > cap)) {
+      await answer.discard();
+      return null;
+    }
+    const bytes = await answer.read(cap);
+    const type = bytes === null ? null : iconType(bytes);
+    if (bytes === null || type === null) return null;
+    const data = `data:image/${type};base64,${Buffer.from(bytes).toString('base64')}`;
+    return data.length <= ICON_ADDRESS_MAX ? data : null;
+  } catch {
+    await answer.discard().catch(() => undefined);
+    if (options.signal?.aborted) throw options.signal.reason;
+    return null;
+  }
+}
+
 /**
  * Reads one page: the rules checked when given, one request, then for a 200 with no text one read of its address after
  * redirects through the fallback reader when given, and, when no rules are given, for a failure the scraper may mend (a
  * deadline, no connection, an error status other than 404 and 410, a page with no text) one try through the fallback
- * scraper. Answers a status for a page that is not read; throws only the caller's own cancellation.
+ * scraper; then, with `icon`, one request for its icon. Answers a status for a page that is not read; throws only the
+ * caller's own cancellation.
  *
  * @param url - The address to fetch, from {@link pageKey}.
  * @param options - How to read it.
  */
 export async function readPage(url: string, options: PageReaderOptions): Promise<PageRead> {
+  const page = await readPageText(url, options);
+  if (options.icon !== true || page.document === null) return page;
+  const icon = await readIcon(page.document.url, declaredIcons.get(page) ?? [], options);
+  if (icon === null) return page;
+  return { ...page, document: { ...page.document, icon }, passages: page.passages.map((passage) => ({ ...passage, icon })) };
+}
+
+/** A page's text and its document, as `readPage` reads them before its icon. */
+async function readPageText(url: string, options: PageReaderOptions): Promise<PageRead> {
   // A signal that has already fired never fires again, so a transport waiting on it would wait for good.
   options.signal?.throwIfAborted();
   const first = await attempt(url, options);

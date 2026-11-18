@@ -238,6 +238,8 @@ export class WikipediaSourceProvider implements PublicSourceProvider {
           readAt,
           licence: WIKIPEDIA_LICENCE,
           blocks: htmlToBlocks(text, { budget: this.textBudget }),
+          provider: 'wikipedia',
+          kind: 'encyclopedia',
         },
       };
     });
