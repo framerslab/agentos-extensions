@@ -36,6 +36,7 @@ export {
   type Transport,
   type TransportAnswer,
   type TransportRules,
+  type TransportLimits,
 } from './page.js';
 export { readRobots, robotsAllows, parseRobots, ROBOTS_PARSING_FLOOR, type RobotsRule, type RobotsFile, type RobotsGroup, type RobotsLine, type ReadRobotsOptions } from './robots.js';
 export { readLicence } from './licence.js';

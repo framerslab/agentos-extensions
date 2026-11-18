@@ -31,9 +31,10 @@ export const DEFAULT_ROBOTS: Readonly<RobotsRule> = Object.freeze({ token: '*', 
 
 /**
  * One page a host's search found: its address, or its address with the provider words that found it, in the order the
- * search named its providers (`multiSearch`'s `foundThrough`).
+ * search named its providers, as `foundThrough`, or as `providers` (the field a web-search `multiSearch` result names
+ * them in, so its results can be answered as they come). `foundThrough` is read when both are given.
  */
-export type WebSearchAnswer = string | { url: string; foundThrough?: readonly string[] };
+export type WebSearchAnswer = string | { url: string; foundThrough?: readonly string[]; providers?: readonly string[] };
 
 /** How the provider searches and reads. */
 export interface WebPageSourceOptions {
@@ -106,9 +107,11 @@ function keyOf(address: unknown): string | null {
 /** A search answer as an address and the source words of the providers that found it, each once, in order. */
 function answerOf(answer: unknown): { address: unknown; foundThrough: string[] } {
   if (typeof answer === 'string' || answer === null || typeof answer !== 'object') return { address: answer, foundThrough: [] };
-  const { url, foundThrough } = answer as { url?: unknown; foundThrough?: unknown };
+  const { url, foundThrough, providers } = answer as { url?: unknown; foundThrough?: unknown; providers?: unknown };
+  // `foundThrough` first; else a web-search `multiSearch` result's `providers`.
+  const finders = Array.isArray(foundThrough) ? foundThrough : Array.isArray(providers) ? providers : [];
   const words: string[] = [];
-  if (Array.isArray(foundThrough)) for (const word of foundThrough) if (typeof word === 'string' && isSourceWord(word) && !words.includes(word)) words.push(word);
+  for (const word of finders) if (typeof word === 'string' && isSourceWord(word) && !words.includes(word)) words.push(word);
   return { address: url, foundThrough: words };
 }
 
