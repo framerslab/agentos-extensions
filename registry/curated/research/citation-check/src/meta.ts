@@ -198,10 +198,16 @@ export function scanMarkup(html: string, baseUrl: string): MarkupScan {
   return scan;
 }
 
-/** Whether an element's `rel` names a link type, its tokens read without case. */
+/**
+ * Whether an element's `rel` names a link type: its tokens split on ASCII white space alone and read without ASCII case,
+ * as HTML reads them, so a no-break space (`&nbsp;` or U+00A0) joins one token.
+ */
 export function relNames(attributes: Attributes, type: string): boolean {
   // Its character references read first: `rel="&#105;con"` names the icon as `rel="icon"` does.
-  return decodeHTMLAttribute(attributes.get('rel') ?? '').toLowerCase().split(/\s+/u).includes(type);
+  return decodeHTMLAttribute(attributes.get('rel') ?? '')
+    .replace(/[A-Z]/gu, (letter) => letter.toLowerCase())
+    .split(/[\t\n\f\r ]+/u)
+    .includes(type);
 }
 
 /** An address as an attribute writes it, its references read and resolved against the page's own; null when it does not parse or is not http or https. */
