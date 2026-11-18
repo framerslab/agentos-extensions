@@ -225,6 +225,85 @@ await checkCitations(claims, { embedFn: managerEmbeddings(embeddingManager, { mo
 
 The claims of one page that are not on it word for word are graded in one `CitationVerifier.verify` call against the page's sentences (`maxPassages`, 2,000, in page order), which embeds them in one batch. `supportThreshold` and `unverifiableThreshold` pass through to the verifier. An `nliFn`, such as grounding-guard's `createNliFunction()`, lets the verifier turn a `supported` claim its sentence contradicts into `contradicted`; it downloads and runs its model locally. When the embedding function fails, the page's claims are graded by shared words, and each check's `note` says why.
 
+### Checking a spoken claim
+
+`ClaimChecker` checks one claim heard in a room against sentences from any source: an encyclopedia article, a web page, a paper's abstract, a person's own notes or documents. The host gives the passages (from public-sources' providers, `WebPageSourceProvider`, its own library), its embeddings call and a judge; the checker decides what may be shown.
+
+```ts
+import { embedText } from '@framers/agentos';
+import { ClaimChecker, claimJudge, type ClaimPassage } from '@framers/agentos-ext-citation-check';
+import { ValueAgreementChecker } from '@framers/agentos-ext-grounding-guard';
+
+const checker = new ClaimChecker({
+  // One batch: a vector a text, in order, and the tokens the call used.
+  embed: async (texts, signal) => {
+    const { embeddings, usage } = await embedText({ provider: 'openai', input: texts, apiKey, abortSignal: signal });
+    return { vectors: embeddings, usage: { in: usage.promptTokens } };
+  },
+  judge: claimJudge({ model: 'openai:gpt-6-luna', apiKey, deadlineMs: 8_000, maxOutputTokens: 400 }),
+  checker: new ValueAgreementChecker({ names: true }),
+});
+
+const passages: ClaimPassage[] = [
+  {
+    content: 'The Treaty of Versailles was a peace treaty signed on 28 June 1919.',
+    title: 'Treaty of Versailles',
+    url: 'https://en.wikipedia.org/wiki/Treaty_of_Versailles',
+    group: 'wikipedia:Treaty_of_Versailles', // one source: two passages of one group are of one article
+    kind: 'encyclopedia',
+  },
+];
+
+const outcome = await checker.check(
+  {
+    heard: 'The Treaty of Versailles was signed in 1918', // the words heard that hold the claim
+    heardSentence: 'The Treaty of Versailles was signed in 1918.', // the whole sentence they stand in
+    statement: 'The Treaty of Versailles was signed in 1918.', // the claim rewritten to stand alone
+  },
+  passages,
+  { signal: AbortSignal.timeout(10_000) },
+);
+// outcome.kind 'decided': outcome.decision.relation 'differs', the pair 1918 beside 1919 (offsets into
+// outcome.decision.texts[0], the sentence as read), outcome.named the passage,
+// outcome.quote 'signed on 28 June 1919', outcome.verdict the verifier's ClaimVerdict, outcome.usage the tokens
+// outcome.kind 'ended': outcome.reason 'no_passage' | 'no_best' | 'judge_none' | 'quote' | 'undecided'
+```
+
+`check(claim, given, { signal, found })` runs these steps in order, and stops at the first that ends it:
+
+1. The grounding guard's `passages` keeps the sentences of `given` about the claim (two shared stems and a comparable value, or the claim's names for a stated fact without a value). None ends `no_passage`, with nothing sent anywhere.
+2. AgentOS's `CitationVerifier`, its thresholds 0, embeds the claim and the first `maxPassages` (24) kept in one call and names the best by cosine. A sentence two sources share word for word, such as a page that copies an encyclopedia, is compared once, as the first of them, so the judge reads the title and kind of the passage the outcome names; every passage found still meets step 5. The cosine decides nothing. No passage above 0 ends `no_best`.
+3. The judge is asked once about that sentence, under `claimJudgeSystem(kind)` with `claimJudgePrompt`: `matches`, `differs` or `none`, with the words it compared quoted. `none` ends `judge_none`.
+4. The quote must hold 1 to 20 words (`CLAIM_QUOTE_MAX_WORDS`) and stand in the sentence word for word, cutting no word or number (the grounding guard's `verifyQuotes`, typographic quotation marks read as plain ones). Else it ends `quote`.
+5. The grounding guard's `decide` takes the judge's relation as a proposal and decides by code over every passage found, the ones in `found` among them: a "differs" needs every content word heard and a heard value paired with a different one, and a passage found that agrees with every heard value stops it. Nothing decided ends `undecided`.
+
+`found` is every passage about the claim the host holds, the ones it must not send included, such as a sentence that holds personal data: they are never embedded, judged or sent, and take part in step 5 alone. Left out, it is `given`'s passages about the claim.
+
+The judge's instruction names the source by the named passage's `kind`, an open word:
+
+| `kind` | "one sentence from …" |
+| --- | --- |
+| `encyclopedia` | an encyclopedia article |
+| `official`, `news`, `page`, `forum` | a web page |
+| `paper` | a paper's abstract |
+| `note`, `document` | the person's own notes or documents |
+| any other word | a source |
+
+Every instruction opens with "You compare one sentence heard in a room with one sentence from", so a stand-in for the model in a host's tests can tell the judge's call apart from others.
+
+`claimJudge({ model, apiKey, baseUrl?, deadlineMs, maxOutputTokens, effort? })` makes the judge on AgentOS's `generateObject` with this pack's schema (`{ relation, quote }`): one request (`maxAttempts: 1`), no second call for an answer outside the schema (`maxRetries: 0`), no other provider (`fallbackProviders: []`), ended at `deadlineMs` or by the check's signal, the body's read included. A host passes any function of the same shape instead, `({ system, prompt, signal }) => Promise<{ value: { relation, quote }, usage: { in, out } }>`, such as a fake in its tests. The pack reads no key from the environment.
+
+Passages that arrive after the first decision, from slower sources, are decided by code alone, with no model call:
+
+- `agree(first, claim, more)` answers the passages of `more` that agree with a first decision of `matches` or `differs` on the values: one a source other than the first's (by `group`, its best-ranked passage), holding every content stem heard, decided the same relation by the grounding guard, on the same heard value, its value written as the first's.
+- `revisit(first, claim, found)` reads the first decision again over every passage found by then, the check's own found ones among them, and answers it, or `null` when a later passage stops it. A host that holds a "differs" until its sources have answered shows it only when `revisit` still decides it.
+
+In both, every passage of `more` and `found` takes part in the veto, as `check`'s `found` does, whatever its length: the 40-word and 600-character limits hold only for a passage that may be sent or join.
+
+Each call reads every passage once, as it is when the call begins (its text, group, title, kind and address), and never again: a host that redacts a passage in place between calls sends only the redacted text from then on, and a change made while a call runs reaches only later calls. `agree` and `revisit` read the first check's passages as they are when they are called, so a passage the host moved to another source is read in that source. A decision's `sentences` are the host's own passage objects, and its `texts` hold each one's text as the call read it, at the same index: `marks` and `pairs` index `texts`, whatever the host has done to a passage since. `texts` is the host's copy: `agree` reads the sentence of the decision it is given as the call that answered it read it (`check`'s, or `revisit`'s when the host puts that decision in the outcome's place), kept apart with the decision's `pairs`, so a host may redact or reformat `texts`, in place or in a shallow copy of the decision, without changing what `agree` answers. A decision whose `pairs` the host has replaced is read from its `texts`.
+
+`usage` counts the judge's tokens in and out and the embeddings' tokens apart; `judged` is the judge calls made (0 or 1). An abort rejects `check` with the signal's reason at once, whatever is pending; a failed embeddings call or judge rejects with its own error.
+
 ## The tool
 
 The pack's one tool, `citation_verify`, takes `{ document, format?, allowUnreachable? }` and answers `{ fails, log, report }`. A document the parser cannot read, or arguments of the wrong type, answer `success: false` with the reason.
@@ -235,7 +314,7 @@ import { createExtensionPack } from '@framers/agentos-ext-citation-check';
 const pack = createExtensionPack({ options: { embeddings: 'openai' }, getSecret: (id) => secrets[id] });
 ```
 
-The tool reads pages through AgentOS's checked egress with the hosted policy, so a document cannot point it at a private address; it needs AgentOS 0.13.120 or later. Pack options: `embeddings` (`none` or `openai`, the key from the `openai.apiKey` secret or `OPENAI_API_KEY`), `embeddingModel`, `egress` (`hosted` or `local`), and from code `fetch`, `embedFn` and `nliFn`, with `timeoutMs`, `maxBytes`, `maxPages` and `priority`.
+The tool reads pages through AgentOS's checked egress with the hosted policy, so a document cannot point it at a private address. The pack needs AgentOS 0.13.158 or later: checked egress came in 0.13.120, and `claimJudge` needs `generateObject`'s `maxAttempts`, which came in 0.13.158. Pack options: `embeddings` (`none` or `openai`, the key from the `openai.apiKey` secret or `OPENAI_API_KEY`), `embeddingModel`, `egress` (`hosted` or `local`), and from code `fetch`, `embedFn` and `nliFn`, with `timeoutMs`, `maxBytes`, `maxPages` and `priority`.
 
 ## API
 
@@ -254,7 +333,8 @@ The tool reads pages through AgentOS's checked egress with the hosted policy, so
 | `readLicence(html, baseUrl)` | The licence a page's markup states |
 | `WebPageSourceProvider`, `DEFAULT_ROBOTS` | The open web as a public source over the host's search, and its robots.txt rule when none is given |
 | `FirecrawlPageReader`, `FIRECRAWL_SCRAPE_URL` | The reader of a page with no text through Firecrawl's scrape endpoint, and that endpoint |
-| `CitedClaim`, `CitationCheck`, `CitationVerdict`, `CitationPassage`, `PageStatus`, `PageFailure`, `CitationReport`, `CitationSummary`, `CitationCheckOptions`, `CitationLogger`, `EmbedFn`, `NliFn`, `PageReaderOptions`, `PageRead`, `PageFallbackReader`, `FirecrawlPageReaderOptions`, `Transport`, `TransportAnswer`, `TransportRules`, `RobotsRule`, `RobotsFile`, `WebPageSourceOptions` and the rest | The types |
+| `ClaimChecker` (`check`, `agree`, `revisit`), `claimJudge(options)`, `claimJudgeSystem(kind)`, `claimJudgePrompt(heard, statement, title, sentence)`, `CLAIM_QUOTE_MAX_WORDS` | A claim heard in a room checked against passages from any source; its judge on AgentOS's `generateObject`; the judge's instruction by kind and its prompt; the most words a quote holds |
+| `CitedClaim`, `CitationCheck`, `CitationVerdict`, `CitationPassage`, `PageStatus`, `PageFailure`, `CitationReport`, `CitationSummary`, `CitationCheckOptions`, `CitationLogger`, `EmbedFn`, `NliFn`, `PageReaderOptions`, `PageRead`, `PageFallbackReader`, `FirecrawlPageReaderOptions`, `SpokenClaim`, `ClaimPassage`, `ClaimJudge`, `ClaimJudgement`, `ClaimCheckerOptions`, `ClaimCheckOutcome`, `ClaimDecision`, `ClaimUsage`, `Transport`, `TransportAnswer`, `TransportRules`, `RobotsRule`, `RobotsFile`, `WebPageSourceOptions` and the rest | The types |
 
 ## License
 

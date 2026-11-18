@@ -7,7 +7,9 @@
  * the result. The pack's one tool is `citation_verify`; the `agentos-citations` command runs the same check. The page
  * reader is exported (`readPage` with its transports, the host rule and robots.txt on every hop, the licence read),
  * and `WebPageSourceProvider` makes the open web a public source over a search the host gives. `FirecrawlPageReader`
- * reads a page with no text through Firecrawl's scrape endpoint with the host's key.
+ * reads a page with no text through Firecrawl's scrape endpoint with the host's key. `ClaimChecker` checks a claim heard
+ * in a room against passages from any source, with one judge call (`claimJudge` on AgentOS's `generateObject`) and the
+ * grounding guard's decision by code.
  *
  * @module @framers/agentos-ext-citation-check
  */
@@ -46,6 +48,21 @@ export { renderCitationLog, citationReportFails, FAILING_VERDICTS, type Citation
 export { openAIEmbeddings, managerEmbeddings, type OpenAIEmbeddingOptions, type EmbeddingManagerLike } from './embeddings.js';
 export { CitationVerifyTool, type CitationVerifyInput, type CitationVerifyOutput } from './tools/citationVerify.js';
 export { runCitationCli, CITATION_CLI_USAGE, type CitationCliIO } from './cli.js';
+export {
+  ClaimChecker,
+  claimJudge,
+  claimJudgeSystem,
+  claimJudgePrompt,
+  CLAIM_QUOTE_MAX_WORDS,
+  type SpokenClaim,
+  type ClaimPassage,
+  type ClaimUsage,
+  type ClaimJudgement,
+  type ClaimJudge,
+  type ClaimCheckerOptions,
+  type ClaimCheckOutcome,
+  type ClaimDecision,
+} from './claims.js';
 
 /** The pack's options, from its manifest entry or from the host's code. */
 export interface CitationCheckPackOptions {
