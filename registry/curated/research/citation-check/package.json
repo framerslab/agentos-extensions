@@ -1,6 +1,6 @@
 {
   "name": "@framers/agentos-ext-citation-check",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Checks the quoted claims of a document against the pages they cite, with AgentOS's citation tooling: word for word first, then by embeddings when a model is configured. Reads public pages under robots.txt and a host's rules, and serves the open web as a public source",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -57,13 +57,14 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@framers/agentos": ">=0.13.120"
+    "@framers/agentos": ">=0.13.158"
   },
   "dependencies": {
     "@framers/agentos-ext-grounding-guard": "^0.12.0",
     "@framers/agentos-ext-public-sources": "^0.3.0",
     "@framers/agentos-ext-web-scraper": "^0.1.4",
-    "entities": "^8.1.0"
+    "entities": "^8.1.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",

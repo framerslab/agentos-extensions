@@ -97,8 +97,13 @@ function untilAbort<T>(work: Promise<T>, signal: AbortSignal | undefined): Promi
     return Promise.reject(signal.reason);
   }
   return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => reject(signal.reason);
-    signal.addEventListener('abort', onAbort, { once: true });
+    // An event named abort on a signal that did not abort is no abort; a real one ends the wait and its listener.
+    const onAbort = (): void => {
+      if (!signal.aborted) return;
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', onAbort);
     work.then(
       (value) => {
         signal.removeEventListener('abort', onAbort);
@@ -110,6 +115,14 @@ function untilAbort<T>(work: Promise<T>, signal: AbortSignal | undefined): Promi
       },
     );
   });
+}
+
+/** A unit of a provider's rate limit held for a request that has not left yet. */
+interface RateHold {
+  /** Counts the unit in the window the request leaves in; false when the limit refuses it. */
+  spend(): boolean;
+  /** Gives the unit back; nothing after the first `spend` or `release`. */
+  release(): void;
 }
 
 /** A `LimiterRefused`, whichever copy of public-sources threw it. */
@@ -124,6 +137,8 @@ function isRefusal(error: unknown): boolean {
  */
 class RefusalKeeper extends SourceLimiter {
   private readonly refusals = new WeakMap<AbortSignal, unknown>();
+  /** Checks run when the limiter starts a call's request (keyed by the call's own signal); a throw there sends nothing. */
+  private readonly atStart = new WeakMap<AbortSignal, () => void>();
 
   constructor(private readonly inner: SourceLimiter) {
     super();
@@ -134,8 +149,13 @@ class RefusalKeeper extends SourceLimiter {
   }
 
   async run<T>(task: () => Promise<T>, signal?: AbortSignal, beforeStart?: () => void | Promise<void>): Promise<T> {
+    const check = signal === undefined ? undefined : this.atStart.get(signal);
+    const started = check === undefined ? task : (): Promise<T> => {
+      check();
+      return task();
+    };
     try {
-      return await this.inner.run(task, signal, beforeStart);
+      return await this.inner.run(started, signal, beforeStart);
     } catch (error) {
       if (signal !== undefined && isRefusal(error)) this.refusals.set(signal, error);
       throw error;
@@ -145,6 +165,11 @@ class RefusalKeeper extends SourceLimiter {
   /** The refusal thrown for the call with this signal, if any. */
   refusal(signal: AbortSignal): unknown {
     return this.refusals.get(signal);
+  }
+
+  /** Runs `check` when the limiter starts the request of the call with this signal, after every wait it adds there. */
+  onStart(signal: AbortSignal, check: () => void): void {
+    this.atStart.set(signal, check);
   }
 }
 
@@ -187,6 +212,66 @@ export interface MultiSearchResult extends SearchResult {
 }
 
 /**
+ * What became of one provider in a `multiSearch`:
+ * - `answered`: it returned at least one result;
+ * - `empty`: it returned without an error and with no result;
+ * - `failed`: its request failed (an error status, a network error, a body that would not parse, Firecrawl's
+ *   `success: false`, Tavily's or Firecrawl's own 15-second timer);
+ * - `late`: it had not answered by `deadlineMs`, so its request was aborted and its results dropped;
+ * - `skipped`: nothing was sent to it, because it is not configured or `onSend` answered `false` or threw;
+ * - `limited`: nothing was sent to it, because the service's rate limit or the wiki's limiter refused it.
+ *
+ * A request is counted against the service's rate limit only when it leaves, so a skipped or late provider spends none.
+ * A wiki request holds its unit from the moment its limiter grants it, before its `onSend`, until it leaves or ends
+ * unsent, so a request beside it is refused before its limiter stamps a start. The unit counts only while the request
+ * can still leave: once the caller has aborted or the deadline has passed by the clock, a request beside it finds the
+ * unit free, before any listener or timer of the held request has run.
+ */
+export type ProviderOutcome = 'answered' | 'empty' | 'failed' | 'late' | 'skipped' | 'limited';
+
+/**
+ * What one call of `multiSearch` may carry. Every option is optional: a call with none asks every configured
+ * provider and DuckDuckGo, as before the options existed.
+ */
+export interface MultiSearchOptions {
+  /** The most results the merged list answers; 10 when left out. */
+  maxResults?: number;
+  /**
+   * The providers to ask, in this order; every configured provider when left out. A provider named but not configured
+   * answers `skipped` and is sent nothing; `wikipedia` is asked only when the service enables it and it is named here.
+   */
+  providers?: readonly string[];
+  /**
+   * `true` when left out, which asks DuckDuckGo after the other providers; `false` leaves DuckDuckGo out, even when
+   * `providers` names it.
+   */
+  fallback?: boolean;
+  /** Ends every provider's request of this call; the call rejects with the signal's reason. */
+  signal?: AbortSignal;
+  /**
+   * Awaited once before each provider's request is sent, with the provider's name, and called in the order the
+   * providers are named, DuckDuckGo last. `false` or a throw skips that provider alone, with nothing sent to it, and the
+   * other providers go on. It is not called for a provider that is not configured, that is past its rate limit, or whose
+   * call has already aborted or passed its deadline. `wikipedia` is the one exception to the order: its hook runs once
+   * the wiki's limiter has granted the request, which can be after the other providers' hooks, so a request the limiter
+   * refuses or queues past the rate limit never runs it.
+   */
+  onSend?: (provider: string) => boolean | void | Promise<boolean | void>;
+  /**
+   * Each provider's own bound in milliseconds, counted from the start of the call: a provider that has not answered
+   * by then, `onSend`'s wait included, answers `late`, its request aborted (or, when the deadline passed before it
+   * left, never sent) and its results dropped. The clock is read again when a request would leave and when its answer
+   * comes, so a thread held past the deadline sends nothing. No bound when left out beyond the providers' own timers.
+   */
+  deadlineMs?: number;
+  /**
+   * How many results each provider is asked for; `maxResults` when left out. `maxResults` stays the cap on the merged
+   * list, so a host that filters after the merge passes a cap that drops nothing (three providers of five: 15).
+   */
+  perProvider?: number;
+}
+
+/**
  * Response from a multi-provider parallel search aggregation.
  */
 export interface MultiSearchResponse {
@@ -195,12 +280,42 @@ export interface MultiSearchResponse {
     query: string;
     timestamp: string;
     totalResponseTime: number;
+    /** Every provider the call considered, in the order it named them: each is in `outcomes`. */
     providersQueried: string[];
+    /** The providers that returned at least one result. */
     providersSucceeded: string[];
+    /** Every other provider queried: empty, failed, late, skipped or limited. */
     providersFailed: string[];
     totalRawResults: number;
     deduplicatedCount: number;
+    /** What became of each provider queried. */
+    outcomes: Record<string, ProviderOutcome>;
   };
+}
+
+/** One provider's rate-limit window: the requests counted in it and when it ends. */
+interface RateWindow {
+  count: number;
+  resetTime: number;
+}
+
+/** `onSend` answered `false` or threw for a provider of a `multiSearch`: nothing was sent to it. */
+class ProviderSkipped {}
+const SKIPPED = new ProviderSkipped();
+
+/** The reason a provider's request is aborted at a `multiSearch`'s deadline. */
+class ProviderLate extends Error {
+  constructor(readonly provider: string) {
+    super(`${provider} did not answer before the deadline`);
+    this.name = 'ProviderLate';
+  }
+}
+
+/** The signals given, joined; `undefined` when none is. */
+function anyOf(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const present = signals.filter((one): one is AbortSignal => one !== undefined);
+  if (present.length === 0) return undefined;
+  return present.length === 1 ? present[0] : AbortSignal.any(present);
 }
 
 /**
@@ -220,11 +335,18 @@ export interface MultiSearchResponse {
  */
 export class SearchProviderService {
   private config: SearchProviderConfig;
-  private rateLimitState: Map<string, { count: number; resetTime: number }>;
+  private rateLimitState: Map<string, RateWindow>;
+  /**
+   * Units of each provider's rate limit held by wiki requests past their `onSend` that have not left yet, each as a
+   * check of whether its request can still leave.
+   */
+  private readonly rateLimitHeld = new Map<string, Set<() => boolean>>();
   /** The `wikipedia` provider, built once when the config enables it. */
   private wikipedia: WikipediaSourceProvider | null = null;
   private wikipediaLimiter: RefusalKeeper | null = null;
   private wikipediaOrigin = WIKIPEDIA_ORIGIN;
+  /** A `multiSearch` wiki request's last check, run when its limiter starts it, by the options object it was given. */
+  private readonly wikipediaStarts = new WeakMap<SearchOptions, () => void>();
 
   /**
    * Creates an instance of SearchProviderService
@@ -342,6 +464,8 @@ export class SearchProviderService {
     }
     // A signal of this call's own keys the limiter's refusal to it, and follows the caller's abort with its reason.
     const callSignal = call.signal === undefined ? new AbortController().signal : AbortSignal.any([call.signal]);
+    const atStart = this.wikipediaStarts.get(call);
+    if (atStart !== undefined) this.wikipediaLimiter.onStart(callSignal, atStart);
     let thrown: { error: unknown } | null = null;
     const hook = call.onSend;
     const onSend =
@@ -387,13 +511,18 @@ export class SearchProviderService {
     maxResults: number,
     startTime: number,
     category?: string,
-    call: SearchOptions = {}
+    call: SearchOptions = {},
+    strict = false,
   ): Promise<ProviderResponse> {
     let results: SearchResult[];
     const { signal } = call;
 
     // The wikipedia provider runs `onSend` inside its limiter; every other provider runs it here, before its request.
-    if (provider !== 'wikipedia') await this.beforeSend(call);
+    // With no hook nothing is awaited, so a request leaves in the same turn as its caller's last check.
+    if (provider !== 'wikipedia') {
+      if (call.onSend !== undefined) await this.beforeSend(call);
+      else call.signal?.throwIfAborted();
+    }
 
     switch (provider) {
       case 'wikipedia':
@@ -409,17 +538,17 @@ export class SearchProviderService {
         results = await this.searchBrave(query, maxResults, signal);
         break;
       case 'tavily':
-        results = await this.searchTavily(query, maxResults, signal);
+        results = await this.searchTavily(query, maxResults, signal, strict);
         break;
       case 'firecrawl':
-        results = await this.searchFirecrawl(query, maxResults, signal);
+        results = await this.searchFirecrawl(query, maxResults, signal, strict);
         break;
       case 'searxng':
         results = await this.searchSearXNG(query, maxResults, { categories: category }, signal);
         break;
       case 'duckduckgo':
       default:
-        results = await this.searchDuckDuckGoAPI(query, maxResults, signal);
+        results = await this.searchDuckDuckGoAPI(query, maxResults, signal, strict);
         break;
     }
     
@@ -462,25 +591,76 @@ export class SearchProviderService {
    * @returns {Promise<boolean>} True if within limits
    */
   private async checkRateLimit(provider: string): Promise<boolean> {
+    return this.takeRateLimit(provider);
+  }
+
+  /**
+   * Whether a provider is within its rate limit, counting nothing: the units held for requests not yet sent count, each
+   * only while its request can still leave.
+   */
+  private rateLimitOpen(provider: string): boolean {
+    const state = this.rateLimitState.get(provider);
+    const counted = state === undefined || Date.now() > state.resetTime ? 0 : state.count;
+    let held = 0;
+    for (const canLeave of this.rateLimitHeld.get(provider) ?? []) {
+      if (canLeave()) held += 1;
+    }
+    return counted + held < this.config.rateLimit!.maxRequests;
+  }
+
+  /** Counts one request against a provider's rate limit; false, counting nothing, when it is past the limit. */
+  private takeRateLimit(provider: string): boolean {
+    if (!this.rateLimitOpen(provider)) return false;
     const now = Date.now();
     const state = this.rateLimitState.get(provider);
-    
     if (!state || now > state.resetTime) {
-      this.rateLimitState.set(provider, {
-        count: 1,
-        resetTime: now + this.config.rateLimit!.windowMs
-      });
-      return true;
+      this.rateLimitState.set(provider, { count: 1, resetTime: now + this.config.rateLimit!.windowMs });
+    } else {
+      state.count++;
     }
-    
-    if (state.count >= this.config.rateLimit!.maxRequests) {
-      return false;
-    }
-    
-    state.count++;
     return true;
   }
-  
+
+  /**
+   * Holds one unit of a provider's rate limit for a request that has not left yet: counted against the limit by every
+   * other request while held and while `canLeave` answers true, and in no window until `spend` counts it in the window
+   * the request leaves in. `release` gives it back, as the signal's abort does once its listener runs; `canLeave` is read
+   * at every other request's check, so a request that can no longer leave holds nothing before then. Null, holding
+   * nothing, when the provider is past its limit.
+   */
+  private holdRateLimit(provider: string, signal: AbortSignal | undefined, canLeave: () => boolean): RateHold | null {
+    if (!this.rateLimitOpen(provider)) return null;
+    // A check of its own, so two holds are never one entry.
+    const live = (): boolean => canLeave();
+    let holds = this.rateLimitHeld.get(provider);
+    if (holds === undefined) {
+      holds = new Set();
+      this.rateLimitHeld.set(provider, holds);
+    }
+    holds.add(live);
+    let held = true;
+    const end = (): void => {
+      if (!held) return;
+      held = false;
+      signal?.removeEventListener('abort', onAbort);
+      const left = this.rateLimitHeld.get(provider);
+      left?.delete(live);
+      if (left?.size === 0) this.rateLimitHeld.delete(provider);
+    };
+    // An event named abort on a signal that did not abort is no abort.
+    const onAbort = (): void => {
+      if (signal?.aborted === true) end();
+    };
+    signal?.addEventListener('abort', onAbort);
+    return {
+      release: end,
+      spend: (): boolean => {
+        end();
+        return this.takeRateLimit(provider);
+      },
+    };
+  }
+
   /**
    * Search using Serper.dev API
    * 
@@ -629,17 +809,22 @@ export class SearchProviderService {
    * @param {number} maxResults - Maximum results
    * @returns {Promise<SearchResult[]>} Search results
    */
-  private async searchDuckDuckGoAPI(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  private async searchDuckDuckGoAPI(query: string, maxResults: number, signal?: AbortSignal, strict = false): Promise<SearchResult[]> {
+    let htmlFailed = false;
     try {
-      const htmlResults = await this.scrapeDuckDuckGoHTML(query, maxResults, signal);
+      const htmlResults = await this.scrapeDuckDuckGoHTML(query, maxResults, signal, strict);
       if (htmlResults.length > 0) return htmlResults;
     } catch {
       // Fall through to instant answer API
+      htmlFailed = true;
     }
 
     // Fallback: DuckDuckGo instant answer API (limited but free), unless the caller has stopped the search
     signal?.throwIfAborted();
-    return this.searchDuckDuckGoInstantAnswer(query, maxResults, signal);
+    const answers = await this.searchDuckDuckGoInstantAnswer(query, maxResults, signal, strict);
+    // A `multiSearch` reads a failed search page that the instant answer could not stand in for as a failure.
+    if (strict && htmlFailed && answers.length === 0) throw new Error('DuckDuckGo search failed');
+    return answers;
   }
 
   /**
@@ -647,7 +832,7 @@ export class SearchProviderService {
    *
    * @private
    */
-  private async scrapeDuckDuckGoHTML(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  private async scrapeDuckDuckGoHTML(query: string, maxResults: number, signal?: AbortSignal, strict = false): Promise<SearchResult[]> {
     const body = new URLSearchParams({ q: query, b: '' });
     const response = await send('https://html.duckduckgo.com/html/', {
       method: 'POST',
@@ -658,7 +843,10 @@ export class SearchProviderService {
       body: body.toString(),
     }, signal);
 
-    if (!response.ok) return [];
+    if (!response.ok) {
+      if (strict) throw new Error(`DuckDuckGo search page error: ${response.status} ${response.statusText}`);
+      return [];
+    }
 
     const html = await response.text();
     const results: SearchResult[] = [];
@@ -706,7 +894,7 @@ export class SearchProviderService {
    *
    * @private
    */
-  private async searchDuckDuckGoInstantAnswer(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  private async searchDuckDuckGoInstantAnswer(query: string, maxResults: number, signal?: AbortSignal, strict = false): Promise<SearchResult[]> {
     const params = new URLSearchParams({
       q: query,
       format: 'json',
@@ -715,6 +903,8 @@ export class SearchProviderService {
     });
 
     const response = await send(`https://api.duckduckgo.com/?${params}`, undefined, signal);
+    // A `multiSearch` reads an error status as the provider's failure; a `search` reads its body as before.
+    if (strict && !response.ok) throw new Error(`DuckDuckGo error: ${response.status} ${response.statusText}`);
     const data = (await response.json()) as any;
 
     const results: SearchResult[] = [];
@@ -802,7 +992,7 @@ export class SearchProviderService {
    * Search using the Tavily API (AI-optimized search).
    * @see https://docs.tavily.com/docs/tavily-api/rest-api
    */
-  private async searchTavily(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  private async searchTavily(query: string, maxResults: number, signal?: AbortSignal, strict = false): Promise<SearchResult[]> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
 
@@ -834,9 +1024,13 @@ export class SearchProviderService {
         position: i + 1,
       }));
     } catch (err) {
-      // The caller's abort ends the search; the provider's own timeout answers no results
+      // The caller's abort ends the search; the provider's own timeout answers no results to a `search` and is a
+      // failure to a `multiSearch`, so a timeout never reads as a search that found nothing
       if (signal?.aborted) throw signal.reason;
-      if ((err as Error).name === 'AbortError') return [];
+      if ((err as Error).name === 'AbortError') {
+        if (strict) throw new Error('the provider did not answer within 15 seconds');
+        return [];
+      }
       throw err;
     } finally {
       clearTimeout(timeout);
@@ -847,7 +1041,7 @@ export class SearchProviderService {
    * Search using the Firecrawl /search endpoint.
    * @see https://docs.firecrawl.dev/api-reference/endpoint/search
    */
-  private async searchFirecrawl(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResult[]> {
+  private async searchFirecrawl(query: string, maxResults: number, signal?: AbortSignal, strict = false): Promise<SearchResult[]> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
 
@@ -871,6 +1065,9 @@ export class SearchProviderService {
         success: boolean;
         data?: Array<{ url: string; title?: string; description?: string; markdown?: string }>;
       };
+      // Firecrawl answers a refusal it reports in the body (no credits left, a bad request) with `success: false`: a
+      // failure to a `multiSearch`, which never reads one as a search that found nothing. A `search` reads it as before.
+      if (strict && data.success === false) throw new Error('Firecrawl answered success: false');
 
       return (data.data ?? []).map((r, i) => ({
         title: r.title ?? r.url,
@@ -879,9 +1076,13 @@ export class SearchProviderService {
         position: i + 1,
       }));
     } catch (err) {
-      // The caller's abort ends the search; the provider's own timeout answers no results
+      // The caller's abort ends the search; the provider's own timeout answers no results to a `search` and is a
+      // failure to a `multiSearch`, so a timeout never reads as a search that found nothing
       if (signal?.aborted) throw signal.reason;
-      if ((err as Error).name === 'AbortError') return [];
+      if ((err as Error).name === 'AbortError') {
+        if (strict) throw new Error('the provider did not answer within 15 seconds');
+        return [];
+      }
       throw err;
     } finally {
       clearTimeout(timeout);
@@ -889,49 +1090,62 @@ export class SearchProviderService {
   }
 
   /**
-   * Searches ALL available providers in parallel, then merges, deduplicates,
-   * and orders results by cross-provider agreement and position.
+   * Asks several providers in parallel, then merges their results by normalized address and orders them by
+   * cross-provider agreement and position. With no options it asks every configured provider (the `wikipedia`
+   * provider among them when the service enables it) and DuckDuckGo. `options.providers`, `fallback`, `onSend`,
+   * `deadlineMs` and `perProvider` choose and bound what is asked; `metadata.outcomes` says what became of each
+   * provider. A result's `providers` follow the order the call named the providers in.
+   *
+   * @throws The signal's reason when `options.signal` aborts, before or during the call. Nothing else: a provider's
+   * failure is its outcome.
    */
-  async multiSearch(
-    query: string,
-    options: { maxResults?: number } = {},
-  ): Promise<MultiSearchResponse> {
+  async multiSearch(query: string, options: MultiSearchOptions = {}): Promise<MultiSearchResponse> {
+    const { signal } = options;
+    signal?.throwIfAborted();
     const startTime = Date.now();
     const maxResults = options.maxResults || 10;
+    const perProvider = options.perProvider || maxResults;
+    // What every provider reads, each read once here: a hook that changes the options object afterwards changes nothing.
+    const onSend = options.onSend;
+    const given = options.providers;
+    const call: MultiSearchOptions = {
+      signal,
+      deadlineMs: options.deadlineMs,
+      onSend: onSend === undefined ? undefined : (provider) => onSend.call(options, provider),
+    };
 
-    const providers = [...new Set([...this.getAvailableProviders(), 'duckduckgo'])];
+    const configured = this.getAvailableProviders();
+    // DuckDuckGo is the fallback alone: `fallback: false` leaves it out whether or not the providers name it, and with
+    // the fallback on it comes last, after every provider named.
+    const named = (given === undefined ? configured : [...given]).filter((provider) => provider !== 'duckduckgo');
+    const providers = [...new Set(options.fallback === false ? named : [...named, 'duckduckgo'])];
+    const askable = new Set([...configured, 'duckduckgo']);
 
-    const providerResults = await Promise.allSettled(
-      providers.map(async (provider) => {
-        try {
-          if (provider !== 'duckduckgo' && !(await this.checkRateLimit(provider))) {
-            throw new Error(`Rate limit exceeded for ${provider}`);
-          }
-          const response = await this.searchWithProvider(query, provider, maxResults, startTime);
-          return { provider, results: response.results, success: true as const };
-        } catch {
-          return { provider, results: [] as SearchResult[], success: false as const };
-        }
-      }),
+    const ends = await untilAbort(
+      Promise.all(
+        providers.map((provider) => this.askProvider(query, provider, askable.has(provider), perProvider, startTime, call)),
+      ),
+      signal,
     );
+    // A provider's request the abort ended answers as an outcome; the call itself rejects with the signal's reason.
+    signal?.throwIfAborted();
 
     const succeeded: string[] = [];
     const failed: string[] = [];
+    const outcomes: Record<string, ProviderOutcome> = {};
     const allResults: Array<{ provider: string; result: SearchResult; position: number }> = [];
 
-    for (const outcome of providerResults) {
-      if (outcome.status === 'fulfilled') {
-        const { provider, results, success } = outcome.value;
-        if (success && results.length > 0) {
-          succeeded.push(provider);
-          results.forEach((result, index) => {
-            allResults.push({ provider, result, position: index + 1 });
-          });
-        } else {
-          failed.push(provider);
-        }
+    // In the order the call named the providers, so a merged result's `providers` keep that order.
+    for (const { provider, outcome, results } of ends) {
+      // An own property for every name, `__proto__` among them, which an assignment would hand to the prototype.
+      Object.defineProperty(outcomes, provider, { value: outcome, enumerable: true, writable: true, configurable: true });
+      if (outcome === 'answered') {
+        succeeded.push(provider);
+        results.forEach((result, index) => {
+          allResults.push({ provider, result, position: index + 1 });
+        });
       } else {
-        failed.push('unknown');
+        failed.push(provider);
       }
     }
 
@@ -965,12 +1179,13 @@ export class SearchProviderService {
       }
     }
 
-    // Score and rank
+    // Score and rank. A position is read against the count each provider was asked for, which is `maxResults` when
+    // `perProvider` is left out.
     const totalProviders = succeeded.length || 1;
     const scoredResults = Array.from(merged.values()).map((r) => {
       const agreementBonus = (r.agreementCount / totalProviders) * 50;
       const positions = Object.values(r.providerPositions);
-      const avgNorm = positions.reduce((s, p) => s + (1 - (p - 1) / maxResults), 0) / positions.length;
+      const avgNorm = positions.reduce((s, p) => s + (1 - (p - 1) / perProvider), 0) / positions.length;
       const positionScore = avgNorm * 30;
       r.confidenceScore = Math.round(Math.min(100, agreementBonus + positionScore + 20));
       return r;
@@ -989,8 +1204,157 @@ export class SearchProviderService {
         providersFailed: failed,
         totalRawResults: allResults.length,
         deduplicatedCount: merged.size,
+        outcomes,
       },
     };
+  }
+
+  /**
+   * One provider's part of a `multiSearch`. It never rejects: what became of the provider is its outcome. A provider
+   * that is not configured, that the rate limit refuses or that `onSend` skips is sent nothing; past the deadline its
+   * request is aborted, or never sent, and its results dropped. Every check that decides whether the request leaves
+   * runs again at the moment it would leave: the caller's signal, the deadline by the clock, and the rate limit, which
+   * counts the request only then. A wiki request holds its unit of the rate limit from its `onSend` until then.
+   */
+  private async askProvider(
+    query: string,
+    provider: string,
+    configured: boolean,
+    count: number,
+    startTime: number,
+    options: MultiSearchOptions,
+  ): Promise<{ provider: string; outcome: ProviderOutcome; results: SearchResult[] }> {
+    const end = (outcome: ProviderOutcome, results: SearchResult[] = []) => ({ provider, outcome, results });
+    if (!configured) return end('skipped');
+
+    // The deadline counts from the start of the call, `onSend`'s wait included; it aborts this provider's request.
+    const deadlineAt = options.deadlineMs === undefined ? Number.POSITIVE_INFINITY : startTime + options.deadlineMs;
+    const deadline = options.deadlineMs === undefined ? undefined : new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late =
+      deadline === undefined
+        ? undefined
+        : new Promise<'late'>((resolve) => {
+            timer = setTimeout(() => {
+              if (!deadline.signal.aborted) deadline.abort(new ProviderLate(provider));
+              resolve('late');
+            }, Math.max(0, deadlineAt - Date.now()));
+          });
+    // The signal this call started with, whatever the caller later does to its options object.
+    const callerSignal = options.signal;
+    const own = anyOf([callerSignal, deadline?.signal]);
+    /** Whether the deadline has passed by the clock, which a thread held past it reads before the timer can run. */
+    const pastDeadline = (): boolean => {
+      if (deadline === undefined) return false;
+      if (!deadline.signal.aborted && Date.now() >= deadlineAt) deadline.abort(new ProviderLate(provider));
+      return deadline.signal.aborted;
+    };
+    /**
+     * Whether the request can still leave, read without changing anything, for another request's count of the units
+     * held: the caller's own signal (an `AbortSignal.any` of it may not read aborted yet while the caller's listeners
+     * run) and the deadline by the clock (its timer may not have run yet).
+     */
+    const canLeave = (): boolean =>
+      callerSignal?.aborted !== true && (deadline === undefined || (!deadline.signal.aborted && Date.now() < deadlineAt));
+    /** Throws when the request may no longer leave: the caller aborted, or the deadline passed. */
+    const halt = (): void => {
+      pastDeadline();
+      own?.throwIfAborted();
+    };
+
+    const hook = options.onSend;
+    /** `onSend`'s answer: `false` when it answered false or threw, else true. It never rejects. */
+    const permitted = async (): Promise<boolean> => {
+      if (hook === undefined) return true;
+      try {
+        return (await hook(provider)) !== false;
+      } catch {
+        return false;
+      }
+    };
+    /**
+     * The last checks before the request leaves, in the same turn as the request, the rate limit counted only here: for
+     * the wiki, when its limiter starts the request, after every wait it adds, so a request that never starts counts
+     * nothing and one that waits past the end of a window counts in the window it leaves in.
+     */
+    const dispatch = (): void => {
+      halt();
+      if (provider !== 'duckduckgo' && !this.takeRateLimit(provider)) throw new LimiterRefused('wait');
+    };
+    /** The unit of the rate limit a wiki request holds from its `onSend` until it leaves or ends unsent. */
+    let hold: RateHold | null = null;
+    /**
+     * The wiki's last checks, when its limiter starts the request: the deadline and the signal, then the unit it holds
+     * counted. The unit was held before the limiter stamped the start, so no other request can have taken it.
+     */
+    const startWiki = (): void => {
+      const held = hold;
+      hold = null;
+      try {
+        halt();
+      } catch (error) {
+        held?.release();
+        throw error;
+      }
+      // A host limiter that never runs `beforeStart` holds nothing: the count is taken here, as for any provider.
+      if (held === null ? !this.takeRateLimit(provider) : !held.spend()) throw new LimiterRefused('wait');
+    };
+
+    const work = (async (): Promise<SearchResult[]> => {
+      // Up to the hook nothing awaits, so the hooks run in the order the providers are named.
+      halt();
+      if (provider !== 'duckduckgo' && !this.rateLimitOpen(provider)) throw new LimiterRefused('wait');
+      if (provider === 'wikipedia') {
+        // public-sources runs this once its limiter has granted the request and before it stamps the request's start; a
+        // throw there sends nothing and spends no start. The deadline and the signal are read again first, since the
+        // limiter may have queued the request; then a unit of the rate limit is held for the request before the hook, so
+        // no request running beside it can take that unit and be refused after its limiter has stamped its start. The
+        // unit is counted when the limiter starts the request (`startWiki`), and given back when it ends unsent.
+        const onSend = async (): Promise<void> => {
+          halt();
+          hold?.release();
+          const held = this.holdRateLimit(provider, own, canLeave);
+          if (held === null) throw new LimiterRefused('wait');
+          hold = held;
+          try {
+            if (!(await permitted())) throw SKIPPED;
+            halt();
+          } catch (error) {
+            held.release();
+            throw error;
+          }
+        };
+        const call: SearchOptions = { signal: own, onSend };
+        this.wikipediaStarts.set(call, startWiki);
+        try {
+          return (await this.searchWithProvider(query, provider, count, startTime, undefined, call, true)).results;
+        } finally {
+          // A request its limiter refused, or that failed before it left, gives its unit back.
+          hold?.release();
+        }
+      }
+      // The deadline or the caller's abort ends the wait for the hook; nothing is sent after either.
+      if (!(await untilAbort(permitted(), own))) throw SKIPPED;
+      dispatch();
+      return (await this.searchWithProvider(query, provider, count, startTime, undefined, { signal: own }, true)).results;
+    })();
+
+    const settled = work.then(
+      (results) => (pastDeadline() ? end('late') : end(results.length > 0 ? 'answered' : 'empty', results)),
+      (error: unknown) => {
+        // The clock first, as on an answer: a hook that held the thread past the deadline is late whatever it said.
+        if (pastDeadline() && callerSignal?.aborted !== true) return end('late');
+        const thrown = error instanceof CallerStop ? error.error : error;
+        if (thrown === SKIPPED) return end('skipped');
+        if (isRefusal(thrown)) return end('limited');
+        return end('failed');
+      },
+    );
+    try {
+      return await (late === undefined ? settled : Promise.race([settled, late.then(() => end('late'))]));
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
