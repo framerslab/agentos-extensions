@@ -571,10 +571,38 @@ describe('multiSearch: the order of the hooks, the deadline on a skip, and the w
     expect(seen).toEqual(['wikipedia']);
     expect(asked).toHaveLength(1);
   });
+
+  it("two wiki requests at once, one unit of the service's rate limit left, spend one start of the host's shared limiter", async () => {
+    // A limiter the host shares with its other work on the wiki: two starts a minute, three requests at once.
+    const limiter = new SourceLimiter({ spacingMs: 0, perMinute: 2 });
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter, origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    let called = 0;
+    let both: () => void = () => {};
+    const bothCalled = new Promise<void>((resolve) => {
+      both = resolve;
+    });
+    const options = {
+      providers: ['wikipedia'],
+      fallback: false,
+      // Each hook waits up to 100 ms for the other's, so both requests are past their checks before either leaves.
+      onSend: async () => {
+        called += 1;
+        if (called === 2) both();
+        await Promise.race([bothCalled, new Promise((resolve) => setTimeout(resolve, 100))]);
+        return true;
+      },
+    };
+    const [first, second] = await Promise.all([wiki.multiSearch('Treaty of Versailles', options), wiki.multiSearch('Treaty of Versailles', options)]);
+    expect([first.metadata.outcomes.wikipedia, second.metadata.outcomes.wikipedia].sort()).toEqual(['answered', 'limited']);
+    expect(asked).toHaveLength(1);
+    // The refused request ran no hook and took no start: the host's other work still finds one this minute.
+    expect(called).toBe(1);
+    await expect(limiter.run(async () => 'sent')).resolves.toBe('sent');
+  });
 });
 
 describe('multiSearch: the rate limit counts only the requests that leave', () => {
-  it('a wiki request its limiter holds past the end of a window and then refuses spends nothing of the next window', async () => {
+  it('a wiki request its limiter holds past the end of a window keeps its unit from the next window, and gives it back when refused', async () => {
     let open: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       open = resolve;
@@ -599,14 +627,16 @@ describe('multiSearch: the rate limit counts only the requests that leave', () =
     const ask = { providers: ['wikipedia'], fallback: false };
     const first = wiki.multiSearch('Treaty of Versailles', ask);
     await vi.waitFor(() => expect(runs).toBe(1), { timeout: 2_000 });
-    // The first request's window ends; a second request opens the next one and spends it.
+    // The first request's window ends while it waits: the unit it holds is not the next window's to give, so the
+    // first request could still leave in it without passing the limit.
     await new Promise((resolve) => setTimeout(resolve, 150));
     const second = await wiki.multiSearch('Treaty of Versailles', ask);
-    expect(second.metadata.outcomes).toEqual({ wikipedia: 'answered' });
+    expect(second.metadata.outcomes).toEqual({ wikipedia: 'limited' });
     open();
     expect((await first).metadata.outcomes).toEqual({ wikipedia: 'limited' });
+    // Refused unsent, the first request gives its unit back.
     const third = await wiki.multiSearch('Treaty of Versailles', ask);
-    expect(third.metadata.outcomes).toEqual({ wikipedia: 'limited' });
+    expect(third.metadata.outcomes).toEqual({ wikipedia: 'answered' });
     expect(asked).toHaveLength(1);
   });
 
