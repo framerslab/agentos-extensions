@@ -928,6 +928,38 @@ describe('multiSearch: a held unit counts only while its request can still leave
     expect(asked.map((one) => one.provider)).toEqual(['wikipedia']);
   });
 
+  it("every provider follows the signal the call was given, whatever an earlier provider's hook does to the options", async () => {
+    let inHook: () => void = () => {};
+    const hooked = new Promise<void>((resolve) => {
+      inHook = resolve;
+    });
+    const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter: new SourceLimiter({ spacingMs: 0 }), origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
+    const given = new AbortController();
+    const swapped = new AbortController();
+    const options: { providers: string[]; fallback: boolean; signal: AbortSignal; onSend: (provider: string) => boolean | Promise<boolean> } = {
+      providers: ['serper', 'wikipedia'],
+      fallback: false,
+      signal: given.signal,
+      onSend: (provider) => {
+        if (provider === 'serper') {
+          options.signal = swapped.signal;
+          return true;
+        }
+        // The wiki holds the last unit and never leaves; the object holds the first signal again.
+        options.signal = given.signal;
+        inHook();
+        return new Promise<boolean>(() => {});
+      },
+    };
+    const pending = wiki.multiSearch('Treaty of Versailles', options);
+    await hooked;
+    const reason = new Error('the caller stopped');
+    given.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    const retry = await wiki.multiSearch('Treaty of Versailles', { providers: ['wikipedia'], fallback: false });
+    expect(retry.metadata.outcomes).toEqual({ wikipedia: 'answered' });
+  });
+
   it('a replacement started once the clock passes a held wiki request’s deadline, before its timer runs, is sent', async () => {
     const wiki = service({ wikipedia: { enabled: true, client: CLIENT, limiter: new SourceLimiter({ spacingMs: 0 }), origin }, rateLimit: { maxRequests: 1, windowMs: 60_000 } });
     let replacement: ReturnType<SearchProviderService['multiSearch']> | undefined;
