@@ -137,9 +137,16 @@ function paperId(address: string): string | null {
   return id !== undefined && ARXIV_ID.test(id) ? id : null;
 }
 
+/** An id in arXiv's preferred form: an older id without its subject class, `math.CA/0611800v2` as `math/0611800v2`. */
+function preferredId(id: string): string {
+  return id.replace(/^([a-z-]+)\.[A-Z]{2}\//u, '$1/');
+}
+
 /** Whether an entry's id is the paper asked for: that version, or for a key with none, any version of it. */
 function isPaper(id: string, key: string): boolean {
-  return VERSION.test(key) ? id === key : id.replace(VERSION, '') === key;
+  const wanted = preferredId(key);
+  const found = preferredId(id);
+  return VERSION.test(wanted) ? found === wanted : found.replace(VERSION, '') === wanted;
 }
 
 /** Runs `work`, ending at once with the signal's reason when it aborts first, whether or not `work` ever settles. */
@@ -151,7 +158,8 @@ async function untilAborted(work: () => void | Promise<void>, signal: AbortSigna
     signal.addEventListener('abort', onAbort, { once: true });
   });
   try {
-    await Promise.race([work(), aborted]);
+    // Run inside a promise, so a `work` that throws at once settles the race and an abort it caused is handled too.
+    await Promise.race([(async () => work())(), aborted]);
   } finally {
     signal.removeEventListener('abort', onAbort);
   }
@@ -249,8 +257,7 @@ export class ArxivSourceProvider implements PublicSourceProvider {
         signal,
         async () => {
           startClock();
-          const { onSend } = options;
-          if (onSend !== undefined) await untilAborted(onSend, signal);
+          if (options.onSend !== undefined) await untilAborted(() => options.onSend?.(), signal);
         },
       );
     } catch (error) {
@@ -306,7 +313,7 @@ export class ArxivSourceProvider implements PublicSourceProvider {
   async read(hit: SourceHit, options: Omit<CallOptions, 'onSend'> = {}): Promise<ReadOutcome> {
     const key = hit.key;
     if (!ARXIV_ID.test(key)) return { kind: 'skipped', status: null };
-    const outcome = await this.get(`id_list=${encodeURIComponent(key)}&start=0&max_results=1`, options, async (response): Promise<ReadOutcome> => {
+    const outcome = await this.get(`id_list=${encodeURIComponent(preferredId(key))}&start=0&max_results=1`, options, async (response): Promise<ReadOutcome> => {
       if (response.status !== 200) {
         await response.body?.cancel();
         return { kind: 'skipped', status: response.status };
