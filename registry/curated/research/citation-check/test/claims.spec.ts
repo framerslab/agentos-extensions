@@ -378,6 +378,34 @@ describe('ClaimChecker: later passages, by code alone', () => {
     expect(claims.agree(first, CLAIM, [other])).toEqual([]);
   });
 
+  it("keeps each decision's text apart when the checker given reuses one pairs array", async () => {
+    const { embed } = fakeEmbed();
+    const OTHER_LEAD = LEAD.replace('1919', '1920');
+    // Each sentence's own quote, so both checks are decided; their values stand at the same offsets.
+    const judge: ClaimJudge = async ({ prompt }) => ({
+      value: { relation: 'differs', quote: prompt.includes('1920') ? QUOTE.replace('1919', '1920') : QUOTE },
+      usage: { in: 1, out: 1 },
+    });
+    let shared: NonNullable<ReturnType<typeof checker.decide>>['pairs'] | undefined;
+    const reusing: Pick<ValueAgreementChecker, 'passages' | 'decide' | 'stems'> = {
+      passages: (heard, sentences) => checker.passages(heard, sentences),
+      stems: (text) => checker.stems(text),
+      decide: (input) => {
+        const decision = checker.decide(input);
+        if (decision === null) return null;
+        shared ??= decision.pairs;
+        return { ...decision, pairs: shared };
+      },
+    };
+    const claims = new ClaimChecker({ embed, judge, checker: reusing });
+    const first = await firstDiffers(claims, passage(LEAD, 'encyclopedia:Treaty_of_Versailles'));
+    await firstDiffers(claims, passage(OTHER_LEAD, 'encyclopedia:Paris_Peace_Conference'));
+    const same = passage('The Treaty of Versailles was signed in 1919.', 'page:history', 'page', 'History');
+    const other = passage('The Treaty of Versailles was signed in 1920.', 'page:other', 'page', 'Other');
+    expect(claims.agree(first, CLAIM, [same])).toEqual([same]);
+    expect(claims.agree(first, CLAIM, [other])).toEqual([]);
+  });
+
   it("agree reads the text of the decision it is given: revisit's, once the host puts it in the outcome's place", async () => {
     const { embed } = fakeEmbed();
     const { judge } = fakeJudge({ relation: 'differs', quote: QUOTE });
