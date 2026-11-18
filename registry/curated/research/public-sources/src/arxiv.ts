@@ -257,7 +257,8 @@ export class ArxivSourceProvider implements PublicSourceProvider {
         signal,
         async () => {
           startClock();
-          if (options.onSend !== undefined) await untilAborted(() => options.onSend?.(), signal);
+          const { onSend } = options;
+          if (onSend !== undefined) await untilAborted(() => onSend.call(options), signal);
         },
       );
     } catch (error) {
