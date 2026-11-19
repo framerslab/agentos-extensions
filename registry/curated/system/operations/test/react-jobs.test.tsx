@@ -216,6 +216,49 @@ describe('useJobs', () => {
     expect(hook.current()).toMatchObject({ offline: false, jobs: PAGE.jobs });
   });
 
+  it('a read that lands after the browser went offline shows its rows and still says offline until the connection returns', async () => {
+    const held: Array<ReturnType<typeof deferred<Response>>> = [];
+    let online = true;
+    vi.spyOn(navigator, 'onLine', 'get').mockImplementation(() => online);
+    const client: OpsClient = {
+      fetch: async () => {
+        const answer = deferred<Response>();
+        held.push(answer);
+        return answer.promise;
+      },
+      base: BASE,
+    };
+    const hook = renderHook(() => useJobs(client, {}));
+    await pass(0);
+    expect(held).toHaveLength(1);
+    online = false;
+    await act(async () => {
+      window.dispatchEvent(new Event('offline'));
+    });
+    expect(hook.current()).toMatchObject({ offline: true, updating: true });
+    // The read begun before the connection dropped still answers: a response already on its way lands.
+    await act(async () => {
+      held[0]!.resolve(json(PAGE));
+    });
+    await pass(0);
+    expect(hook.current()).toMatchObject({ jobs: PAGE.jobs, updatedAt: NOW, updating: false, error: null, offline: true });
+    // The timed reads still wait for the connection.
+    await pass(2 * JOBS_POLL_MS);
+    expect(held).toHaveLength(1);
+    expect(hook.current().offline).toBe(true);
+    online = true;
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await pass(0);
+    expect(held).toHaveLength(2);
+    await act(async () => {
+      held[1]!.resolve(json(PAGE));
+    });
+    await pass(0);
+    expect(hook.current()).toMatchObject({ jobs: PAGE.jobs, updating: false, error: null, offline: false });
+  });
+
   it('a read slower than the interval is never superseded by a timed read, and its answer shows', async () => {
     const held: Array<ReturnType<typeof deferred<Response>>> = [];
     const client: OpsClient = {

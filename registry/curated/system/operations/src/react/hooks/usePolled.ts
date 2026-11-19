@@ -192,7 +192,8 @@ export function usePolled<T>(client: OpsClient, path: string | null): Polled<T> 
     if ('data' in answer) {
       failingSince.current = null;
       gaveUp.current = false;
-      setState({ url, fetch: fetchImpl, session, data: answer.data, updatedAt: at, updating: false, offline: false, error: null, signedOut: false, stale: false });
+      // A read that began before the connection dropped can still land: the browser's word on the connection stands until its `online` event reads again.
+      setState({ url, fetch: fetchImpl, session, data: answer.data, updatedAt: at, updating: false, offline: browserOffline(), error: null, signedOut: false, stale: false });
       return;
     }
     failingSince.current ??= at;
