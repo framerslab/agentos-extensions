@@ -57,7 +57,7 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@framers/agentos": ">=0.13.158"
+    "@framers/agentos": ">=0.19.4"
   },
   "dependencies": {
     "@framers/agentos-ext-grounding-guard": "^0.12.0",
