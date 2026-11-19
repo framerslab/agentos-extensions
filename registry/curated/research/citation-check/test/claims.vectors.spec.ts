@@ -106,7 +106,8 @@ describe('ClaimChecker with stored public vectors', () => {
     expect(batches[1]).toEqual([CLAIM.statement]);
     expect(first.usage.vectorHits).toBe(0);
     expect(second.usage.vectorHits).toBe(8);
-    expect(stored.writes).toEqual([sentences.map((one) => hashOf(one.content))]);
+    expect(stored.writes).toHaveLength(1);
+    expect([...(stored.writes[0] ?? [])].sort()).toEqual(sentences.map((one) => hashOf(one.content)).sort());
     expect([...stored.rows.keys()].sort()).toEqual(sentences.map((one) => hashOf(one.content)).sort());
   });
 
