@@ -17,7 +17,7 @@
     "research",
     "robots-txt"
   ],
-  "agentosVersion": ">=0.13.158",
+  "agentosVersion": ">=0.19.4",
   "categories": ["research"],
   "repository": {
     "type": "git",

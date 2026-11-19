@@ -12,7 +12,7 @@ import {
 } from '../src/index';
 
 // The claim checker over the grounding guard's own checker and AgentOS's CitationVerifier, with a fake judge and fake
-// embeddings: the judge's instruction by the passage's kind, a decision on values, the judge's "none", a quote that
+// embeddings (one sentence compared is named with no embeddings call): the judge's instruction by the passage's kind, a decision on values, the judge's "none", a quote that
 // cuts a word, the veto over a later passage, a later passage that agrees by code, no passage about the claim, an abort
 // while the judge is pending, a passage held back from the models that still vetoes, and the embeddings failing.
 
@@ -102,8 +102,9 @@ describe('ClaimChecker.check', () => {
     expect(outcome.quote).toBe(QUOTE);
     expect(outcome.verdict.verdict).toBe('contradicted');
     expect(outcome.judged).toBe(1);
-    expect(outcome.usage).toEqual({ judgeIn: 120, judgeOut: 12, embedIn: 20 });
-    expect(batches).toEqual([[CLAIM.statement, LEAD]]);
+    // One sentence compared: it is named with no embeddings call, and the judge decides.
+    expect(outcome.usage).toEqual({ judgeIn: 120, judgeOut: 12, embedIn: 0, vectorHits: 0 });
+    expect(batches).toEqual([]);
     expect(asked).toEqual([
       { system: claimJudgeSystem('encyclopedia'), prompt: claimJudgePrompt(CLAIM.heardSentence, CLAIM.statement, 'Treaty of Versailles', LEAD) },
     ]);
@@ -121,7 +122,8 @@ describe('ClaimChecker.check', () => {
     if (outcome.kind !== 'decided') return;
     expect(outcome.decision.relation).toBe('differs');
     expect([mirror, lead]).toContain(outcome.named);
-    expect(batches).toEqual([[CLAIM.statement, LEAD]]);
+    // The two passages are one text, so one sentence is compared and nothing is embedded.
+    expect(batches).toEqual([]);
     expect(asked).toEqual([
       { system: claimJudgeSystem(outcome.named.kind), prompt: claimJudgePrompt(CLAIM.heardSentence, CLAIM.statement, outcome.named.title, LEAD) },
     ]);
@@ -166,7 +168,7 @@ describe('ClaimChecker.check', () => {
     const outcome = await new ClaimChecker({ embed, judge, checker }).check(CLAIM, [passage('The harbour opened in 1887.', 'page:harbour', 'page', 'Harbour')], {
       signal: signal(),
     });
-    expect(outcome).toEqual({ kind: 'ended', reason: 'no_passage', judged: 0, usage: { judgeIn: 0, judgeOut: 0, embedIn: 0 } });
+    expect(outcome).toEqual({ kind: 'ended', reason: 'no_passage', judged: 0, usage: { judgeIn: 0, judgeOut: 0, embedIn: 0, vectorHits: 0 } });
     expect(batches).toEqual([]);
     expect(asked).toEqual([]);
   });
@@ -174,7 +176,8 @@ describe('ClaimChecker.check', () => {
   it('ends no_best, with no judge call, when no passage is near the claim by cosine', async () => {
     const { judge, asked } = fakeJudge({ relation: 'differs', quote: QUOTE });
     const embed = async (texts: string[]) => ({ vectors: texts.map((_, index) => (index === 0 ? [1, 0] : [0, 1])), usage: { in: texts.length } });
-    const outcome = await new ClaimChecker({ embed, judge, checker }).check(CLAIM, [passage(LEAD, 'encyclopedia:Treaty_of_Versailles')], { signal: signal() });
+    const second = passage('The Treaty of Versailles was signed in the Hall of Mirrors in 1919.', 'page:mirrors', 'page', 'Hall of Mirrors');
+    const outcome = await new ClaimChecker({ embed, judge, checker }).check(CLAIM, [passage(LEAD, 'encyclopedia:Treaty_of_Versailles'), second], { signal: signal() });
     expect(outcome).toMatchObject({ kind: 'ended', reason: 'no_best', judged: 0 });
     expect(asked).toEqual([]);
   });
@@ -206,7 +209,10 @@ describe('ClaimChecker.check', () => {
     const embed = async () => {
       throw failure;
     };
-    await expect(new ClaimChecker({ embed, judge, checker }).check(CLAIM, [passage(LEAD, 'encyclopedia:Treaty_of_Versailles')], { signal: signal() })).rejects.toBe(failure);
+    const second = passage('The Treaty of Versailles was signed in the Hall of Mirrors in 1919.', 'page:mirrors', 'page', 'Hall of Mirrors');
+    await expect(
+      new ClaimChecker({ embed, judge, checker }).check(CLAIM, [passage(LEAD, 'encyclopedia:Treaty_of_Versailles'), second], { signal: signal() }),
+    ).rejects.toBe(failure);
     expect(asked).toEqual([]);
   });
 
@@ -240,7 +246,8 @@ describe('ClaimChecker.check', () => {
     // The host redacts the note in place, and may send it from then on.
     note.content = 'My notes say the Treaty of Versailles was signed in 1918 by [name].';
     await claims.check(CLAIM, [note], { signal: signal() });
-    expect(batches.flat()).toContain(note.content);
+    // One sentence compared each time, so the judge alone reads it.
+    expect(asked.map((one) => one.prompt).join('\n')).toContain(note.content);
     expect(batches.flat().join('\n')).not.toContain('Jane Roe');
     expect(asked.map((one) => one.prompt).join('\n')).not.toContain('Jane Roe');
   });
@@ -256,7 +263,7 @@ describe('ClaimChecker.check', () => {
     note.content = 'My notes say the Treaty of Versailles was signed in 1918 by Jane Roe.';
     const second = claims.check(CLAIM, [passage(LEAD, 'encyclopedia:Treaty_of_Versailles')], { signal: signal(), found: [note] });
     await Promise.all([first, second]);
-    expect(batches.flat()).toContain('My notes say the Treaty of Versailles was signed in 1918 by [name].');
+    expect(asked.map((one) => one.prompt).join('\n')).toContain('My notes say the Treaty of Versailles was signed in 1918 by [name].');
     expect(batches.flat().join('\n')).not.toContain('Jane Roe');
     expect(asked.map((one) => one.prompt).join('\n')).not.toContain('Jane Roe');
   });
@@ -294,7 +301,7 @@ describe('ClaimChecker.check', () => {
     lead.url = 'https://elsewhere.example.org/other';
     lead.title = 'Elsewhere';
     const outcome = await pending;
-    expect(batches).toEqual([[CLAIM.statement, LEAD]]);
+    expect(batches).toEqual([]);
     expect(asked[0]?.prompt).toBe(claimJudgePrompt(CLAIM.heardSentence, CLAIM.statement, 'Treaty of Versailles', LEAD));
     expect(outcome.kind === 'decided' ? outcome.verdict.sourceRef : null).toBe(url);
   });

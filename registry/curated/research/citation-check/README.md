@@ -273,18 +273,53 @@ const outcome = await checker.check(
 // outcome.kind 'decided': outcome.decision.relation 'differs', the pair 1918 beside 1919 (offsets into
 // outcome.decision.texts[0], the sentence as read), outcome.named the passage,
 // outcome.quote 'signed on 28 June 1919', outcome.verdict the verifier's ClaimVerdict, outcome.usage the tokens
-// outcome.kind 'ended': outcome.reason 'no_passage' | 'no_best' | 'judge_none' | 'quote' | 'undecided'
+// outcome.kind 'ended': outcome.reason 'no_passage' | 'limited' | 'no_best' | 'judge_none' | 'quote' | 'undecided'
+// outcome.kind 'known': a verdict key the host passed in `known`, with nothing sent
 ```
 
-`check(claim, given, { signal, found })` runs these steps in order, and stops at the first that ends it:
+`check(claim, given, { signal, found, known, beforeSend, verdictContext })` runs these steps in order, and stops at the first that ends it:
 
-1. The grounding guard's `passages` keeps the sentences of `given` about the claim (two shared stems and a comparable value, or the claim's names for a stated fact without a value). None ends `no_passage`, with nothing sent anywhere.
-2. AgentOS's `CitationVerifier`, its thresholds 0, embeds the claim and the first `maxPassages` (24) kept in one call and names the best by cosine. A sentence two sources share word for word, such as a page that copies an encyclopedia, is compared once, as the first of them, so the judge reads the title and kind of the passage the outcome names; every passage found still meets step 5. The cosine decides nothing. No passage above 0 ends `no_best`.
-3. The judge is asked once about that sentence, under `claimJudgeSystem(kind)` with `claimJudgePrompt`: `matches`, `differs` or `none`, with the words it compared quoted. `none` ends `judge_none`.
-4. The quote must hold 1 to 20 words (`CLAIM_QUOTE_MAX_WORDS`) and stand in the sentence word for word, cutting no word or number (the grounding guard's `verifyQuotes`, typographic quotation marks read as plain ones). Else it ends `quote`.
-5. The grounding guard's `decide` takes the judge's relation as a proposal and decides by code over every passage found, the ones in `found` among them: a "differs" needs every content word heard and a heard value paired with a different one, and a passage found that agrees with every heard value stops it. Nothing decided ends `undecided`.
+1. The grounding guard's `passages` keeps the sentences of `given` about the claim (two shared stems and a comparable value, or the claim's names for a stated fact without a value). None ends `no_passage`, with nothing sent anywhere. The first `maxPassages` (24) kept are compared; a sentence two sources share word for word, such as a page that copies an encyclopedia, is compared once, as the first of them, so the judge reads the title and kind of the passage the outcome names, and every passage found still meets step 8.
+2. With `verdictSecret`, the verdict key is made (below). A key in `known` ends the check `known`, with nothing sent.
+3. `beforeSend()` is awaited once, before anything is sent; unless it answers `true` the check ends `limited`. A host counts its allowance here, so a known repeat costs none.
+4. One sentence compared is named with no embeddings call (AgentOS's `CitationVerifier` with `pickOnly`), and the judge decides.
+5. Otherwise the claim is embedded in one call with every compared sentence that carries no passage `vector` and has no stored public vector. Sentence vectors and passage vectors are not on one scale, so each class is ranked by its own cosine, and of the two classes' best the one earlier among the compared sentences (more stems shared with what was heard) is named. A sentence whose cosine is 0 or less is never named; none ends `no_best`. The cosine decides nothing else.
+6. The judge is asked once about that sentence, under `claimJudgeSystem(kind)` with `claimJudgePrompt`: `matches`, `differs` or `none`, with the words it compared quoted. `none` ends `judge_none`.
+7. The quote must hold 1 to 20 words (`CLAIM_QUOTE_MAX_WORDS`) and stand in the sentence word for word, cutting no word or number (the grounding guard's `verifyQuotes`, typographic quotation marks read as plain ones). Else it ends `quote`.
+8. The grounding guard's `decide` takes the judge's relation as a proposal and decides by code over every passage found, the ones in `found` among them: a "differs" needs every content word heard and a heard value paired with a different one, and a passage found that agrees with every heard value stops it. Nothing decided ends `undecided`.
 
-`found` is every passage about the claim the host holds, the ones it must not send included, such as a sentence that holds personal data: they are never embedded, judged or sent, and take part in step 5 alone. Left out, it is `given`'s passages about the claim.
+`found` is every passage about the claim the host holds, the ones it must not send included, such as a sentence that holds personal data: they are never embedded, judged or sent, and take part in step 8 alone. Left out, it is `given`'s passages about the claim.
+
+#### Vectors a host holds, and the verdict key
+
+A check embeds no text whose vector the host already holds:
+
+```ts
+const checker = new ClaimChecker({
+  embed, judge, checker: valueChecker,
+  grader: { judgeModel: 'openai:gpt-6-luna', embedding: { model: 'text-embedding-3-small', dimensions: 1536 } },
+  // Public sentences' vectors by the hash of their exact input, the tenant fixed by the host, such as AgentOS's
+  // SqlEmbeddingStore bound to it; clean is the host's redaction test.
+  publicVectors: {
+    get: (hashes) => store.get({ tenant }, model, hashes),
+    put: (rows) => store.put({ tenant }, model, rows),
+    clean: (text) => !redact(text).found,
+  },
+  verdictSecret: process.env.CLAIM_VERDICT_SECRET,
+});
+const outcome = await checker.check(claim, passages, {
+  signal,
+  known: keysHeldForThisRun, // a verdict the host already holds ends 'known', with nothing sent
+  beforeSend: () => allowance.take(), // awaited once, before the first send
+  verdictContext: `${accountId}:${runId}`,
+});
+```
+
+- A passage's `vector` (`{ embedding, level: 'passage', passageId, inputHash }`) is the vector of the passage a sentence stands in, made by the check's embedding model: the sentence is ranked by it and never sent to the embeddings. With `grader`, a vector of another size than its embedding's is left out and the sentence is embedded; without it, a vector of another size than the claim's throws a `RangeError`. An embeddings answer holding a vector of another size, or a value that is not a finite number, rejects the check before the judge is asked.
+- A sentence marked `publicKey`, only for a verified public source, whose text `clean` passes, is looked up in `publicVectors` by the SHA-256 of the model, NUL, the dimensions, NUL and the text (AgentOS's `embeddingInputHash`). A store that rejects or answers after `vectorReadMs` (200) counts as empty, and `usage.vectorHits` counts the vectors read. The vectors the check made for such sentences are stored after the verdict, a failed or late write changing nothing; an abort while they are written rejects the check at once with the signal's reason. Any other sentence is embedded and never stored.
+- The verdict key is an HMAC-SHA-256, under a key derived by HKDF from `verdictSecret` with `verdictContext` (an account and a run, so a key never matches across them), over everything that decides the verdict: this pack's and the grounding guard's versions, the judge's model, the embedding model and size, `maxPassages`, the grounding guard checker's rules as `grader.rules` names them (`'names:true'`, for example), the claim, each compared sentence with its text, title, kind, group, `ref` and passage vector (its id, its `inputHash` and a hash of the vector), and each sentence found with its text, group, `ref` and whether it is held back. A changed sentence, a 25th agreeing sentence found, a held-back sentence changed, a new release of either pack or another context makes a new key. Every outcome past `no_passage` carries `key`.
+
+`publicVectors` and `verdictSecret` need `grader`; the constructor throws without it.
 
 The judge's instruction names the source by the named passage's `kind`, an open word:
 
@@ -309,7 +344,7 @@ In both, every passage of `more` and `found` takes part in the veto, as `check`'
 
 Each call reads every passage once, as it is when the call begins (its text, group, title, kind and address), and never again: a host that redacts a passage in place between calls sends only the redacted text from then on, and a change made while a call runs reaches only later calls. `agree` and `revisit` read the first check's passages as they are when they are called, so a passage the host moved to another source is read in that source. A decision's `sentences` are the host's own passage objects, and its `texts` hold each one's text as the call read it, at the same index: `marks` and `pairs` index `texts`, whatever the host has done to a passage since. `texts` is the host's copy: `agree` reads the sentence of the decision it is given as the call that answered it read it (`check`'s, or `revisit`'s when the host puts that decision in the outcome's place), kept apart with the decision's `pairs`, so a host may redact or reformat `texts`, in place or in a shallow copy of the decision, without changing what `agree` answers. A decision whose `pairs` the host has replaced is read from its `texts`.
 
-`usage` counts the judge's tokens in and out and the embeddings' tokens apart; `judged` is the judge calls made (0 or 1). An abort rejects `check` with the signal's reason at once, whatever is pending; a failed embeddings call or judge rejects with its own error.
+`usage` counts the judge's tokens in and out, the embeddings' tokens and the public vectors read apart; `judged` is the judge calls made (0 or 1). An abort rejects `check` with the signal's reason at once, whatever is pending; a failed embeddings call or judge rejects with its own error.
 
 ## The tool
 
@@ -321,7 +356,7 @@ import { createExtensionPack } from '@framers/agentos-ext-citation-check';
 const pack = createExtensionPack({ options: { embeddings: 'openai' }, getSecret: (id) => secrets[id] });
 ```
 
-The tool reads pages through AgentOS's checked egress with the hosted policy, so a document cannot point it at a private address. The pack needs AgentOS 0.13.158 or later: checked egress came in 0.13.120, and `claimJudge` needs `generateObject`'s `maxAttempts`, which came in 0.13.158. Pack options: `embeddings` (`none` or `openai`, the key from the `openai.apiKey` secret or `OPENAI_API_KEY`), `embeddingModel`, `egress` (`hosted` or `local`), and from code `fetch`, `embedFn` and `nliFn`, with `timeoutMs`, `maxBytes`, `maxPages` and `priority`.
+The tool reads pages through AgentOS's checked egress with the hosted policy, so a document cannot point it at a private address. The pack needs AgentOS 0.19.4 or later: checked egress came in 0.13.120, `claimJudge` needs `generateObject`'s `maxAttempts`, which came in 0.13.158, and `ClaimChecker` needs `CitationVerifier`'s source vectors and `pickOnly`, which came in 0.19.4. Pack options: `embeddings` (`none` or `openai`, the key from the `openai.apiKey` secret or `OPENAI_API_KEY`), `embeddingModel`, `egress` (`hosted` or `local`), and from code `fetch`, `embedFn` and `nliFn`, with `timeoutMs`, `maxBytes`, `maxPages` and `priority`.
 
 ## API
 
