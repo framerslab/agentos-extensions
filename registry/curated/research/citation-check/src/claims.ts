@@ -50,13 +50,53 @@ export interface ClaimPassage {
    * `document`, or any other. It chooses the judge's instruction ({@link claimJudgeSystem}).
    */
   kind: string;
+  /**
+   * The vector of the passage the sentence stands in, made by the check's embedding model: the sentence is ranked by
+   * it and never sent to the embeddings. Sentences of one passage share it.
+   */
+  vector?: ClaimPassageVector;
+  /**
+   * True only for a sentence of a verified public source, whose vector may be read from and written to
+   * {@link ClaimCheckerOptions.publicVectors} when the host's `clean` test passes it.
+   */
+  publicKey?: boolean;
+  /** The host's reference for citing the sentence, which the verdict key reads. */
+  ref?: string;
 }
 
-/** The tokens a check used: the judge's in and out, and the embeddings' in. */
+/** A passage's vector a host holds, with the passage's id and the hash of the input it was made from. */
+export interface ClaimPassageVector {
+  embedding: readonly number[];
+  level: 'passage';
+  passageId: string;
+  inputHash: string;
+}
+
+/**
+ * A store of public sentences' vectors by the hash of their exact input, its tenant and model fixed by the host, such
+ * as AgentOS's `SqlEmbeddingStore` with them bound, and the host's test of what may be stored.
+ */
+export interface ClaimPublicVectors {
+  /** The stored vectors of the hashes given, by hash; a hash with none is left out. */
+  get(hashes: readonly string[]): Promise<ReadonlyMap<string, readonly number[]>>;
+  /** Stores each vector under its hash. */
+  put(rows: ReadonlyArray<{ hash: string; vector: readonly number[] }>): Promise<unknown>;
+  /** The host's redaction test: true when the sentence holds nothing that may not be stored or read by its hash. */
+  clean(text: string): boolean | Promise<boolean>;
+}
+
+/** What grades a check, beside this pack's and the grounding guard's versions: the judge's model and the embeddings'. */
+export interface ClaimGrader {
+  judgeModel: string;
+  embedding: { model: string; dimensions: number };
+}
+
+/** The tokens a check used: the judge's in and out, and the embeddings' in; and the public vectors read from the store. */
 export interface ClaimUsage {
   judgeIn: number;
   judgeOut: number;
   embedIn: number;
+  vectorHits: number;
 }
 
 /** What a judge answers about one sentence: the relation, and the words of the sentence it compared. */
@@ -85,6 +125,14 @@ export interface ClaimCheckerOptions {
   checker: Pick<ValueAgreementChecker, 'passages' | 'decide' | 'stems'>;
   /** The most passages the verifier compares; 24 when left out. */
   maxPassages?: number;
+  /** A store of public sentences' vectors; it needs `grader`, whose embedding names the hash. */
+  publicVectors?: ClaimPublicVectors;
+  /** What grades a check, which the verdict key and the stored vectors' hashes read. */
+  grader?: ClaimGrader;
+  /** The host's secret, from which each context's verdict key is derived; it needs `grader`. */
+  verdictSecret?: string | Uint8Array;
+  /** How long a read of `publicVectors` may take before it counts as empty, in milliseconds; 200 when left out. */
+  vectorReadMs?: number;
 }
 
 /** The grounding guard's decision, its sentences the host's own passages. */
@@ -407,10 +455,20 @@ export class ClaimChecker {
    * @throws The signal's reason when it aborts, at once, whatever is pending; the embeddings' or the judge's error as it
    * came, which the verifier alone would have swallowed.
    */
-  async check<P extends ClaimPassage>(claim: SpokenClaim, given: readonly P[], options: { signal: AbortSignal; found?: readonly P[] }): Promise<ClaimCheckOutcome<P>> {
+  async check<P extends ClaimPassage>(
+    claim: SpokenClaim,
+    given: readonly P[],
+    options: {
+      signal: AbortSignal;
+      found?: readonly P[];
+      known?: Iterable<string>;
+      beforeSend?: () => boolean | Promise<boolean>;
+      verdictContext?: string;
+    },
+  ): Promise<ClaimCheckOutcome<P>> {
     const { signal } = options;
     signal.throwIfAborted();
-    const usage: ClaimUsage = { judgeIn: 0, judgeOut: 0, embedIn: 0 };
+    const usage: ClaimUsage = { judgeIn: 0, judgeOut: 0, embedIn: 0, vectorHits: 0 };
     const state: { judged: number; judgement: { value: ClaimJudgement; holds: boolean } | null; failure: { error: unknown } | null } = {
       judged: 0,
       judgement: null,
