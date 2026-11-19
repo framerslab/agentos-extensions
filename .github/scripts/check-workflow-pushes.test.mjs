@@ -1,6 +1,6 @@
 // @ts-check
-// Runs in CI (node --test); it needs mikefarah's yq v4, and bash, GNU env and git for the steps it runs, which
-// GitHub's Ubuntu runners carry.
+// Runs in CI (node --test); it needs mikefarah's yq v4, and bash, an env with -C (GNU coreutils' or uutils') and git
+// for the steps it runs, which GitHub's Ubuntu runners carry.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -1688,7 +1688,8 @@ describe('the command, against what bash and git do', () => {
   // a runner runs it, under bash -e (a composite action's bash step under bash --noprofile --norc -eo pipefail), from
   // a root cloned from a bare remote's side branch, with base a clone of its master, each a commit ahead of the
   // remote. The command must report the steps after which the remote's master has moved, each on its step's line,
-  // and no other. Beside git it needs bash and GNU env (env -C), which GitHub's Ubuntu runners carry.
+  // and no other. Beside git it needs bash and an env with -C (GNU coreutils' or uutils'), which GitHub's Ubuntu runners
+  // carry.
   /** @type {{ name: string, pushes: boolean, run: string }[]} */
   const steps = [
     // Each checkout keeps a branch of its own: the root's is the pull request's, base's is master.
@@ -1699,9 +1700,10 @@ describe('the command, against what bash and git do', () => {
     { name: 'subshell', pushes: false, run: '(cd base)\ngit push origin HEAD' },
     { name: 'function', pushes: true, run: 'f() { cd base; }\nf\ngit push origin HEAD' },
     { name: 'pushd-n', pushes: false, run: 'pushd -n base\ngit push origin HEAD' },
-    // env changes to the last directory it is given.
-    { name: 'env-c-last', pushes: true, run: 'env -C . -C base git push origin HEAD' },
-    { name: 'env-c-first', pushes: false, run: 'env -C base -C . git push origin HEAD' },
+    // env -C moves the command it runs, never the script. One -C each: GNU env changes to the last of several, while
+    // uutils' env (Ubuntu 26.04's) refuses a second, so the command's reading of repeated -C is checked above, not run.
+    { name: 'env-c', pushes: true, run: 'env -C base git push origin HEAD' },
+    { name: 'env-c-command', pushes: false, run: 'env --chdir=base true\ngit push origin HEAD' },
     // A command of a pipeline changes directory for itself alone; lastpipe runs the last one in the script's shell.
     { name: 'pipeline', pushes: false, run: 'cd base | true\ngit push origin HEAD' },
     { name: 'lastpipe', pushes: true, run: 'shopt -s lastpipe\ntrue | cd base\ngit push origin HEAD' },
