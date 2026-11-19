@@ -93,6 +93,11 @@ export interface ClaimPublicVectors {
 export interface ClaimGrader {
   judgeModel: string;
   embedding: { model: string; dimensions: number };
+  /**
+   * The host's name for the grounding guard checker's rules (its options, such as `names`), which the verdict key
+   * reads, so a check under other rules never matches a key made under these.
+   */
+  rules?: string;
 }
 
 /** The tokens a check used: the judge's in and out, and the embeddings' in; and the public vectors read from the store. */

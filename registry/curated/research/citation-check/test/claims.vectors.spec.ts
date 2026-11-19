@@ -326,3 +326,67 @@ describe("ClaimChecker's verdict key", () => {
     expect(asked).toEqual([]);
   });
 });
+
+describe('ClaimChecker after review', () => {
+  const two = (): ClaimPassage[] =>
+    [1915, 1916].map((year) => passage(`The Treaty of Versailles was signed in ${year}.`, `page:${year}`, 'page', `Page ${year}`));
+
+  it('rejects an embeddings answer whose vector is of another size or holds a value that is not finite, before the judge', async () => {
+    for (const bad of [[1, 0, 0], [Number.NaN, 0]]) {
+      const embed = async (texts: string[]) => ({ vectors: texts.map((_, index) => (index === 1 ? bad : [1, 0])), usage: { in: texts.length } });
+      const { judge, asked } = fakeJudge({ relation: 'none', quote: '' });
+      await expect(new ClaimChecker({ embed, judge, checker, grader: GRADER }).check(CLAIM, two(), { signal: signal() })).rejects.toThrow('embeddings');
+      expect(asked).toEqual([]);
+    }
+  });
+
+  it('throws a RangeError, with no grader, for a passage vector of another size than the claim', async () => {
+    const vector = { embedding: [1, 0, 0], level: 'passage' as const, passageId: 'document:d1#p1', inputHash: 'input-1' };
+    const { embed } = countingEmbed();
+    const { judge, asked } = fakeJudge({ relation: 'none', quote: '' });
+    await expect(
+      new ClaimChecker({ embed, judge, checker }).check(CLAIM, two().map((one) => ({ ...one, vector })), { signal: signal() }),
+    ).rejects.toThrow(RangeError);
+    expect(asked).toEqual([]);
+  });
+
+  it('rejects at once when the signal aborts while the public vectors are written', async () => {
+    const controller = new AbortController();
+    const reason = new Error('stopped while writing');
+    const store: ClaimPublicVectors = {
+      get: async () => new Map(),
+      // The write never settles; the check is aborted as it starts.
+      put: () => {
+        controller.abort(reason);
+        return new Promise(() => {});
+      },
+      clean: () => true,
+    };
+    const { embed } = countingEmbed();
+    const { judge } = fakeJudge({ relation: 'none', quote: '' });
+    const started = Date.now();
+    await expect(
+      new ClaimChecker({ embed, judge, checker, grader: GRADER, publicVectors: store, vectorReadMs: 60_000 }).check(CLAIM, publicSentences().slice(0, 2), {
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("changes the verdict key with the checker's rules the grader names", async () => {
+    const keyUnder = async (rules: string): Promise<string | undefined> => {
+      const { embed } = countingEmbed();
+      const { judge } = fakeJudge({ relation: 'differs', quote: QUOTE });
+      const outcome = await new ClaimChecker({ embed, judge, checker, grader: { ...GRADER, rules }, verdictSecret: SECRET }).check(
+        CLAIM,
+        [passage(LEAD, 'encyclopedia:Treaty_of_Versailles')],
+        { signal: signal(), verdictContext: 'account:a1/run:r1', beforeSend: () => false },
+      );
+      return keyOf(outcome);
+    };
+    const named = await keyUnder('names:true');
+    expect(typeof named).toBe('string');
+    expect(await keyUnder('names:true')).toBe(named);
+    expect(await keyUnder('names:false')).not.toBe(named);
+  });
+});
