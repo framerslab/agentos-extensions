@@ -685,7 +685,7 @@ export class ClaimChecker {
    * holds personal data, for example): they are never embedded, judged or sent, and take part in step 8 alone, where a
    * passage that agrees with every heard value stops a "differs". Left out, it is `given`'s sentences about the claim.
    *
-   * @param claim - The claim heard.
+   * @param heard - The claim heard, read once when the call begins.
    * @param given - The passages that may be sent to the embeddings and the judge.
    * @param options - The check's signal; every passage found; the verdict keys the host holds; the host's say before
    * anything is sent; and the context the verdict key is derived for, such as the account's and the run's ids.
@@ -694,7 +694,7 @@ export class ClaimChecker {
    * another size than the claim's.
    */
   async check<P extends ClaimPassage>(
-    claim: SpokenClaim,
+    heard: SpokenClaim,
     given: readonly P[],
     options: {
       signal: AbortSignal;
@@ -706,6 +706,8 @@ export class ClaimChecker {
   ): Promise<ClaimCheckOutcome<P>> {
     const { signal } = options;
     signal.throwIfAborted();
+    // The claim as it is now: the key, the embeddings and the judge read this copy, whatever the host changes later.
+    const claim: SpokenClaim = { ...heard };
     const usage: ClaimUsage = { judgeIn: 0, judgeOut: 0, embedIn: 0, vectorHits: 0 };
     const state: { judged: number; judgement: { value: ClaimJudgement; holds: boolean } | null; failure: { error: unknown } | null; key: string | undefined } = {
       judged: 0,
