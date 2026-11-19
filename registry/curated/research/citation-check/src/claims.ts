@@ -529,7 +529,14 @@ export class ClaimChecker {
     this.checker = options.checker;
     this.maxPassages = maxPassages;
     this.publicVectors = options.publicVectors;
-    this.grader = options.grader === undefined ? undefined : { judgeModel: options.grader.judgeModel, embedding: { ...options.grader.embedding } };
+    this.grader =
+      options.grader === undefined
+        ? undefined
+        : {
+            judgeModel: options.grader.judgeModel,
+            embedding: { ...options.grader.embedding },
+            ...(options.grader.rules === undefined ? {} : { rules: options.grader.rules }),
+          };
     this.verdictSecret =
       options.verdictSecret === undefined
         ? undefined
@@ -580,7 +587,7 @@ export class ClaimChecker {
     const { citationCheck, groundingGuard } = versions();
     const canonical = JSON.stringify([
       'claim-verdict/1',
-      [citationCheck, groundingGuard, grader.judgeModel, grader.embedding.model, grader.embedding.dimensions, this.maxPassages],
+      [citationCheck, groundingGuard, grader.judgeModel, grader.embedding.model, grader.embedding.dimensions, this.maxPassages, grader.rules ?? null],
       [claim.heard, claim.heardSentence, claim.statement],
       compared.map((sentence) => [
         sentence.text,
@@ -807,7 +814,21 @@ export class ClaimChecker {
       const embedded = await untilAbort(this.embed(texts, signal), signal);
       usage.embedIn += embedded.usage.in;
       if (embedded.vectors.length !== texts.length) throw new Error(`the embeddings answered ${embedded.vectors.length} vectors for ${texts.length} texts`);
+      // Every vector the embeddings answered is of the grader's size, or the claim's with no grader, and finite.
+      const size = this.grader?.embedding.dimensions ?? embedded.vectors[0]?.length;
+      for (const vector of embedded.vectors) {
+        if (!vectorOfSize(vector, size) || vector.length === 0) {
+          throw new Error(`the embeddings answered a vector that is not ${size} finite numbers`);
+        }
+      }
       const [statementVector] = embedded.vectors as [number[], ...number[][]];
+      // With no grader, a passage vector of another size than the claim's cannot be ranked beside it.
+      for (const sentence of byPassage) {
+        const length = (sentence.vector as ClaimPassageVector).embedding.length;
+        if (length !== statementVector.length) {
+          throw new RangeError(`a passage vector holds ${length} numbers, and the claim's ${statementVector.length}`);
+        }
+      }
       const vectorOf = new Map<PassageSentence<P>, readonly number[]>();
       toEmbed.forEach((sentence, index) => vectorOf.set(sentence, embedded.vectors[index + 1] as number[]));
       for (const [sentence, vector] of stored) vectorOf.set(sentence, vector);
@@ -847,7 +868,7 @@ export class ClaimChecker {
               .filter((sentence) => storable.has(sentence) && vectorOfSize(vectorOf.get(sentence), grader.embedding.dimensions))
               .map((sentence) => ({ hash: inputHashOf(grader.embedding, sentence.text), vector: [...(vectorOf.get(sentence) as readonly number[])] }));
       if (best === undefined) {
-        await this.writePublic(rows);
+        await untilAbort(this.writePublic(rows), signal);
         signal.throwIfAborted();
         return ended('no_best');
       }
@@ -874,7 +895,7 @@ export class ClaimChecker {
         sourceIndex: compared.indexOf(named),
         verdict: answer.value.relation === 'differs' && holds ? 'contradicted' : best.verdict.verdict,
       };
-      await this.writePublic(rows);
+      await untilAbort(this.writePublic(rows), signal);
       signal.throwIfAborted();
     }
 
