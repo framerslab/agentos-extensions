@@ -390,3 +390,22 @@ describe('ClaimChecker after review', () => {
     expect(await keyUnder('names:false')).not.toBe(named);
   });
 });
+
+describe('ClaimChecker reads the claim once', () => {
+  it('keys and sends the claim as it was when the call began, whatever the host changes while beforeSend is awaited', async () => {
+    const claim: SpokenClaim = { ...CLAIM };
+    const { embed, batches } = countingEmbed();
+    const { judge, asked } = fakeJudge({ relation: 'none', quote: '' });
+    const sentences = [1915, 1916].map((year) => passage(`The Treaty of Versailles was signed in ${year}.`, `page:${year}`, 'page', `Page ${year}`));
+    const changed = 'The Treaty of Versailles was signed in 1920.';
+    await new ClaimChecker({ embed, judge, checker, grader: GRADER, verdictSecret: SECRET }).check(claim, sentences, {
+      signal: signal(),
+      beforeSend: () => {
+        claim.statement = changed;
+        return true;
+      },
+    });
+    expect(batches[0]?.[0]).toBe(CLAIM.statement);
+    expect(asked.map((one) => one.prompt).join('\n')).not.toContain(changed);
+  });
+});
