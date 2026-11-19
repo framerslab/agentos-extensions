@@ -29,7 +29,7 @@
     "@aws-sdk/client-polly": "^3.0.0"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.19.2",
+    "@framers/agentos": "^0.19.3",
     "@aws-sdk/client-polly": "^3.0.0",
     "typescript": "^6.0.3",
     "vitest": "^5.1.0"
