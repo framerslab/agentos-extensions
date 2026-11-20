@@ -6,8 +6,8 @@
 
 /**
  * The kinds the published connectors use: an upload, a web page, Dropbox, Google Drive, GitHub and Gmail, which they
- * read, Notion, whose connection writes the pages a person chose and reads none, and Slack, whose channels a
- * connection reads. `kind` stays an open string, so a later connector names its own.
+ * read, Notion, whose connection reads the pages a person shared with it and writes the pages a person chose, and
+ * Slack, whose channels a connection reads. `kind` stays an open string, so a later connector names its own.
  */
 export const ACCOUNT_SOURCE_KINDS = Object.freeze(
   ['upload', 'web', 'dropbox', 'google_drive', 'github', 'gmail', 'notion', 'slack'] as const);

@@ -26,8 +26,8 @@ describe('the connection kinds', () => {
 });
 
 /**
- * A write-only connector, as Notion's connection is: it writes pages the person chose and reads none, so it lists
- * nothing, reads nothing and reports no change, and none of those reaches the provider.
+ * A write-only connector: it writes pages the person chose and reads none, so it lists nothing, reads nothing and
+ * reports no change, and none of those reaches the provider.
  */
 function writeOnly(counter: { requests: number }): AccountSourceConnector {
   const refuse = (signal?: AbortSignal) => { if (signal?.aborted) throw new Error('aborted'); };

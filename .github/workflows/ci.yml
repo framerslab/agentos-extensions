@@ -305,6 +305,46 @@ jobs:
           path: pnpm-lock.yaml
           if-no-files-found: error
 
+      - name: Built Notion read exports, installed foundation at or above the peer floors
+        # The read connector as a consumer imports it, from the built pack: its exports, each peer's floor met by what
+        # is installed (the pack's peers are floors with no upper bound), and a stand-in address refused off CI before
+        # any call.
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          import { createRequire } from 'node:module';
+          import { agentosPeerFloor, compareVersions } from './scripts/pack-guard-lib.mjs';
+          import { NOTION_READ_KIND, NotionFault, NotionReadConnector }
+            from './registry/curated/integrations/notion/dist/index.js';
+          const base = new URL('./registry/curated/integrations/notion/', import.meta.url);
+          const pack = JSON.parse(readFileSync(new URL('package.json', base), 'utf8'));
+          const require = createRequire(new URL('package.json', base));
+          for (const name of ['@framers/agentos', '@framers/agentos-ext-account-sources']) {
+            // agentosPeerFloor reads the ">=x.y.z" floor of the core's entry, so each peer range is handed to it under that name.
+            const range = pack.peerDependencies?.[name];
+            const floor = agentosPeerFloor({ peerDependencies: { '@framers/agentos': range } });
+            if (floor === null) throw new Error(`notion_peer_floor_unreadable: ${name} "${range}" is not a ">=x.y.z" floor`);
+            const installed = require(`${name}/package.json`).version;
+            if (compareVersions(installed, floor) < 0) {
+              throw new Error(`notion_foundation_below_floor: ${name} ${installed} is installed, below its peer floor >=${floor}`);
+            }
+            console.log(`${name} ${installed} meets its peer floor >=${floor}`);
+          }
+          assert.equal(NOTION_READ_KIND, 'notion');
+          const options = { accessToken: 'fixture-access', maxPages: 100, maxDepth: 8, maxBlocks: 2000, maxChars: 1000000,
+            fetchImpl: async () => { throw new Error('unexpected_network'); } };
+          const connector = new NotionReadConnector(options);
+          assert.equal(connector.kind, 'notion');
+          for (const method of ['list', 'read', 'changesSince', 'revoke']) assert.equal(typeof connector[method], 'function');
+          const standIn = { ...options, apiBase: 'http://127.0.0.1:9440' };
+          assert.equal(new NotionReadConnector(standIn).kind, 'notion');
+          delete process.env.CI;
+          assert.throws(() => new NotionReadConnector(standIn),
+            (error) => error instanceof NotionFault && error.reason === 'configuration');
+          console.log('notion-read: built exports, peer floors and the stand-in refused off CI ok');
+          JS
+
       - name: Built account-source cache policy requires permission
         run: |
           node --input-type=module <<'JS'

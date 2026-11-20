@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-notion",
-  "version": "0.1.0",
-  "description": "Notion for a host that keeps its own grant: a public connection's OAuth on the core's redirect flow, and pages written as typed plain-text blocks inside Notion's request limits",
+  "version": "0.2.0",
+  "description": "Notion for a host that keeps its own grant: a public connection's OAuth on the core's redirect flow, pages written as typed plain-text blocks inside Notion's request limits, and the pages a person shared with the connection read as Markdown text, an account source",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -24,7 +24,8 @@
     "extension",
     "notion",
     "oauth",
-    "pages"
+    "pages",
+    "account-sources"
   ],
   "author": {
     "name": "Frame",
@@ -37,10 +38,12 @@
   ],
   "publishConfig": { "access": "public" },
   "peerDependencies": {
-    "@framers/agentos": ">=0.13.144"
+    "@framers/agentos": ">=0.19.3",
+    "@framers/agentos-ext-account-sources": ">=0.11.0"
   },
   "devDependencies": {
     "@framers/agentos": "workspace:^",
+    "@framers/agentos-ext-account-sources": "workspace:^",
     "@types/node": "^20.12.12",
     "typescript": "^6.0.3",
     "vitest": "^5.1.0"
