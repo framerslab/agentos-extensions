@@ -251,6 +251,18 @@ describe('NotionReadConnector list and changesSince', () => {
     expect(standIn.calls()).toBe(0);
   });
 
+  it("stops waiting for a held call even when a listener on the caller's signal stops the abort event", async () => {
+    standIn.share([a]);
+    const stop = new AbortController();
+    stop.signal.addEventListener('abort', (event) => event.stopImmediatePropagation());
+    const send: NotionReadOptions['send'] = () => new Promise(() => {});
+    const listing = connector({ send }).list({ ids: [a.id] }, stop.signal);
+    await settle();
+    stop.abort();
+    await expect(listing).rejects.toMatchObject({ name: 'NotionFault', reason: 'cancelled' });
+    expect(standIn.calls()).toBe(0);
+  });
+
   it('sends its token and Notion\'s version on every call', async () => {
     standIn.share([a]);
     const sent: Headers[] = [];
