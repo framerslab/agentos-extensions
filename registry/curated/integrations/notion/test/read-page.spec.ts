@@ -159,6 +159,23 @@ describe('NotionReadConnector read', () => {
     expect(standIn.calls()).toBe(4);
   });
 
+  it("never answers part of a page when the operation is stopped while the host's budget holds a 429", async () => {
+    const half = page(56, 'Half read');
+    standIn.share([half]);
+    standIn.children(half.id, [said('toggle', 'Holder', [said('paragraph', 'Inside')])]);
+    standIn.rateLimitCall(3, 9);
+    const stop = new AbortController();
+    let listings = 0;
+    const send: NotionReadOptions['send'] = async (method, call) => {
+      const answered = await call(new AbortController().signal);
+      if (method === 'children') listings += 1;
+      if (listings === 2) stop.abort(); // the budget has the 429 in hand and has yet to pass it back
+      return answered;
+    };
+    await expect(connector({ send }).read(item(half), stop.signal)).rejects.toMatchObject({ name: 'NotionFault', reason: 'cancelled' });
+    expect(standIn.calls()).toBe(3);
+  });
+
   it('throws invalid_response for a children cursor that cannot be sent, and reads no further', async () => {
     const odd = page(55, 'Odd cursor');
     const holder = said('toggle', 'Holder', [said('paragraph', 'Never')]);
