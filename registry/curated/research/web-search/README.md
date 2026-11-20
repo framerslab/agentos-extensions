@@ -141,7 +141,8 @@ const response = await search.multiSearch('Treaty of Versailles signed', {
 });
 
 // With Firecrawl past its cap: response.metadata.outcomes is { serper: 'answered', tavily: 'answered', firecrawl: 'skipped' },
-// and a page both Serper and Tavily found has providers ['serper', 'tavily'], in the order named above.
+// and a page both Serper and Tavily found has providers ['serper', 'tavily'], in the order named above, its url as Serper
+// gave it and providerUrls { serper, tavily } holding each one's own form of the address.
 ```
 
 `multiSearch(query, { maxResults, providers, fallback, signal, onSend, deadlineMs, perProvider })`:
