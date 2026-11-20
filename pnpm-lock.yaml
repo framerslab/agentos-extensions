@@ -1999,8 +1999,8 @@ importers:
         version: 8.22.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     optionalDependencies:
       2captcha-ts:
-        specifier: ^1.3.0
-        version: 1.3.1(encoding@0.1.13)
+        specifier: ^2.4.1
+        version: 2.4.1(encoding@0.1.13)
 
   registry/curated/system/cli-executor:
     dependencies:
@@ -2716,8 +2716,8 @@ importers:
 
 packages:
 
-  2captcha-ts@1.3.1:
-    resolution: {integrity: sha512-gATVCk3EFuUT9bI/UHmgtB3BvdzcITQbLKEHufQVUahys7Ee2qGRVy5pX7rV1SBDFMaJfUtK1PKbv+ifoOfoUA==}
+  2captcha-ts@2.4.1:
+    resolution: {integrity: sha512-xYQhm0ft3YlnRVghdPrGRQaXPodcQ5lIs3Yaob7SH0RUAolPx1fAm5cS/Bzel8YEHVqQnV+Xjrua/1ql51xGpg==}
 
   '@actions/core@3.0.1':
     resolution: {integrity: sha512-a6d/Nwahm9fliVGRhdhofo40HjHQasUPusmc7vBfyky+7Z+P2A1J68zyFVaNcEclc/Se+eO595oAr5nwEIoIUA==}
@@ -5278,7 +5278,7 @@ packages:
         optional: true
 
   '@whiskeysockets/eslint-config@https://codeload.github.com/whiskeysockets/eslint-config/tar.gz/299e8389baf62f9aa3034de18ff0d62cc0a5e838':
-    resolution: {gitHosted: true, integrity: sha512-ei2RgAAN9EZHRHtbJHU6mbdPfpZDx5agWC70tCfDb4hth3Xle3DHhcxq/K5OSLmgFEAAPSmUuT/ax39ib/DguA==, tarball: https://codeload.github.com/whiskeysockets/eslint-config/tar.gz/299e8389baf62f9aa3034de18ff0d62cc0a5e838}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/whiskeysockets/eslint-config/tar.gz/299e8389baf62f9aa3034de18ff0d62cc0a5e838}
     version: 1.0.0
     peerDependencies:
       eslint: ^9.31.0
@@ -7807,7 +7807,7 @@ packages:
     resolution: {integrity: sha512-0Wd+GPz1O134cP62YU2GTOPNA7Qgl09XwCqM5zpBv87ERCXdfDtyKXvV7c9U22yWJh44QZqBocFnXN11K96qow==}
 
   libsignal@https://codeload.github.com/WhiskeySockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7:
-    resolution: {gitHosted: true, integrity: sha512-KmRMuAYSfd4upRD0xOgKbURxRXNE8X8NtgmkUOJFXOn9ESSCXguIZ7PJu8OBJIr7KGww41Vf/Pbgko+PgWQ55g==, tarball: https://codeload.github.com/WhiskeySockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/WhiskeySockets/libsignal-node/tar.gz/bcea72df9ec34d9d9140ab30619cf479c7c144c7}
     version: 6.0.0
 
   lie@3.3.0:
@@ -10980,7 +10980,7 @@ packages:
 
 snapshots:
 
-  2captcha-ts@1.3.1(encoding@0.1.13):
+  2captcha-ts@2.4.1(encoding@0.1.13):
     dependencies:
       node-fetch: 2.7.0(encoding@0.1.13)
     transitivePeerDependencies:
