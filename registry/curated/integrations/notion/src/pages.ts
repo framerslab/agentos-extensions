@@ -216,7 +216,7 @@ export function notionPageLink(pageId: string): string {
 }
 
 /** The link an answer gives when it is an HTTPS link on Notion's hosts, else the link made from the id. */
-function linkOf(answer: Record<string, unknown>, id: string): string {
+export function linkOf(answer: Record<string, unknown>, id: string): string {
   const given = answer.url;
   if (typeof given === 'string' && given.length <= 2000) {
     try {

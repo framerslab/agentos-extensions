@@ -6,9 +6,13 @@
  * the host does not hold yet. Every call is paced, by the host's shared budget when one is given and otherwise by a
  * sliding one-minute window inside the connector, and a 429 is passed on with Notion's wait, never retried here.
  *
+ * A page is read as Markdown text (`notionMarkdown`) from its blocks, one level a call, inside the host's bounds on its
+ * blocks, its depth and its characters; a page past one answers `too_large` and is never cut.
+ *
  * Sources, read on 20 November 2026: https://developers.notion.com/reference/post-search.md,
  * https://developers.notion.com/reference/search-optimizations-and-limitations.md,
- * https://developers.notion.com/reference/retrieve-a-page.md, https://developers.notion.com/reference/pagination.md,
+ * https://developers.notion.com/reference/retrieve-a-page.md, https://developers.notion.com/reference/get-block-children.md,
+ * https://developers.notion.com/reference/block.md, https://developers.notion.com/reference/pagination.md,
  * https://developers.notion.com/reference/request-limits.md and https://developers.notion.com/reference/status-codes.md.
  * @module agentos-ext-notion/read
  */
@@ -16,8 +20,10 @@
 import type {
   AccountSourceConnector, SourceChanges, SourceGone, SourceItem, SourceRead, SourceSelection,
 } from '@framers/agentos-ext-account-sources';
+import { notionMarkdown, type NotionBlockNode } from './blocks.js';
 import { NotionFault, apiFault } from './faults.js';
 import { NOTION_VERSION } from './oauth.js';
+import { linkOf } from './pages.js';
 import { NOTION_ID, apiOrigin, call, credential, isObject, jsonObject } from './transport.js';
 
 /** The kind of the connector and of every passage it reads. */
@@ -96,8 +102,27 @@ const MOST_CONCURRENCY = 64;
 /** The most search pages one relist reads, so an answer that repeats its cursor forever still ends. */
 const MOST_SEARCH_PAGES = 1_000;
 
-/** Search's largest page. */
+/** Search's largest page, and a block's children's. */
 const SEARCH_PAGE_SIZE = 100;
+
+/** The blocks inside a page whose own content is another page or database, never read. */
+const UNREAD: ReadonlySet<string> = new Set(['child_page', 'child_database']);
+
+/** Why a page's block read stopped before its end. */
+type Stop =
+  | { readonly kind: 'too_large' }
+  | { readonly kind: 'gone'; readonly reason: 'removed' | 'no_access' }
+  | { readonly kind: 'vanished' }
+  | { readonly kind: 'fault'; readonly error: unknown };
+
+/** One children call to make: the block, the cursor of its next page, its children's level and where they go. */
+interface ChildrenCall {
+  readonly id: string;
+  readonly cursor?: string;
+  readonly level: number;
+  readonly into: NotionBlockNode[];
+  readonly top: boolean;
+}
 
 /** A positive whole number no larger than `most`. */
 function count(value: unknown, most = Number.MAX_SAFE_INTEGER): value is number {
@@ -339,13 +364,37 @@ export class NotionReadConnector implements AccountSourceConnector {
   }
 
   /**
-   * Reads one page with its attribution, or answers why it is gone. Reading a page's blocks as text is not part of
-   * this version: it throws `NotionFault` with `configuration` before any call.
+   * Reads one page as Markdown text with its attribution, or answers why it cannot. The page is retrieved first: a 404
+   * or a page in the trash or archived answers `removed`, a 403 `no_access`. Its blocks are then read one level a call,
+   * up to `concurrency` calls in flight, into the page's order whatever order the answers come in; a child page or a
+   * child database is written as its title and never read. A page past `maxBlocks`, `maxDepth` or `maxChars` answers
+   * `too_large` and no further call starts. A 404 or 403 on the page's first children call answers `removed` or
+   * `no_access`; on any later children call the page is retrieved again, and the read answers why it is gone, or
+   * throws `unavailable` when it is still there, so a host keeps nothing new and tries again. A fault starts no
+   * further call and is thrown once the calls in flight have settled.
    */
   async read(item: SourceItem, signal?: AbortSignal): Promise<SourceRead | SourceGone> {
-    void item;
-    void signal;
-    throw new NotionFault('configuration');
+    if (!isObject(item) || typeof item.id !== 'string') throw new NotionFault('configuration');
+    const id = item.id;
+    const page = await this.page(id, signal);
+    if ('reason' in page) return page;
+    const { blocks, stop } = await this.blocksOf(id, signal);
+    if (stop?.kind === 'fault') throw stop.error;
+    if (stop?.kind === 'gone') return { id, reason: stop.reason };
+    if (stop?.kind === 'too_large') return { id, reason: 'too_large' };
+    if (stop?.kind === 'vanished') {
+      const again = await this.page(id, signal);
+      if ('reason' in again) return again;
+      throw new NotionFault('unavailable');
+    }
+    const text = notionMarkdown(blocks);
+    if (text.length > this.options.maxChars) return { id, reason: 'too_large' };
+    const readAt = (this.options.now?.() ?? new Date()).toISOString();
+    return {
+      item: { ...page.item, id },
+      content: { text },
+      ref: { kind: NOTION_READ_KIND, title: page.item.title, url: linkOf(page.answer, id), version: page.item.version, readAt },
+    };
   }
 
   /**
@@ -420,6 +469,12 @@ export class NotionReadConnector implements AccountSourceConnector {
    * page and answers `removed` with no call.
    */
   private async retrieve(id: string, signal: AbortSignal | undefined): Promise<NotionPageItem | SourceGone> {
+    const page = await this.page(id, signal);
+    return 'reason' in page ? page : { ...page.item, id };
+  }
+
+  /** Retrieves one page: its item and Notion's answer, or why it is gone. */
+  private async page(id: string, signal: AbortSignal | undefined): Promise<{ item: NotionPageItem; answer: Record<string, unknown> } | SourceGone> {
     if (!NOTION_ID.test(id)) return { id, reason: 'removed' };
     const { status, headers, answer } = await this.exchange('retrieve', `/v1/pages/${id}`, undefined, signal);
     if (status === 404) return { id, reason: 'removed' };
@@ -428,7 +483,80 @@ export class NotionReadConnector implements AccountSourceConnector {
     if (away(answer)) return { id, reason: 'removed' };
     const item = pageItem(answer);
     if (item === null) throw new NotionFault('invalid_response', { status });
-    return { ...item, id };
+    return { item, answer };
+  }
+
+  /**
+   * Reads a page's blocks, every level, up to `concurrency` children calls in flight; each block's children go into
+   * its own node, so the tree is in the page's order whatever order the answers come in. Answers the tree, or the
+   * first reason it stopped once the calls in flight have settled.
+   */
+  private async blocksOf(pageId: string, signal: AbortSignal | undefined): Promise<{ blocks: NotionBlockNode[]; stop: Stop | null }> {
+    const blocks: NotionBlockNode[] = [];
+    const queue: ChildrenCall[] = [{ id: pageId, level: 1, into: blocks, top: true }];
+    const counted = { blocks: 0 };
+    let stop: Stop | null = null;
+    let active = 0;
+    await new Promise<void>((resolve) => {
+      const pump = (): void => {
+        while (stop === null && active < this.concurrency && queue.length > 0) {
+          const next = queue.shift()!;
+          active += 1;
+          const path = `/v1/blocks/${next.id}/children?page_size=${SEARCH_PAGE_SIZE}${next.cursor === undefined ? '' : `&start_cursor=${encodeURIComponent(next.cursor)}`}`;
+          this.exchange('children', path, undefined, signal)
+            .then((exchanged) => {
+              if (stop !== null) return;
+              try {
+                stop = this.take(next, exchanged, queue, counted);
+              } catch (error) {
+                stop = { kind: 'fault', error };
+              }
+            }, (error: unknown) => {
+              if (stop === null) stop = { kind: 'fault', error };
+            })
+            .finally(() => {
+              active -= 1;
+              pump();
+            });
+        }
+        if (active === 0) resolve();
+      };
+      pump();
+    });
+    return { blocks, stop };
+  }
+
+  /** Takes one children answer into the tree and queues the calls it leads to; answers why the read stops, if it does. */
+  private take(made: ChildrenCall, exchanged: Exchanged, queue: ChildrenCall[], counted: { blocks: number }): Stop | null {
+    const { status, headers, answer } = exchanged;
+    if (status === 404 || status === 403) {
+      if (made.top && made.cursor === undefined) return { kind: 'gone', reason: status === 404 ? 'removed' : 'no_access' };
+      return { kind: 'vanished' };
+    }
+    if (status < 200 || status > 299) return { kind: 'fault', error: apiFault(status, headers, answer, false) };
+    const invalid: Stop = { kind: 'fault', error: new NotionFault('invalid_response', { status }) };
+    if (!Array.isArray(answer.results)) return invalid;
+    for (const result of answer.results) {
+      if (!isObject(result)) return invalid;
+      const block = result as Record<string, unknown>;
+      const type = block.type;
+      if (typeof type !== 'string') return invalid;
+      if (block.in_trash === true) continue;
+      counted.blocks += 1;
+      if (counted.blocks > this.options.maxBlocks) return { kind: 'too_large' };
+      const body = block[type];
+      const node: NotionBlockNode = { type, body: isObject(body) ? (body as Record<string, unknown>) : {}, children: [] };
+      made.into.push(node);
+      if (block.has_children !== true || UNREAD.has(type)) continue;
+      if (made.level + 1 > this.options.maxDepth) return { kind: 'too_large' };
+      if (typeof block.id !== 'string' || !NOTION_ID.test(block.id)) return invalid;
+      queue.push({ id: block.id, level: made.level + 1, into: node.children as NotionBlockNode[], top: false });
+    }
+    if (answer.has_more === true) {
+      if (typeof answer.next_cursor !== 'string' || answer.next_cursor.length === 0) return invalid;
+      queue.push({ ...made, cursor: answer.next_cursor });
+    }
+    return null;
   }
 
   /**

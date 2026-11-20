@@ -1,0 +1,103 @@
+/**
+ * @fileoverview A page's blocks written as Markdown text. Rich text is read as each item's `plain_text`, so a mention
+ * or a link is its plain text. An image, a file, a video, an audio clip, a PDF, an embed and a bookmark are written
+ * as their captions alone, never their addresses; a child page and a child database as their titles alone, with
+ * nothing inside them read. A synced block, a column list, a column and a tab add no line of their own and their
+ * children are the page's own lines. A block type not listed here is left out with its children.
+ *
+ * Source, read on 20 November 2026: https://developers.notion.com/reference/block.md.
+ * @module agentos-ext-notion/blocks
+ */
+
+/** A block as read: its type, the object under its type's key, and its children in order. */
+export interface NotionBlockNode {
+  readonly type: string;
+  readonly body: Record<string, unknown>;
+  readonly children: readonly NotionBlockNode[];
+}
+
+/** The heading types and the marks they are written with. */
+const HEADINGS: Readonly<Record<string, string>> = { heading_1: '#', heading_2: '##', heading_3: '###', heading_4: '####' };
+
+/** The blocks written as their captions alone. */
+const CAPTIONED: ReadonlySet<string> = new Set(['image', 'file', 'video', 'audio', 'pdf', 'embed', 'bookmark']);
+
+/** The blocks that add no line of their own; their children are the page's own lines. */
+const CONTAINERS: ReadonlySet<string> = new Set(['synced_block', 'column_list', 'column', 'tab']);
+
+/** The blocks written as their text alone, whose children follow as their own lines. */
+const TEXT: ReadonlySet<string> = new Set(['paragraph', 'callout', 'toggle']);
+
+/** The list items, whose children are indented under them. */
+const ITEMS: ReadonlySet<string> = new Set(['bulleted_list_item', 'numbered_list_item', 'to_do']);
+
+/** The pages and databases inside a page, written as their titles and never read. */
+const INNER: ReadonlySet<string> = new Set(['child_page', 'child_database']);
+
+/** The indentation one level of a list item's children adds. */
+const INDENT = '  ';
+
+/** A rich text array's plain text; the empty string for anything else. */
+function plain(richText: unknown): string {
+  if (!Array.isArray(richText)) return '';
+  return richText
+    .map((part) => (typeof part === 'object' && part !== null && typeof (part as Record<string, unknown>).plain_text === 'string' ? (part as Record<string, string>).plain_text : ''))
+    .join('');
+}
+
+/** A table's rows: each row's cells as plain text, separated by ' | ', the first row first. */
+function rows(table: NotionBlockNode): string[] {
+  return table.children
+    .filter((row) => row.type === 'table_row' && Array.isArray(row.body.cells))
+    .map((row) => (row.body.cells as unknown[]).map(plain).join(' | '))
+    .filter((line) => line.trim() !== '');
+}
+
+/** The lines of a run of sibling blocks at one indentation. */
+function lines(blocks: readonly NotionBlockNode[], indent: string): string[] {
+  const out: string[] = [];
+  let number = 0;
+  for (const block of blocks) {
+    number = block.type === 'numbered_list_item' ? number + 1 : 0;
+    const text = plain(block.body.rich_text);
+    const own = (line: string): void => {
+      if (line.trim() !== '') out.push(`${indent}${line}`.trimEnd());
+    };
+    if (block.type in HEADINGS) {
+      if (text !== '') own(`${HEADINGS[block.type]} ${text}`);
+      out.push(...lines(block.children, indent));
+    } else if (TEXT.has(block.type)) {
+      own(text);
+      out.push(...lines(block.children, indent));
+    } else if (block.type === 'quote') {
+      if (text !== '') own(`> ${text.replace(/\n/g, '\n> ')}`);
+      out.push(...lines(block.children, indent));
+    } else if (ITEMS.has(block.type)) {
+      const mark = block.type === 'bulleted_list_item' ? '-' : block.type === 'numbered_list_item' ? `${number}.` : block.body.checked === true ? '- [x]' : '- [ ]';
+      own(`${mark} ${text}`);
+      out.push(...lines(block.children, `${indent}${INDENT}`));
+    } else if (block.type === 'code') {
+      const language = typeof block.body.language === 'string' && block.body.language !== 'plain text' ? block.body.language : '';
+      out.push(`${indent}\`\`\`${language}`, text, `${indent}\`\`\``);
+    } else if (block.type === 'table') {
+      for (const row of rows(block)) own(row);
+    } else if (INNER.has(block.type)) {
+      own(typeof block.body.title === 'string' ? block.body.title : '');
+    } else if (CAPTIONED.has(block.type)) {
+      own(plain(block.body.caption));
+    } else if (CONTAINERS.has(block.type)) {
+      out.push(...lines(block.children, indent));
+    }
+  }
+  return out;
+}
+
+/**
+ * Writes a page's blocks as Markdown text, one line a block: headings with `#` marks, list items with `-`, numbers
+ * from 1 that restart after any other block, or a check box, quotes with `>`, code fenced with its language and its
+ * text untouched, and a table's rows as lines of their cells. A list item's children are indented two spaces a level;
+ * any other block's children follow as their own lines. A block with no text adds no line.
+ */
+export function notionMarkdown(blocks: readonly NotionBlockNode[]): string {
+  return lines(blocks, '').join('\n');
+}
