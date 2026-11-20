@@ -65,7 +65,9 @@ function append(out: string[], more: readonly string[]): void {
 function lines(blocks: readonly NotionBlockNode[], indent: string): string[] {
   const out: string[] = [];
   let number = 0;
+  let quoted = false;
   for (const block of blocks) {
+    const start = out.length;
     number = block.type === 'numbered_list_item' ? number + 1 : 0;
     const text = plain(block.body.rich_text);
     const own = (line: string, later = indent): void => {
@@ -90,7 +92,7 @@ function lines(blocks: readonly NotionBlockNode[], indent: string): string[] {
       // A list item's later lines and children start where its text does: under `- ` and a check box, two spaces;
       // under a number, its width and the space after it.
       const inner = `${indent}${' '.repeat(block.type === 'numbered_list_item' ? mark.length + 1 : 2)}`;
-      own(`${mark} ${text}`, inner);
+      own(`${mark} ${text.replace(/^[ \t]+/, '')}`, inner);
       append(out, lines(block.children, inner));
     } else if (block.type === 'code') {
       const language = typeof block.body.language === 'string' && block.body.language !== 'plain text' ? block.body.language : '';
@@ -106,6 +108,11 @@ function lines(blocks: readonly NotionBlockNode[], indent: string): string[] {
       own(plain(block.body.caption));
     } else if (CONTAINERS.has(block.type)) {
       append(out, lines(block.children, indent));
+    }
+    if (out.length > start) {
+      // A blank line ends a quote, so the block after it is never read as part of the quote.
+      if (quoted) out.splice(start, 0, '');
+      quoted = block.type === 'quote';
     }
   }
   return out;
@@ -136,7 +143,8 @@ export function leastChars(block: NotionBlockNode, parentType: string | null): n
  * from 1 that restart after any other block, or a check box, quotes with `>`, code fenced with its language and its
  * text untouched (the fence longer than any run of backticks in it), and a table's rows as lines of their cells. A
  * list item's children, and its own later lines, are indented to where its text starts (two spaces under `-` and a
- * check box, a number's width and a space under a number); a quote's children are quoted with it; any other block's children follow as their own lines at its indentation, and every line of a block, a code
+ * check box, a number's width and a space under a number); a quote's children are quoted with it, and a blank line
+ * ends it; any other block's children follow as their own lines at its indentation, and every line of a block, a code
  * block's text included, carries that indentation. A block with no text adds no line.
  */
 export function notionMarkdown(blocks: readonly NotionBlockNode[]): string {

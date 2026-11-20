@@ -246,28 +246,32 @@ function cursorOf(cursor: string | null): Map<string, string> {
 
 /**
  * Runs `work` over `items` with at most `limit` in flight and answers their results in the items' order, as one at a
- * time would. After a fault no further item starts: `halt`, given to every item's work, aborts, so a call still waiting
+ * time would. After a fault no further item starts: `halting`, given to every item's work, aborts, so a call still waiting
  * for the window or the host's budget never goes out, while a call already sent is let settle. The first fault is
- * thrown once the work in flight has settled.
+ * thrown once the work in flight has settled; the `cancelled` of a call halted before it was sent never stands in
+ * for the fault that halted it, whichever of the two is caught first.
  */
-async function inOrder<T, R>(items: readonly T[], limit: number, work: (item: T, halt: AbortSignal) => Promise<R>): Promise<R[]> {
+async function inOrder<T, R>(items: readonly T[], limit: number, work: (item: T, halting: AbortController) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array<R>(items.length);
   const halting = new AbortController();
   let next = 0;
   let failed = false;
   let fault: unknown;
+  let standIn = false; // the fault held is only a halted call's `cancelled`
   const lane = async (): Promise<void> => {
     while (!failed && next < items.length) {
       const index = next;
       next += 1;
       try {
-        results[index] = await work(items[index]!, halting.signal);
+        results[index] = await work(items[index]!, halting);
       } catch (error) {
-        if (!failed) {
-          failed = true;
+        const halted = halting.signal.aborted && error instanceof NotionFault && error.reason === 'cancelled';
+        if (!failed || (standIn && !halted)) {
           fault = error;
-          halting.abort();
+          standIn = halted;
         }
+        failed = true;
+        halting.abort();
       }
     }
   };
@@ -442,7 +446,7 @@ export class NotionReadConnector implements AccountSourceConnector {
   async list(selection: SourceSelection, signal?: AbortSignal): Promise<{ items: NotionPageItem[]; gone: SourceGone[] }> {
     const ids = idsOf(selection);
     if (ids.length === 0) return { items: await this.relist(new Set(), signal), gone: [] };
-    const answers = await inOrder(ids, this.concurrency, (id, halt) => this.retrieve(id, signal, halt));
+    const answers = await inOrder(ids, this.concurrency, (id, halting) => this.retrieve(id, signal, halting));
     return { items: answers.filter((answer): answer is NotionPageItem => 'version' in answer), gone: answers.filter((answer): answer is SourceGone => 'reason' in answer) };
   }
 
@@ -497,7 +501,7 @@ export class NotionReadConnector implements AccountSourceConnector {
     const targets = chosen ? ids : [...held.keys()];
     const heldIds = new Set([...held.keys()].map(canonical));
     const fresh = chosen ? [] : await this.relist(heldIds, signal);
-    const answers = await inOrder(targets, this.concurrency, (id, halt) => this.retrieve(id, signal, halt));
+    const answers = await inOrder(targets, this.concurrency, (id, halting) => this.retrieve(id, signal, halting));
     const versions = new Map([...held].map(([id, version]) => [canonical(id), version]));
     const changed: NotionPageItem[] = [...fresh];
     const gone: SourceGone[] = [];
@@ -553,15 +557,15 @@ export class NotionReadConnector implements AccountSourceConnector {
    * Retrieves one page: its item under the id asked for, or why it is gone. An id that is not a Notion id names no
    * page and answers `removed` with no call.
    */
-  private async retrieve(id: string, signal: AbortSignal | undefined, halt?: AbortSignal): Promise<NotionPageItem | SourceGone> {
-    const page = await this.page(id, signal, halt);
+  private async retrieve(id: string, signal: AbortSignal | undefined, halting?: AbortController): Promise<NotionPageItem | SourceGone> {
+    const page = await this.page(id, signal, halting);
     return 'reason' in page ? page : { ...page.item, id };
   }
 
   /** Retrieves one page: its item and Notion's answer, or why it is gone. */
-  private async page(id: string, signal: AbortSignal | undefined, halt?: AbortSignal): Promise<{ item: NotionPageItem; answer: Record<string, unknown> } | SourceGone> {
+  private async page(id: string, signal: AbortSignal | undefined, halting?: AbortController): Promise<{ item: NotionPageItem; answer: Record<string, unknown> } | SourceGone> {
     if (!NOTION_ID.test(id)) return { id, reason: 'removed' };
-    const { status, headers, answer } = await this.exchange('retrieve', `/v1/pages/${id}`, undefined, signal, halt);
+    const { status, headers, answer } = await this.exchange('retrieve', `/v1/pages/${id}`, undefined, signal, halting);
     if (status === 404) return { id, reason: 'removed' };
     if (status === 403) return { id, reason: 'no_access' };
     if (status < 200 || status > 299) throw apiFault(status, headers, answer, false);
@@ -586,11 +590,11 @@ export class NotionReadConnector implements AccountSourceConnector {
     let active = 0;
     await new Promise<void>((resolve) => {
       const pump = (): void => {
-        while (stop === null && active < this.concurrency && queue.length > 0) {
+        while (stop === null && !halting.signal.aborted && active < this.concurrency && queue.length > 0) {
           const next = queue.shift()!;
           active += 1;
           const path = `/v1/blocks/${next.id}/children?page_size=${SEARCH_PAGE_SIZE}${next.cursor === undefined ? '' : `&start_cursor=${encodeURIComponent(next.cursor)}`}`;
-          this.exchange('children', path, undefined, signal, halting.signal)
+          this.exchange('children', path, undefined, signal, halting)
             .then((exchanged) => {
               if (stop?.kind === 'fault') return;
               if (stop !== null) {
@@ -607,9 +611,14 @@ export class NotionReadConnector implements AccountSourceConnector {
               } catch (error) {
                 stop = { kind: 'fault', error };
               }
+              if (stop !== null) halting.abort();
             }, (error: unknown) => {
-              const halted = error instanceof NotionFault && error.reason === 'cancelled';
-              if (stop === null || (stop.kind !== 'fault' && !halted)) stop = { kind: 'fault', error };
+              const cancelled = error instanceof NotionFault && error.reason === 'cancelled';
+              // A call halted before it was sent, while the call that halted it has yet to say why: that call's
+              // own answer is the read's stop, never this `cancelled`.
+              if (cancelled && stop === null && halting.signal.aborted) return;
+              if (stop === null || (stop.kind !== 'fault' && !cancelled)) stop = { kind: 'fault', error };
+              halting.abort();
             })
             .finally(() => {
               active -= 1;
@@ -662,6 +671,11 @@ export class NotionReadConnector implements AccountSourceConnector {
     if (answer.has_more === true) {
       const following = answer.next_cursor;
       if (typeof following !== 'string' || following.length === 0) return invalid;
+      try {
+        encodeURIComponent(following);
+      } catch {
+        return invalid; // a lone surrogate: no address can carry it
+      }
       const seen = counted.cursors.get(made.id) ?? new Set<string>();
       if (seen.has(following)) return invalid;
       seen.add(following);
@@ -673,12 +687,15 @@ export class NotionReadConnector implements AccountSourceConnector {
 
   /**
    * Makes one call: through the host's budget when one is given, else inside the connector's window. The call stops
-   * when the connector's signal, the operation's signal or the budget's signal aborts. Once `halt` has aborted (another
-   * call of the operation failed or stopped it), a call still waiting for its place or for the budget is never sent and
-   * throws `cancelled`; a call already sent is not stopped by it, and is waited for. A call the host's budget holds
-   * stops being waited on, with `cancelled`, once a signal aborts, or `halt` while the budget has not sent it.
+   * when the connector's signal, the operation's signal or the budget's signal aborts. Once `halting` has aborted
+   * (another call of the operation failed or stopped it), a call still waiting for its place or for the budget is never
+   * sent and throws `cancelled`; a call already sent is not stopped by it, and is waited for. A call the host's budget
+   * holds stops being waited on, with `cancelled`, once a signal aborts, or `halting` while the budget has not sent it.
+   * A call whose answer is a fault (any status outside 2xx but a 403 or a 404, or a failed call) aborts `halting` the moment
+   * it settles, before anything else runs, so a budget that starts its next call as soon as one settles sends none.
    */
-  private async exchange(method: NotionReadMethod, path: string, body: string | undefined, signal: AbortSignal | undefined, halt?: AbortSignal): Promise<Exchanged> {
+  private async exchange(method: NotionReadMethod, path: string, body: string | undefined, signal: AbortSignal | undefined, halting?: AbortController): Promise<Exchanged> {
+    const halt = halting?.signal;
     const callers = [this.options.signal, signal].filter((caller): caller is AbortSignal => caller !== undefined);
     const attempt = async (given?: AbortSignal): Promise<Exchanged> => {
       if (halt?.aborted === true) throw new NotionFault('cancelled');
@@ -686,11 +703,18 @@ export class NotionReadConnector implements AccountSourceConnector {
       const init: RequestInit = body === undefined
         ? { method: 'GET', headers: this.headers }
         : { method: 'POST', headers: { ...this.headers, 'content-type': 'application/json' }, body };
-      const answer = await call(this.options.fetchImpl ?? fetch, `${this.origin}${path}`, init, {
-        signal: signals.length === 0 ? undefined : AbortSignal.any(signals),
-        timeoutMs: this.timeoutMs,
-        maxBytes: ANSWER_BYTES,
-      });
+      let answer: Awaited<ReturnType<typeof call>>;
+      try {
+        answer = await call(this.options.fetchImpl ?? fetch, `${this.origin}${path}`, init, {
+          signal: signals.length === 0 ? undefined : AbortSignal.any(signals),
+          timeoutMs: this.timeoutMs,
+          maxBytes: ANSWER_BYTES,
+        });
+      } catch (error) {
+        if (!(error instanceof NotionFault && error.reason === 'cancelled')) halting?.abort();
+        throw error;
+      }
+      if ((answer.status < 200 || answer.status > 299) && answer.status !== 403 && answer.status !== 404) halting?.abort();
       return { status: answer.status, headers: answer.headers, answer: jsonObject(answer.text) };
     };
     if (this.options.send !== undefined) {
