@@ -289,9 +289,12 @@ interface Holdable {
  * either way, and an outcome nobody waits for is dropped.
  */
 function abortable<T>(work: Promise<T>, callers: readonly AbortSignal[], halt: AbortSignal | undefined, started: () => boolean): Promise<T> {
+  // One signal of its own over the callers' signals: a listener on a caller's signal that stops the abort event
+  // cannot keep it from aborting.
+  const caller = callers.length === 0 ? undefined : AbortSignal.any([...callers]);
   return new Promise<T>((resolve, reject) => {
     const cleanup = (): void => {
-      for (const caller of callers) caller.removeEventListener('abort', stopped);
+      caller?.removeEventListener('abort', stopped);
       halt?.removeEventListener('abort', halted);
     };
     function stopped(): void {
@@ -302,11 +305,11 @@ function abortable<T>(work: Promise<T>, callers: readonly AbortSignal[], halt: A
     function halted(): void {
       if (!started()) stopped();
     }
-    if (callers.some((caller) => caller.aborted) || (halt?.aborted === true && !started())) {
+    if (caller?.aborted === true || (halt?.aborted === true && !started())) {
       stopped();
       return;
     }
-    for (const caller of callers) caller.addEventListener('abort', stopped, { once: true });
+    caller?.addEventListener('abort', stopped, { once: true });
     halt?.addEventListener('abort', halted, { once: true });
     work.then((value) => {
       cleanup();
