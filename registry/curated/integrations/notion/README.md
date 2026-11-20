@@ -1,6 +1,6 @@
 # @framers/agentos-ext-notion
 
-Notion for a host that keeps its own grant: a public connection's OAuth on the AgentOS core's redirect flow, and pages written as typed plain-text blocks inside Notion's request limits.
+Notion for a host that keeps its own grant: a public connection's OAuth on the AgentOS core's redirect flow, pages written as typed plain-text blocks inside Notion's request limits, and the pages a person shared with the connection read as an account source, as Markdown text inside the host's bounds.
 
 ```ts
 import { NotionOAuthFlow, createNotionPage } from '@framers/agentos-ext-notion';
@@ -53,9 +53,38 @@ A refused exchange, refresh or revocation throws the core's `OAuthGrantRefused` 
 
 Every call is made once. A failure is a `NotionFault` whose `reason` is fixed: `unauthorized` (401: the grant no longer works), `restricted` (403, 404, or a connection Notion blocked), `refused` (400), `rate_limited` (429 or 529, with `retryAfterMs` from `Retry-After`), `unavailable` (409), and `unknown_outcome` for a write whose answer was lost, ran past the 65-second deadline or was a 5xx, or a success that names no page, since Notion's [status codes](https://developers.notion.com/reference/status-codes.md) say a write can be saved and still answer 503. A 503 that names the page it committed (`additional_data.committed_resource_id`) is taken as the page made. When an append fails, the fault's `pageId` names the page made without the rest of its blocks.
 
+## Read the pages a connection is shared
+
+`NotionReadConnector` reads the pages a person shared with a public connection as an account source, the `AccountSourceConnector` contract of [`@framers/agentos-ext-account-sources`](https://www.npmjs.com/package/@framers/agentos-ext-account-sources): a listing of the pages, the changes since a cursor, and each page as Markdown text with its attribution. It reads with the access token of the connection's OAuth grant, which `NotionOAuthFlow.accessToken` renews. The person chooses the pages in Notion's page picker when they authorize, and sharing a parent page shares the pages under it ([authorization](https://developers.notion.com/guides/get-started/authorization.md)).
+
+```ts
+import { NotionReadConnector } from '@framers/agentos-ext-notion';
+
+const pages = new NotionReadConnector({
+  accessToken: await flow.accessToken(connectionId),
+  maxPages: 100, maxDepth: 8, maxBlocks: 2_000, maxChars: 1_000_000,
+  concurrency: 3,
+});
+
+const { items, gone } = await pages.list({ ids: [] });         // newest edited first, up to maxPages
+const read = await pages.read(items[0]);                       // { item, content: { text }, ref }, or { id, reason }
+const changes = await pages.changesSince(cursor, { ids: [] }); // { changed, gone, cursor }
+```
+
+- **`list(selection)`** with no ids searches pages (`POST /v1/search`, filtered to pages, newest edited first) page after page up to `maxPages` ([search](https://developers.notion.com/reference/post-search.md)), leaving out pages in the trash. With ids it retrieves each page: a 404 or a page in the trash answers `{ id, reason: 'removed' }`, a 403 `{ id, reason: 'no_access' }`. An item is `{ id, title, size: null, version, parent }`: the title property as plain text, the page's `last_edited_time` as its version, and its parent's `type` (`workspace`, `page`, `database` or `block`) and `id`.
+- **`changesSince(cursor, selection)`** takes a cursor that is a JSON object of the page ids a host holds and their versions (`null` for none). Notion's search index takes time to show a page shared, unshared or moved to the trash ([search limitations](https://developers.notion.com/reference/search-optimizations-and-limitations.md)), so every page the cursor holds is retrieved on every call whatever search says, and one relist adds the pages the cursor does not hold, up to `maxPages`. A retrieved version unlike the cursor's is `changed`, a page gone is in `gone` with its reason, `changed` is newest edited first, and the cursor answered holds every page that answered at the version it answered.
+- **`read(item)`** retrieves the page, then reads its blocks one level a call, 100 a call (`GET /v1/blocks/{id}/children`, [block children](https://developers.notion.com/reference/get-block-children.md)), and writes them as Markdown: headings with `#` marks, list items with `-` or their numbers and their children indented two spaces a level, to-dos with a check box, quotes with `>`, code fenced with its language, and a table's rows as their cells separated by ` | `. Rich text is read as its plain text, so a mention or a link is its words. An image, a file, a video, an audio clip, a PDF, an embed and a bookmark are written as their captions alone: no address is written and nothing at an address is fetched. A child page and a child database are written as their titles, and nothing inside them is read. A synced block, a column list, a column and a tab add their children's lines; any other block type is left out ([block](https://developers.notion.com/reference/block.md)). The read answers `{ item, content: { text }, ref }`, `ref` being `{ kind: 'notion', title, url, version, readAt }`.
+- **Bounds.** `maxBlocks` counts a page's blocks at every level, `maxDepth` its levels (the page's own blocks are level 1) and `maxChars` the characters of its Markdown text. A page past any of them answers `{ id, reason: 'too_large' }` and is never cut; once a bound is passed no further call starts.
+- **Access lost during a read.** A 404 or 403 on the page's first children call answers `removed` or `no_access`. On any later children call the page is retrieved again: the read answers why it is gone, or throws `unavailable` when it is still there, so a host keeps its earlier copy and reads again later.
+- **The capability check.** A connection without the Read content capability cannot read pages ([capabilities](https://developers.notion.com/reference/capabilities.md)): search's 403 throws `NotionFault` with `reason` `restricted` and `status` 403, and nothing is read.
+- **Pacing.** Notion allows a connection 180 requests a minute, 600 on Business and Enterprise plans, and answers 429 with `Retry-After` past it ([request limits](https://developers.notion.com/reference/request-limits.md)). Without `send`, the connector keeps a sliding one-minute window of `requestsPerMinute` calls (180 when absent) that counts every call in flight. With `send`, every call goes through the host's shared budget with its method word (`search`, `retrieve` or `children`), and the connector paces nothing itself. A 429 throws `rate_limited` with `retryAfterMs` from `Retry-After`; nothing is retried, and no call follows it.
+- **`concurrency`** is how many calls a `list`, `read` or `changesSince` keeps in flight, 1 when absent and at most 64. Answers are put back in their order, so what the connector answers, and the calls it makes, are those of one call at a time. A fault starts no further call and is thrown once the calls in flight have settled.
+
+Every call names `Notion-Version: 2026-03-11`, runs under `timeoutMs` (30 seconds when absent) with a 2,000,000-byte answer cap, and stops on the connector's `signal` or the operation's. `revoke()` ends the grant through the `revoke` the host gives, and does nothing without one. Every failure is a `NotionFault`: `configuration` for an option or an input refused before any call, `cancelled` once a signal has aborted, `unauthorized` (401), `restricted` (search's 403, or a connection Notion blocked), `refused` (400), `rate_limited` (429 or 529, with `retryAfterMs`), `unavailable` (409 or a 5xx), `invalid_response` for an answer that is not the shape Notion documents, and the transport's `timeout`, `network` and `response_too_large`.
+
 ## Stand-ins
 
-On CI alone (`CI=true`), `NotionOAuthFlow` takes stand-in `endpoints` and `createNotionPage` a stand-in `apiBase`, each at a loopback or `.invalid` host. Never take them from a request.
+On CI alone (`CI=true`), `NotionOAuthFlow` takes stand-in `endpoints`, and `createNotionPage` and `NotionReadConnector` a stand-in `apiBase`, each at a loopback or `.invalid` host. Never take them from a request.
 
 ## Releases
 

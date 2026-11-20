@@ -1,7 +1,7 @@
 {
   "name": "@framers/agentos-ext-notion",
-  "version": "0.1.0",
-  "description": "Notion for a host that keeps its own grant: a public connection's OAuth on the core's redirect flow, and pages written as typed plain-text blocks inside Notion's request limits",
+  "version": "0.2.0",
+  "description": "Notion for a host that keeps its own grant: a public connection's OAuth on the core's redirect flow, pages written as typed plain-text blocks inside Notion's request limits, and the pages a person shared with the connection read as Markdown text, an account source",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -24,7 +24,8 @@
     "extension",
     "notion",
     "oauth",
-    "pages"
+    "pages",
+    "account-sources"
   ],
   "author": {
     "name": "Frame",

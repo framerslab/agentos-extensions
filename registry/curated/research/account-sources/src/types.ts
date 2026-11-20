@@ -71,8 +71,8 @@ export interface SourceChanges {
 }
 
 /**
- * A connector to a person's account. A write-only connection, such as Notion's, which writes the pages a person chose
- * and reads none, lists nothing, reads nothing and reports no change.
+ * A connector to a person's account. A write-only connection, which writes what a person chose and reads none, lists
+ * nothing, reads nothing and reports no change.
  */
 export interface AccountSourceConnector {
   /** One of `ACCOUNT_SOURCE_KINDS`, or a later connector's own kind. */
