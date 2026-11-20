@@ -113,6 +113,35 @@ describe('NotionReadConnector read', () => {
       expect(await connector(bound).read(item(big))).toEqual({ id: big.id, reason: 'too_large' });
     });
 
+  it('answers too_large once the text read so far passes maxChars, and reads no further', async () => {
+    const long = page(50, 'Long');
+    standIn.share([long]);
+    standIn.children(long.id, [said('paragraph', 'x'.repeat(300)), ...Array.from({ length: 249 }, (_, i) => said('paragraph', `Line ${i + 1}`))]);
+    expect(await connector({ maxChars: 100 }).read(item(long))).toEqual({ id: long.id, reason: 'too_large' });
+    expect(standIn.calls()).toBe(2);
+  });
+
+  it('counts only the text a page writes toward maxChars: a block it leaves out, and its children, count for nothing', async () => {
+    const quiet = page(51, 'Quiet');
+    standIn.share([quiet]);
+    standIn.children(quiet.id, [
+      block('template', { rich_text: [{ type: 'text', plain_text: 'y'.repeat(300) }] }, [said('paragraph', 'z'.repeat(300))]),
+      block('embed', { url: 'https://example.invalid/embed', caption: [] }, [said('paragraph', 'w'.repeat(300))]),
+      said('paragraph', 'Kept'),
+    ]);
+    expect(await connector({ maxChars: 100 }).read(item(quiet))).toMatchObject({ content: { text: 'Kept' } });
+  });
+
+  it('throws invalid_response for a children listing that repeats its cursor, and reads no further', async () => {
+    const looping = page(52, 'Looping');
+    const holder = said('toggle', 'Holder', [said('paragraph', 'Never')]);
+    standIn.share([looping]);
+    standIn.children(looping.id, [holder]);
+    standIn.repeatCursor(holder.id);
+    await expect(connector().read(item(looping))).rejects.toMatchObject({ name: 'NotionFault', reason: 'invalid_response' });
+    expect(standIn.calls()).toBe(4);
+  });
+
   it('answers an unshared page removed, one in the trash removed and one the grant cannot reach no_access, at its retrieve', async () => {
     standIn.unshare(nested);
     expect(await connector().read(item(nested))).toEqual({ id: nested.id, reason: 'removed' });

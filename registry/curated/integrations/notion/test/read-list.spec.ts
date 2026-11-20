@@ -165,6 +165,64 @@ describe('NotionReadConnector list and changesSince', () => {
     expect(standIn.mostInFlight()).toBe(3);
   });
 
+  it('sends no call still waiting for the window once another call has failed, and throws the first fault', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    standIn.share([a, b]);
+    standIn.rateLimitNext({ retryAfter: 30 });
+    const listing = new NotionReadConnector({ accessToken: TOKEN, maxPages: 100, maxDepth: 8, maxBlocks: 2_000, maxChars: 1_000_000, fetchImpl: standIn.fetchImpl, concurrency: 2, requestsPerMinute: 1 })
+      .list({ ids: [a.id, b.id] });
+    const outcome = listing.then(() => 'answered', (error: unknown) => error);
+    await settle();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await settle();
+    expect(await outcome).toMatchObject({ name: 'NotionFault', reason: 'rate_limited', retryAfterMs: 30_000 });
+    expect(standIn.calls()).toBe(1);
+  });
+
+  it("sends no call the host's budget held once another call has failed", async () => {
+    standIn.share([a, b]);
+    standIn.rateLimitNext({ retryAfter: 30 });
+    let firstSettled!: () => void;
+    const settled = new Promise<void>((resolve) => { firstSettled = resolve; });
+    let given = 0;
+    const send: NotionReadOptions['send'] = async (_method, call) => {
+      given += 1;
+      if (given === 1) return call(new AbortController().signal).finally(firstSettled);
+      await settled;
+      await new Promise((resolve) => setImmediate(resolve));
+      return call(new AbortController().signal);
+    };
+    await expect(connector({ concurrency: 2, send }).list({ ids: [a.id, b.id] })).rejects.toMatchObject({ name: 'NotionFault', reason: 'rate_limited', retryAfterMs: 30_000 });
+    expect(given).toBe(2);
+    expect(standIn.calls()).toBe(1);
+  });
+
+  it('keeps the process alive while a call waits for the window, and lets it go once no call waits', async () => {
+    const real = globalThis.setTimeout;
+    const windowTimers: Array<{ hasRef(): boolean }> = [];
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((handler: (...args: unknown[]) => void, ms?: number, ...rest: unknown[]) => {
+      const timer = real(handler, ms, ...rest);
+      if ((ms ?? 0) > 30_000) windowTimers.push(timer as unknown as { hasRef(): boolean });
+      return timer;
+    }) as unknown as typeof setTimeout);
+    try {
+      standIn.share([a, b]);
+      const stop = new AbortController();
+      const outcome = connector({ apiBase: undefined, fetchImpl: standIn.fetchImpl, requestsPerMinute: 1 })
+        .list({ ids: [a.id, b.id] }, stop.signal)
+        .then(() => 'answered', (error: unknown) => error);
+      await vi.waitFor(() => expect(windowTimers).toHaveLength(1));
+      await settle();
+      expect(standIn.calls()).toBe(1);
+      expect(windowTimers[0]!.hasRef()).toBe(true);
+      stop.abort();
+      expect(await outcome).toMatchObject({ name: 'NotionFault', reason: 'cancelled' });
+      expect(windowTimers[0]!.hasRef()).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('sends its token and Notion\'s version on every call', async () => {
     standIn.share([a]);
     const sent: Headers[] = [];

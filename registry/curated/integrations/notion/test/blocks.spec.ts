@@ -48,6 +48,11 @@ describe('notionMarkdown', () => {
     expect(notionMarkdown([block('code', { rich_text: rich('x'), language: 'plain text' })])).toBe('```\nx\n```');
   });
 
+  it('fences code with more backticks than any run inside it, so a fence in the code never closes it', () => {
+    const code = block('code', { rich_text: rich('Example:\n```js\nx()\n```\nend'), language: 'markdown' });
+    expect(notionMarkdown([code])).toBe('````markdown\nExample:\n```js\nx()\n```\nend\n````');
+  });
+
   it("writes a table's rows as lines of its cells, separated by ' | ', the header row first", () => {
     const row = (...cells: string[]): NotionBlockNode => block('table_row', { cells: cells.map((cell) => rich(cell)) });
     const table = block('table', { table_width: 2, has_column_header: true, has_row_header: false }, [row('Name', 'Owner'), row('Launch', 'Maya'), row('Docs', 'Sam')]);

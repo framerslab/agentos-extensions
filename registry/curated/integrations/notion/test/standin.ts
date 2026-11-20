@@ -115,6 +115,7 @@ export class NotionStandIn {
   private owners = new Map<string, string>();
   private vanished = new Map<string, boolean>();
   private afterRetrieve = new Map<string, 'unshare' | 'forbid'>();
+  private repeating = new Set<string>();
   private limitAt = new Map<number, number>();
   private noReadContent = false;
   private limitNext: { retryAfter: number } | null = null;
@@ -157,6 +158,7 @@ export class NotionStandIn {
     this.owners = new Map();
     this.vanished = new Map();
     this.afterRetrieve = new Map();
+    this.repeating = new Set();
     this.limitAt = new Map();
     this.noReadContent = false;
     this.limitNext = null;
@@ -217,6 +219,11 @@ export class NotionStandIn {
   /** Unshares a page, or forbids it, the moment its retrieve has answered. */
   changeAfterRetrieve(p: StandInPage, change: 'unshare' | 'forbid'): void {
     this.afterRetrieve.set(p.id, change);
+  }
+
+  /** Makes a block's children answer no blocks and the same `next_cursor` on every call, more always to come. */
+  repeatCursor(blockId: string): void {
+    this.repeating.add(blockId);
   }
 
   /** Answers the `n`th call (1-based) 429 with `Retry-After`. */
@@ -372,6 +379,9 @@ export class NotionStandIn {
     }
     if (this.forbidden.has(owner)) return { status: 403, body: failure(403, 'restricted_resource') };
     if (!this.shared.has(owner)) return { status: 404, body: failure(404, 'object_not_found') };
+    if (this.repeating.has(id)) {
+      return { status: 200, body: { object: 'list', type: 'block', block: {}, results: [], next_cursor: notionId(1, 'c'), has_more: true } };
+    }
     const known = this.blocks.get(id) ?? [];
     const start = cursor === null ? 0 : parseInt(cursor.slice(-12), 16);
     const slice = known.slice(start, start + size);
