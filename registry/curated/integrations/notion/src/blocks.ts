@@ -66,8 +66,9 @@ function lines(blocks: readonly NotionBlockNode[], indent: string): string[] {
   for (const block of blocks) {
     number = block.type === 'numbered_list_item' ? number + 1 : 0;
     const text = plain(block.body.rich_text);
-    const own = (line: string): void => {
-      if (line.trim() !== '') out.push(`${indent}${line}`.trimEnd());
+    const own = (line: string, later = indent): void => {
+      if (line.trim() === '') return;
+      line.split('\n').forEach((part, at) => out.push(`${at === 0 ? indent : later}${part}`.trimEnd()));
     };
     if (block.type in HEADINGS) {
       if (text !== '') own(`${HEADINGS[block.type]} ${text}`);
@@ -77,15 +78,17 @@ function lines(blocks: readonly NotionBlockNode[], indent: string): string[] {
       out.push(...lines(block.children, indent));
     } else if (block.type === 'quote') {
       if (text !== '') own(`> ${text.replace(/\n/g, '\n> ')}`);
-      out.push(...lines(block.children, indent));
+      for (const line of lines(block.children, '')) out.push(`${indent}> ${line}`.trimEnd());
     } else if (ITEMS.has(block.type)) {
       const mark = block.type === 'bulleted_list_item' ? '-' : block.type === 'numbered_list_item' ? `${number}.` : block.body.checked === true ? '- [x]' : '- [ ]';
-      own(`${mark} ${text}`);
+      own(`${mark} ${text}`, `${indent}${INDENT}`);
       out.push(...lines(block.children, `${indent}${INDENT}`));
     } else if (block.type === 'code') {
       const language = typeof block.body.language === 'string' && block.body.language !== 'plain text' ? block.body.language : '';
       const fence = fenceFor(text);
-      out.push(`${indent}${fence}${language}`, text, `${indent}${fence}`);
+      out.push(`${indent}${fence}${language}`);
+      for (const line of text.split('\n')) out.push(`${indent}${line}`);
+      out.push(`${indent}${fence}`);
     } else if (block.type === 'table') {
       for (const row of rows(block)) own(row);
     } else if (INNER.has(block.type)) {
@@ -123,8 +126,9 @@ export function leastChars(block: NotionBlockNode, parentType: string | null): n
  * Writes a page's blocks as Markdown text, one line a block: headings with `#` marks, list items with `-`, numbers
  * from 1 that restart after any other block, or a check box, quotes with `>`, code fenced with its language and its
  * text untouched (the fence longer than any run of backticks in it), and a table's rows as lines of their cells. A
- * list item's children are indented two spaces a level; any other block's children follow as their own lines. A block
- * with no text adds no line.
+ * list item's children, and its own later lines, are indented two spaces a level; a quote's children are quoted with
+ * it; any other block's children follow as their own lines at its indentation, and every line of a block, a code
+ * block's text included, carries that indentation. A block with no text adds no line.
  */
 export function notionMarkdown(blocks: readonly NotionBlockNode[]): string {
   return lines(blocks, '').join('\n');

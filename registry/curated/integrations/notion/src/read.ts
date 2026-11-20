@@ -283,6 +283,30 @@ interface Holdable {
 }
 
 /**
+ * Answers `work`, or throws `cancelled` as soon as one of `signals` aborts, so a call a host's budget holds stops being
+ * waited on; `work` is still let settle, and its outcome is then dropped.
+ */
+function abortable<T>(work: Promise<T>, signals: readonly AbortSignal[]): Promise<T> {
+  if (signals.length === 0) return work;
+  const signal = AbortSignal.any(signals);
+  if (signal.aborted) {
+    work.catch(() => {});
+    return Promise.reject(new NotionFault('cancelled'));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => reject(new NotionFault('cancelled'));
+    signal.addEventListener('abort', abort, { once: true });
+    work.then((value) => {
+      signal.removeEventListener('abort', abort);
+      resolve(value);
+    }, (error: unknown) => {
+      signal.removeEventListener('abort', abort);
+      reject(error);
+    });
+  });
+}
+
+/**
  * A sliding one-minute window of `limit` calls. A call holds its place from its start until a minute after it, or
  * until it settles when that is later, so a call in flight always counts. A call waiting for a place stops waiting,
  * with `cancelled`, when its signal aborts. The timers that give places back hold the process open while a call
@@ -298,7 +322,11 @@ class CallWindow {
   /** Waits for a place and answers the function that gives it back once the call has settled. */
   async enter(signal: AbortSignal | undefined): Promise<() => void> {
     while (this.held >= this.limit) await this.turn(signal);
-    if (signal?.aborted === true) throw new NotionFault('cancelled');
+    if (signal?.aborted === true) {
+      // Woken for a place and stopped before taking it: the place goes to the next call waiting.
+      if (this.held < this.limit) this.waiting.shift()?.();
+      throw new NotionFault('cancelled');
+    }
     this.held += 1;
     const started = Date.now();
     return () => {
@@ -531,7 +559,8 @@ export class NotionReadConnector implements AccountSourceConnector {
   /**
    * Reads a page's blocks, every level, up to `concurrency` children calls in flight; each block's children go into
    * its own node, so the tree is in the page's order whatever order the answers come in. Answers the tree, or the
-   * first reason it stopped once the calls in flight have settled.
+   * first reason it stopped once the calls in flight have settled; a fault a call in flight answers after a stop that
+   * is no fault takes its place.
    */
   private async blocksOf(pageId: string, signal: AbortSignal | undefined): Promise<{ blocks: NotionBlockNode[]; stop: Stop | null }> {
     const blocks: NotionBlockNode[] = [];
@@ -548,14 +577,24 @@ export class NotionReadConnector implements AccountSourceConnector {
           const path = `/v1/blocks/${next.id}/children?page_size=${SEARCH_PAGE_SIZE}${next.cursor === undefined ? '' : `&start_cursor=${encodeURIComponent(next.cursor)}`}`;
           this.exchange('children', path, undefined, signal, halting.signal)
             .then((exchanged) => {
-              if (stop !== null) return;
+              if (stop?.kind === 'fault') return;
+              if (stop !== null) {
+                // The read has stopped without a fault (too large, or a block gone): a fault answered by a call
+                // still in flight, such as a 429, is still what the read throws, before any retrieve again.
+                const { status, headers, answer } = exchanged;
+                if (status !== 403 && status !== 404 && (status < 200 || status > 299)) {
+                  stop = { kind: 'fault', error: apiFault(status, headers, answer, false) };
+                }
+                return;
+              }
               try {
                 stop = this.take(next, exchanged, queue, counted);
               } catch (error) {
                 stop = { kind: 'fault', error };
               }
             }, (error: unknown) => {
-              if (stop === null) stop = { kind: 'fault', error };
+              const halted = error instanceof NotionFault && error.reason === 'cancelled';
+              if (stop === null || (stop.kind !== 'fault' && !halted)) stop = { kind: 'fault', error };
             })
             .finally(() => {
               active -= 1;
@@ -621,7 +660,8 @@ export class NotionReadConnector implements AccountSourceConnector {
    * Makes one call: through the host's budget when one is given, else inside the connector's window. The call stops
    * when the connector's signal, the operation's signal or the budget's signal aborts. Once `halt` has aborted (another
    * call of the operation failed or stopped it), a call still waiting for its place or for the budget is never sent and
-   * throws `cancelled`; a call already sent is not stopped by it.
+   * throws `cancelled`; a call already sent is not stopped by it. A call the host's budget holds stops being waited
+   * on, with `cancelled`, once a signal or `halt` aborts.
    */
   private async exchange(method: NotionReadMethod, path: string, body: string | undefined, signal: AbortSignal | undefined, halt?: AbortSignal): Promise<Exchanged> {
     const callers = [this.options.signal, signal].filter((caller): caller is AbortSignal => caller !== undefined);
@@ -638,8 +678,8 @@ export class NotionReadConnector implements AccountSourceConnector {
       });
       return { status: answer.status, headers: answer.headers, answer: jsonObject(answer.text) };
     };
-    if (this.options.send !== undefined) return this.options.send(method, attempt);
     const waiters = halt === undefined ? callers : [...callers, halt];
+    if (this.options.send !== undefined) return abortable(this.options.send(method, attempt), waiters);
     const leave = await this.window.enter(waiters.length === 0 ? undefined : AbortSignal.any(waiters));
     try {
       return await attempt();
