@@ -116,6 +116,7 @@ export class NotionStandIn {
   private vanished = new Map<string, boolean>();
   private afterRetrieve = new Map<string, 'unshare' | 'forbid'>();
   private repeating = new Set<string>();
+  private slow = new Map<number, number>();
   private limitAt = new Map<number, number>();
   private noReadContent = false;
   private limitNext: { retryAfter: number } | null = null;
@@ -159,6 +160,7 @@ export class NotionStandIn {
     this.vanished = new Map();
     this.afterRetrieve = new Map();
     this.repeating = new Set();
+    this.slow = new Map();
     this.limitAt = new Map();
     this.noReadContent = false;
     this.limitNext = null;
@@ -226,6 +228,11 @@ export class NotionStandIn {
     this.repeating.add(blockId);
   }
 
+  /** Answers the `n`th call (1-based) `ms` milliseconds later than the others. */
+  slowCall(n: number, ms: number): void {
+    this.slow.set(n, ms);
+  }
+
   /** Answers the `n`th call (1-based) 429 with `Retry-After`. */
   rateLimitCall(n: number, retryAfter: number): void {
     this.limitAt.set(n, retryAfter);
@@ -287,11 +294,12 @@ export class NotionStandIn {
 
   private async answer(method: string, url: URL, headers: Headers, text: string): Promise<Answer> {
     this.count += 1;
+    const n = this.count;
     this.inFlight += 1;
     this.most = Math.max(this.most, this.inFlight);
     try {
       const answer = this.route(method, url, headers, text);
-      await wait(this.delayMs);
+      await wait(this.delayMs + (this.slow.get(n) ?? 0));
       return answer;
     } finally {
       this.inFlight -= 1;

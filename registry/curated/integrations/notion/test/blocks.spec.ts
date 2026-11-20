@@ -48,6 +48,16 @@ describe('notionMarkdown', () => {
     expect(notionMarkdown([block('code', { rich_text: rich('x'), language: 'plain text' })])).toBe('```\nx\n```');
   });
 
+  it("indents a code block's text and every later line of a block under the list item they belong to", () => {
+    const list = said('bulleted_list_item', 'Steps\nthen more', [block('code', { rich_text: rich('a()\nb()'), language: 'js' }), said('paragraph', 'First\nSecond')]);
+    expect(notionMarkdown([list])).toBe('- Steps\n  then more\n  ```js\n  a()\n  b()\n  ```\n  First\n  Second');
+  });
+
+  it("keeps a quote's children inside the quote", () => {
+    const quote = said('quote', 'Said', [said('bulleted_list_item', 'Point'), said('paragraph', 'More')]);
+    expect(notionMarkdown([quote])).toBe('> Said\n> - Point\n> More');
+  });
+
   it('fences code with more backticks than any run inside it, so a fence in the code never closes it', () => {
     const code = block('code', { rich_text: rich('Example:\n```js\nx()\n```\nend'), language: 'markdown' });
     expect(notionMarkdown([code])).toBe('````markdown\nExample:\n```js\nx()\n```\nend\n````');

@@ -223,6 +223,34 @@ describe('NotionReadConnector list and changesSince', () => {
     }
   });
 
+  it('passes a place on when the call it woke has been stopped, so the next waiting call goes out', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    standIn.share([a, b, c]);
+    const pager = new NotionReadConnector({ accessToken: TOKEN, maxPages: 100, maxDepth: 8, maxBlocks: 2_000, maxChars: 1_000_000, fetchImpl: standIn.fetchImpl, requestsPerMinute: 1 });
+    await pager.list({ ids: [a.id] });
+    const stopSecond = new AbortController();
+    const second = pager.list({ ids: [b.id] }, stopSecond.signal).then(() => 'answered', (error: unknown) => error);
+    const third = pager.list({ ids: [c.id] });
+    await settle();
+    setTimeout(() => stopSecond.abort(), 60_000); // fires right after the window gives its place to the second call
+    vi.advanceTimersByTime(60_000);
+    await settle();
+    expect(await second).toMatchObject({ name: 'NotionFault', reason: 'cancelled' });
+    expect(standIn.calls()).toBe(2);
+    expect((await third).items.map((i) => i.id)).toEqual([c.id]);
+  });
+
+  it("stops waiting for a call the host's budget holds once the operation is stopped", async () => {
+    standIn.share([a]);
+    const stop = new AbortController();
+    const send: NotionReadOptions['send'] = () => new Promise(() => {});
+    const listing = connector({ send }).list({ ids: [a.id] }, stop.signal);
+    await settle();
+    stop.abort();
+    await expect(listing).rejects.toMatchObject({ name: 'NotionFault', reason: 'cancelled' });
+    expect(standIn.calls()).toBe(0);
+  });
+
   it('sends its token and Notion\'s version on every call', async () => {
     standIn.share([a]);
     const sent: Headers[] = [];

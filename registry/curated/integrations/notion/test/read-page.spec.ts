@@ -132,6 +132,19 @@ describe('NotionReadConnector read', () => {
     expect(await connector({ maxChars: 100 }).read(item(quiet))).toMatchObject({ content: { text: 'Kept' } });
   });
 
+  it('throws rate_limited when a 429 answers after another call found a block gone, and sends nothing after it', async () => {
+    const two = page(53, 'Two');
+    const x = said('toggle', 'X', [said('paragraph', 'x1')]);
+    const y = said('toggle', 'Y', [said('paragraph', 'y1')]);
+    standIn.share([two]);
+    standIn.children(two.id, [x, y]);
+    standIn.vanish(x.id, false);
+    standIn.rateLimitCall(4, 9);
+    standIn.slowCall(4, 30);
+    await expect(connector({ concurrency: 3 }).read(item(two))).rejects.toMatchObject({ name: 'NotionFault', reason: 'rate_limited', retryAfterMs: 9_000 });
+    expect(standIn.calls()).toBe(4);
+  });
+
   it('throws invalid_response for a children listing that repeats its cursor, and reads no further', async () => {
     const looping = page(52, 'Looping');
     const holder = said('toggle', 'Holder', [said('paragraph', 'Never')]);
