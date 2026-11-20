@@ -366,6 +366,20 @@ describe('multiSearch: the merge', () => {
     expect(serperFirst.results[0]).toMatchObject({ providers: ['serper', 'tavily'], agreementCount: 2 });
   });
 
+  it("keeps each provider's own address on a merged result, the first provider's as its url", async () => {
+    scripts = {
+      serper: { urls: ['https://www.example.org/a?utm_source=treaty'] },
+      tavily: { urls: ['https://example.org/a'] },
+    };
+    const response = await service().multiSearch('treaty', { providers: ['serper', 'tavily'], fallback: false });
+    expect(response.results).toHaveLength(1);
+    expect(response.results[0]).toMatchObject({
+      url: 'https://www.example.org/a?utm_source=treaty',
+      providers: ['serper', 'tavily'],
+      providerUrls: { serper: 'https://www.example.org/a?utm_source=treaty', tavily: 'https://example.org/a' },
+    });
+  });
+
   it('perProvider 5 with maxResults 15 asks each provider for five and keeps all fifteen', async () => {
     const response = await service().multiSearch('treaty', {
       providers: ['serper', 'tavily', 'firecrawl'],
