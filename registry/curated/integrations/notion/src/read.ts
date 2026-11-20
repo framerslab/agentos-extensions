@@ -283,24 +283,36 @@ interface Holdable {
 }
 
 /**
- * Answers `work`, or throws `cancelled` as soon as one of `signals` aborts, so a call a host's budget holds stops being
- * waited on; `work` is still let settle, and its outcome is then dropped.
+ * Answers `work`, a call given to a host's budget, or throws `cancelled` once a caller's signal aborts, or once `halt`
+ * aborts while the budget still holds the call (`started()` false), so a held call stops being waited on. A call the
+ * budget has sent is waited for after `halt`, so its fault, a 429 above all, is never lost. `work` is let settle
+ * either way, and an outcome nobody waits for is dropped.
  */
-function abortable<T>(work: Promise<T>, signals: readonly AbortSignal[]): Promise<T> {
-  if (signals.length === 0) return work;
-  const signal = AbortSignal.any([...signals]);
-  if (signal.aborted) {
-    work.catch(() => {});
-    return Promise.reject(new NotionFault('cancelled'));
-  }
+function abortable<T>(work: Promise<T>, callers: readonly AbortSignal[], halt: AbortSignal | undefined, started: () => boolean): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const abort = (): void => reject(new NotionFault('cancelled'));
-    signal.addEventListener('abort', abort, { once: true });
+    const cleanup = (): void => {
+      for (const caller of callers) caller.removeEventListener('abort', stopped);
+      halt?.removeEventListener('abort', halted);
+    };
+    function stopped(): void {
+      cleanup();
+      work.catch(() => {});
+      reject(new NotionFault('cancelled'));
+    }
+    function halted(): void {
+      if (!started()) stopped();
+    }
+    if (callers.some((caller) => caller.aborted) || (halt?.aborted === true && !started())) {
+      stopped();
+      return;
+    }
+    for (const caller of callers) caller.addEventListener('abort', stopped, { once: true });
+    halt?.addEventListener('abort', halted, { once: true });
     work.then((value) => {
-      signal.removeEventListener('abort', abort);
+      cleanup();
       resolve(value);
     }, (error: unknown) => {
-      signal.removeEventListener('abort', abort);
+      cleanup();
       reject(error);
     });
   });
@@ -660,8 +672,8 @@ export class NotionReadConnector implements AccountSourceConnector {
    * Makes one call: through the host's budget when one is given, else inside the connector's window. The call stops
    * when the connector's signal, the operation's signal or the budget's signal aborts. Once `halt` has aborted (another
    * call of the operation failed or stopped it), a call still waiting for its place or for the budget is never sent and
-   * throws `cancelled`; a call already sent is not stopped by it. A call the host's budget holds stops being waited
-   * on, with `cancelled`, once a signal or `halt` aborts.
+   * throws `cancelled`; a call already sent is not stopped by it, and is waited for. A call the host's budget holds
+   * stops being waited on, with `cancelled`, once a signal aborts, or `halt` while the budget has not sent it.
    */
   private async exchange(method: NotionReadMethod, path: string, body: string | undefined, signal: AbortSignal | undefined, halt?: AbortSignal): Promise<Exchanged> {
     const callers = [this.options.signal, signal].filter((caller): caller is AbortSignal => caller !== undefined);
@@ -678,8 +690,15 @@ export class NotionReadConnector implements AccountSourceConnector {
       });
       return { status: answer.status, headers: answer.headers, answer: jsonObject(answer.text) };
     };
+    if (this.options.send !== undefined) {
+      let started = false;
+      const begin = (given?: AbortSignal): Promise<Exchanged> => {
+        if (halt?.aborted !== true) started = true;
+        return attempt(given);
+      };
+      return abortable(this.options.send(method, begin), callers, halt, () => started);
+    }
     const waiters = halt === undefined ? callers : [...callers, halt];
-    if (this.options.send !== undefined) return abortable(this.options.send(method, attempt), waiters);
     const leave = await this.window.enter(waiters.length === 0 ? undefined : AbortSignal.any(waiters));
     try {
       return await attempt();
