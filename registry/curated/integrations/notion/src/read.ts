@@ -579,7 +579,8 @@ export class NotionReadConnector implements AccountSourceConnector {
    * Reads a page's blocks, every level, up to `concurrency` children calls in flight; each block's children go into
    * its own node, so the tree is in the page's order whatever order the answers come in. Answers the tree, or the
    * first reason it stopped once the calls in flight have settled; a fault a call in flight answers after a stop that
-   * is no fault takes its place.
+   * is no fault takes its place, and the `cancelled` of a call halted before it was sent never stands in for the fault
+   * that halted it. A read that is stopped never answers part of a page.
    */
   private async blocksOf(pageId: string, signal: AbortSignal | undefined): Promise<{ blocks: NotionBlockNode[]; stop: Stop | null }> {
     const blocks: NotionBlockNode[] = [];
@@ -587,6 +588,7 @@ export class NotionReadConnector implements AccountSourceConnector {
     const counted: Counted = { blocks: 0, chars: 0, cursors: new Map() };
     const halting = new AbortController();
     let stop: Stop | null = null;
+    let standIn = false; // the stop held is only the `cancelled` of a call halted before it was sent
     let active = 0;
     await new Promise<void>((resolve) => {
       const pump = (): void => {
@@ -596,13 +598,15 @@ export class NotionReadConnector implements AccountSourceConnector {
           const path = `/v1/blocks/${next.id}/children?page_size=${SEARCH_PAGE_SIZE}${next.cursor === undefined ? '' : `&start_cursor=${encodeURIComponent(next.cursor)}`}`;
           this.exchange('children', path, undefined, signal, halting)
             .then((exchanged) => {
-              if (stop?.kind === 'fault') return;
+              if (stop?.kind === 'fault' && !standIn) return;
               if (stop !== null) {
-                // The read has stopped without a fault (too large, or a block gone): a fault answered by a call
-                // still in flight, such as a 429, is still what the read throws, before any retrieve again.
+                // The read has stopped without a fault (too large, or a block gone), or on a halted call's
+                // `cancelled`: a fault answered by a call still in flight, such as a 429, is still what the read
+                // throws, before any retrieve again.
                 const { status, headers, answer } = exchanged;
                 if (status !== 403 && status !== 404 && (status < 200 || status > 299)) {
                   stop = { kind: 'fault', error: apiFault(status, headers, answer, false) };
+                  standIn = false;
                 }
                 return;
               }
@@ -614,10 +618,15 @@ export class NotionReadConnector implements AccountSourceConnector {
               if (stop !== null) halting.abort();
             }, (error: unknown) => {
               const cancelled = error instanceof NotionFault && error.reason === 'cancelled';
-              // A call halted before it was sent, while the call that halted it has yet to say why: that call's
-              // own answer is the read's stop, never this `cancelled`.
-              if (cancelled && stop === null && halting.signal.aborted) return;
-              if (stop === null || (stop.kind !== 'fault' && !cancelled)) stop = { kind: 'fault', error };
+              if (stop === null) {
+                // A `cancelled` once the read is halted may be a call halted before it was sent, while the call
+                // that halted it has yet to say why: it stops the read, and that call's fault takes its place.
+                stop = { kind: 'fault', error };
+                standIn = cancelled && halting.signal.aborted;
+              } else if (!cancelled && (stop.kind !== 'fault' || standIn)) {
+                stop = { kind: 'fault', error };
+                standIn = false;
+              }
               halting.abort();
             })
             .finally(() => {
