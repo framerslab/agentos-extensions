@@ -37,7 +37,7 @@
   ],
   "publishConfig": { "access": "public" },
   "peerDependencies": {
-    "@framers/agentos": ">=0.13.144",
+    "@framers/agentos": ">=0.19.3",
     "@framers/agentos-ext-account-sources": ">=0.11.0"
   },
   "devDependencies": {

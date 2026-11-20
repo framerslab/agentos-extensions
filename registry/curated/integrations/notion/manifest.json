@@ -11,7 +11,7 @@
   },
   "license": "Apache-2.0",
   "keywords": ["notion", "oauth", "pages"],
-  "agentosVersion": ">=0.13.144",
+  "agentosVersion": ">=0.19.3",
   "categories": ["integrations", "productivity"],
   "repository": { "type": "git", "url": "https://github.com/framerslab/agentos-extensions" },
   "extensions": [{
