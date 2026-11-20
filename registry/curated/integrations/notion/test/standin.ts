@@ -112,6 +112,10 @@ export class NotionStandIn {
   private omitted = new Set<string>();
   private stale = new Map<string, StandInPage>();
   private blocks = new Map<string, readonly StandInBlock[]>();
+  private owners = new Map<string, string>();
+  private vanished = new Map<string, boolean>();
+  private afterRetrieve = new Map<string, 'unshare' | 'forbid'>();
+  private limitAt = new Map<number, number>();
   private noReadContent = false;
   private limitNext: { retryAfter: number } | null = null;
   private delayMs = 0;
@@ -150,6 +154,10 @@ export class NotionStandIn {
     this.omitted = new Set();
     this.stale = new Map();
     this.blocks = new Map();
+    this.owners = new Map();
+    this.vanished = new Map();
+    this.afterRetrieve = new Map();
+    this.limitAt = new Map();
     this.noReadContent = false;
     this.limitNext = null;
     this.delayMs = 0;
@@ -189,9 +197,31 @@ export class NotionStandIn {
     this.omitted.add(p.id);
   }
 
-  /** Gives a page or a block its children. */
-  children(id: string, list: readonly StandInBlock[]): void {
-    this.blocks.set(id, list);
+  /** Gives a page its blocks, every level of them, each block's children answered under its own id. */
+  children(pageId: string, list: readonly StandInBlock[]): void {
+    const register = (id: string, children: readonly StandInBlock[]): void => {
+      this.blocks.set(id, children);
+      for (const block of children) {
+        this.owners.set(block.id, pageId);
+        if (block.children !== undefined) register(block.id, block.children);
+      }
+    };
+    register(pageId, list);
+  }
+
+  /** Makes a block's children call answer 404, and unshares its page at that moment when `pageGone`. */
+  vanish(blockId: string, pageGone: boolean): void {
+    this.vanished.set(blockId, pageGone);
+  }
+
+  /** Unshares a page, or forbids it, the moment its retrieve has answered. */
+  changeAfterRetrieve(p: StandInPage, change: 'unshare' | 'forbid'): void {
+    this.afterRetrieve.set(p.id, change);
+  }
+
+  /** Answers the `n`th call (1-based) 429 with `Retry-After`. */
+  rateLimitCall(n: number, retryAfter: number): void {
+    this.limitAt.set(n, retryAfter);
   }
 
   /** Answers every call 403, as for a grant without Read content. */
@@ -287,6 +317,10 @@ export class NotionStandIn {
   private guarded(headers: Headers, answer: () => Answer): Answer {
     if (!/^Bearer \S+$/.test(headers.get('authorization') ?? '')) return { status: 401, body: failure(401, 'unauthorized') };
     if ((headers.get('notion-version') ?? '') === '') return { status: 400, body: failure(400, 'missing_version') };
+    const limited = this.limitAt.get(this.count);
+    if (limited !== undefined) {
+      return { status: 429, headers: { 'retry-after': String(limited) }, body: failure(429, 'rate_limited', { retry_after: String(limited), rate_limit_reason: 'public_api_request_rate_limit' }) };
+    }
     if (this.limitNext !== null) {
       const seconds = this.limitNext.retryAfter;
       this.limitNext = null;
@@ -322,17 +356,27 @@ export class NotionStandIn {
     if (this.forbidden.has(id)) return { status: 403, body: failure(403, 'restricted_resource') };
     const p = this.shared.get(id);
     if (p === undefined) return { status: 404, body: failure(404, 'object_not_found') };
-    return { status: 200, body: this.pageObject(p) };
+    const answer = { status: 200, body: this.pageObject(p) };
+    const change = this.afterRetrieve.get(id);
+    this.afterRetrieve.delete(id);
+    if (change === 'unshare') this.shared.delete(id);
+    if (change === 'forbid') this.forbidden.add(id);
+    return answer;
   }
 
   private childrenOf(id: string, cursor: string | null, size: number): Answer {
-    const known = this.blocks.get(id) ?? (this.shared.has(id) ? [] : undefined);
-    if (known === undefined) return { status: 404, body: failure(404, 'object_not_found') };
+    const owner = this.owners.get(id) ?? id;
+    if (this.vanished.has(id)) {
+      if (this.vanished.get(id) === true) this.shared.delete(owner);
+      return { status: 404, body: failure(404, 'object_not_found') };
+    }
+    if (this.forbidden.has(owner)) return { status: 403, body: failure(403, 'restricted_resource') };
+    if (!this.shared.has(owner)) return { status: 404, body: failure(404, 'object_not_found') };
+    const known = this.blocks.get(id) ?? [];
     const start = cursor === null ? 0 : parseInt(cursor.slice(-12), 16);
     const slice = known.slice(start, start + size);
     const next = start + size < known.length ? notionId(start + size, 'c') : null;
     const results = slice.map((block) => ({ object: 'block', id: block.id, type: block.type, has_children: (block.children?.length ?? 0) > 0, in_trash: false, [block.type]: block.body }));
-    for (const block of slice) if (block.children !== undefined) this.blocks.set(block.id, block.children);
     return { status: 200, body: { object: 'list', type: 'block', block: {}, results, next_cursor: next, has_more: next !== null } };
   }
 }
