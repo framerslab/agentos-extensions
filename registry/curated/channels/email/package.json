@@ -25,7 +25,7 @@
     }
   },
   "dependencies": {
-    "imapflow": "^1.0.0",
+    "imapflow": "^2.12.1",
     "nodemailer": "^10.0.16"
   },
   "devDependencies": {
