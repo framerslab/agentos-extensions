@@ -209,6 +209,13 @@ export interface MultiSearchResult extends SearchResult {
   confidenceScore: number;
   /** The position this result appeared at in each provider's results */
   providerPositions: Record<string, number>;
+  /**
+   * Each provider's own address for this result, as that provider gave it (the first form, for a provider that gave
+   * two). Forms of one address merge into one result whose `url` is the first provider's, so a caller that cannot use
+   * that form, an address whose query it will not send for one, can read another provider's. `multiSearch` sets it on
+   * every result.
+   */
+  providerUrls?: Record<string, string>;
 }
 
 /**
@@ -1162,6 +1169,11 @@ export class SearchProviderService {
           existing.agreementCount = existing.providers.length;
         }
         existing.providerPositions[provider] = position;
+        const urls = (existing.providerUrls ??= {});
+        if (!Object.prototype.hasOwnProperty.call(urls, provider)) {
+          // defined, not assigned, so a provider named `__proto__` keeps an address of its own
+          Object.defineProperty(urls, provider, { value: result.url, enumerable: true, writable: true, configurable: true });
+        }
         if ((result.snippet?.length || 0) > (existing.snippet?.length || 0)) {
           existing.snippet = result.snippet;
         }
@@ -1175,6 +1187,7 @@ export class SearchProviderService {
           agreementCount: 1,
           confidenceScore: 0,
           providerPositions: { [provider]: position },
+          providerUrls: { [provider]: result.url },
         });
       }
     }
