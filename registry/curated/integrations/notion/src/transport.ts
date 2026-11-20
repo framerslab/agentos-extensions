@@ -10,6 +10,12 @@ import { NotionFault } from './faults.js';
 /** The hosts a stand-in may answer at over plain HTTP. */
 const LOOPBACK: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
 
+/** Notion's API origin. */
+const NOTION_API = 'https://api.notion.com';
+
+/** A Notion id: 32 hex digits, with or without its four hyphens. */
+export const NOTION_ID = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
 /** True for an object that is not null, such as an options or input object a caller passes. */
 export function isObject(value: unknown): value is object {
   return typeof value === 'object' && value !== null;
@@ -45,6 +51,16 @@ export function checkAddress(value: unknown, standIn: boolean): asserts value is
   if (url.username !== '' || url.password !== '' || /[?#]/.test(value) || !scheme || (standIn && (process.env.CI !== 'true' || !reserved))) {
     throw new NotionFault('configuration');
   }
+}
+
+/** Notion's API origin, or a stand-in's origin on CI at a loopback or `.invalid` host. */
+export function apiOrigin(apiBase: string | undefined): string {
+  if (apiBase === undefined) return NOTION_API;
+  checkAddress(apiBase, true);
+  const url = new URL(apiBase);
+  if (url.pathname !== '/' || apiBase.replace(/\/$/, '') !== url.origin) throw new NotionFault('configuration');
+  if (url.protocol === 'http:' && !loopbackHost(url.hostname)) throw new NotionFault('configuration');
+  return url.origin;
 }
 
 /** What one call is bounded by. */

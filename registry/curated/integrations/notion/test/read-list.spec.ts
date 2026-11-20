@@ -12,7 +12,7 @@ function connector(overrides: Partial<NotionReadOptions> = {}): NotionReadConnec
 
 /** Lets every answer, its reading and the calls it starts run, on the real event loop, without moving faked time. */
 async function settle(): Promise<void> {
-  for (let i = 0; i < 100; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  for (let i = 0; i < 400; i += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
 /** A cursor holding pages at the versions given. */
@@ -140,7 +140,7 @@ describe('NotionReadConnector list and changesSince', () => {
     expect(standIn.calls()).toBe(180);
     await vi.advanceTimersByTimeAsync(1);
     await settle();
-    expect(standIn.calls()).toBe(201);
+    expect(standIn.calls()).toBe(202); // two search pages, every one of them held, then the 200 retrieves
     const changes = await reading;
     expect(changes).toMatchObject({ changed: [], gone: [] });
   });

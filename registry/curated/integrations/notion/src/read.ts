@@ -1,0 +1,460 @@
+/**
+ * @fileoverview The pages a person shared with a public connection, read as an account source: a listing of the pages
+ * the grant reaches, newest edited first; the changes since a cursor of the pages a host holds; and the connection's
+ * capability check. Notion's search is no inventory: its index takes time to show a page shared, unshared or moved to
+ * the trash, so every page a host holds is retrieved on every pass whatever search says, and search only adds pages
+ * the host does not hold yet. Every call is paced, by the host's shared budget when one is given and otherwise by a
+ * sliding one-minute window inside the connector, and a 429 is passed on with Notion's wait, never retried here.
+ *
+ * Sources, read on 20 November 2026: https://developers.notion.com/reference/post-search.md,
+ * https://developers.notion.com/reference/search-optimizations-and-limitations.md,
+ * https://developers.notion.com/reference/retrieve-a-page.md, https://developers.notion.com/reference/pagination.md,
+ * https://developers.notion.com/reference/request-limits.md and https://developers.notion.com/reference/status-codes.md.
+ * @module agentos-ext-notion/read
+ */
+
+import type {
+  AccountSourceConnector, SourceChanges, SourceGone, SourceItem, SourceRead, SourceSelection,
+} from '@framers/agentos-ext-account-sources';
+import { NotionFault, apiFault } from './faults.js';
+import { NOTION_VERSION } from './oauth.js';
+import { NOTION_ID, apiOrigin, call, credential, isObject, jsonObject } from './transport.js';
+
+/** The kind of the connector and of every passage it reads. */
+export const NOTION_READ_KIND = 'notion';
+
+/** Where a page sits, as a catalog shows it beside the page's title. */
+export interface NotionPageParent {
+  /** The workspace's top level, a page, a database (a page of one of its data sources) or a block of a page. */
+  readonly type: 'workspace' | 'page' | 'database' | 'block';
+  /** The parent's id; null at the workspace's top level. */
+  readonly id: string | null;
+}
+
+/** A page as `list()` and `changesSince()` answer it: the contract's item and the page's parent. */
+export interface NotionPageItem extends SourceItem {
+  readonly parent: NotionPageParent;
+}
+
+/** The kind of call a host's shared budget is asked to send. */
+export type NotionReadMethod = 'search' | 'retrieve' | 'children';
+
+/** What the connector reads with and within. */
+export interface NotionReadOptions {
+  /** The grant's access token; the host renews it (`NotionOAuthFlow.accessToken`). */
+  readonly accessToken: string;
+  /** The most new pages `list()` and `changesSince()` answer from a relist. */
+  readonly maxPages: number;
+  /** Levels of child blocks a page is read to; the page's own children are level 1. */
+  readonly maxDepth: number;
+  /** Blocks a page, every level counted. */
+  readonly maxBlocks: number;
+  /** Characters of a page's Markdown text. */
+  readonly maxChars: number;
+  /** The connector's own pacing when no `send` is given: calls in any minute, 180 when absent. */
+  readonly requestsPerMinute?: number;
+  /** Calls one `list`, `read` or `changesSince` keeps in flight at once; 1 when absent. */
+  readonly concurrency?: number;
+  /** The host's shared budget: every call goes through it when given, and the connector paces nothing itself. */
+  readonly send?: <T>(method: NotionReadMethod, call: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+  /** Each call's deadline, its answer included; 30,000 milliseconds when absent. */
+  readonly timeoutMs?: number;
+  /** The fetch every call is made with; the global fetch when absent. */
+  readonly fetchImpl?: typeof fetch;
+  /** Stops the connector: once it has aborted no call starts, and a call under way stops being waited on. */
+  readonly signal?: AbortSignal;
+  /** A stand-in's origin, such as `http://127.0.0.1:9440`, taken only on CI at a loopback or `.invalid` host. */
+  readonly apiBase?: string;
+  /** Ends the grant at Notion, as `NotionOAuthFlow` revokes it; `revoke()` does nothing without it. */
+  readonly revoke?: () => Promise<unknown>;
+  /** The clock a read's time is taken from; the system clock when absent. */
+  readonly now?: () => Date;
+}
+
+/** One answer: its status, its headers and its JSON object (empty for any other text). */
+interface Exchanged {
+  readonly status: number;
+  readonly headers: Headers;
+  readonly answer: Record<string, unknown>;
+}
+
+/** The most bytes read of one answer. */
+const ANSWER_BYTES = 2_000_000;
+
+/** A call's deadline when none is given. */
+const DEADLINE_MS = 30_000;
+
+/** The connector's own pacing when none is given: Notion's 180 requests a minute a connection on most plans. */
+const REQUESTS_PER_MINUTE = 180;
+
+/** The window the connector's own pacing counts calls in. */
+const WINDOW_MS = 60_000;
+
+/** The most calls one operation may be given to keep in flight. */
+const MOST_CONCURRENCY = 64;
+
+/** The most search pages one relist reads, so an answer that repeats its cursor forever still ends. */
+const MOST_SEARCH_PAGES = 1_000;
+
+/** Search's largest page. */
+const SEARCH_PAGE_SIZE = 100;
+
+/** A positive whole number no larger than `most`. */
+function count(value: unknown, most = Number.MAX_SAFE_INTEGER): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= most;
+}
+
+/** A function, or absent. */
+function optionalFunction(value: unknown): boolean {
+  return value === undefined || typeof value === 'function';
+}
+
+/** An id as compared: lower case, without hyphens, so either form of one page's id matches. */
+function canonical(id: string): string {
+  return id.replace(/-/g, '').toLowerCase();
+}
+
+/** A string field of an object, or null. */
+function text(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+/** True for a page in the trash or archived, which no listing answers and a holder loses. */
+function away(page: Record<string, unknown>): boolean {
+  return page.in_trash === true || page.is_archived === true || page.archived === true;
+}
+
+/** The plain text of a page's title property; the empty string when it has none. */
+function titleOf(properties: unknown): string {
+  if (!isObject(properties)) return '';
+  for (const property of Object.values(properties as Record<string, unknown>)) {
+    if (!isObject(property)) continue;
+    const field = property as Record<string, unknown>;
+    if (field.type !== 'title' || !Array.isArray(field.title)) continue;
+    return field.title.map((part) => (isObject(part) ? text((part as Record<string, unknown>).plain_text) ?? '' : '')).join('');
+  }
+  return '';
+}
+
+/**
+ * A page's parent as a catalog shows it. A page of a data source names the data source's database; a parent of a
+ * kind the library does not show (an agent) reads as the workspace's top level.
+ */
+function parentOf(parent: unknown): NotionPageParent {
+  if (!isObject(parent)) return { type: 'workspace', id: null };
+  const value = parent as Record<string, unknown>;
+  switch (value.type) {
+    case 'page_id': return { type: 'page', id: text(value.page_id) };
+    case 'database_id':
+    case 'data_source_id': return { type: 'database', id: text(value.database_id) };
+    case 'block_id': return { type: 'block', id: text(value.block_id) };
+    default: return { type: 'workspace', id: null };
+  }
+}
+
+/** A page object as an item, or null for a result that is no full page (a partial page names no version). */
+function pageItem(value: unknown): NotionPageItem | null {
+  if (!isObject(value)) return null;
+  const page = value as Record<string, unknown>;
+  if (page.object !== 'page' || typeof page.id !== 'string' || !NOTION_ID.test(page.id)) return null;
+  const version = page.last_edited_time;
+  if (typeof version !== 'string' || version.length === 0 || version.length > 64) return null;
+  return { id: page.id, title: titleOf(page.properties), size: null, version, parent: parentOf(page.parent) };
+}
+
+/** Items newest edited first; equal times by id, so one set of pages always answers in one order. */
+function newestFirst<T extends SourceItem>(items: T[]): T[] {
+  const time = (item: T): number => {
+    const parsed = Date.parse(item.version ?? '');
+    return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+  };
+  return items.sort((x, y) => time(y) - time(x) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+}
+
+/** The ids a selection names, each once, in its order; `configuration` for a selection that is not one. */
+function idsOf(selection: SourceSelection): string[] {
+  if (!isObject(selection) || !Array.isArray(selection.ids) || selection.ids.some((id) => typeof id !== 'string')) {
+    throw new NotionFault('configuration');
+  }
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const id of selection.ids) {
+    if (seen.has(canonical(id))) continue;
+    seen.add(canonical(id));
+    ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * A cursor read back: the pages a host holds and their versions, in its order. A null cursor holds none;
+ * `configuration` for one that is not a JSON object of strings.
+ */
+function cursorOf(cursor: string | null): Map<string, string> {
+  if (cursor === null) return new Map();
+  let parsed: unknown;
+  try {
+    parsed = typeof cursor === 'string' ? JSON.parse(cursor) : undefined;
+  } catch {
+    throw new NotionFault('configuration');
+  }
+  if (!isObject(parsed) || Array.isArray(parsed)) throw new NotionFault('configuration');
+  const held = new Map<string, string>();
+  for (const [id, version] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof version !== 'string') throw new NotionFault('configuration');
+    held.set(id, version);
+  }
+  return held;
+}
+
+/**
+ * Runs `work` over `items` with at most `limit` in flight and answers their results in the items' order, as one at a
+ * time would. After a fault no further item starts, and the first fault is thrown once the work in flight has settled.
+ */
+async function inOrder<T, R>(items: readonly T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array<R>(items.length);
+  let next = 0;
+  let failed = false;
+  let fault: unknown;
+  const lane = async (): Promise<void> => {
+    while (!failed && next < items.length) {
+      const index = next;
+      next += 1;
+      try {
+        results[index] = await work(items[index]!);
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          fault = error;
+        }
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  if (failed) throw fault;
+  return results;
+}
+
+/**
+ * A sliding one-minute window of `limit` calls. A call holds its place from its start until a minute after it, or
+ * until it settles when that is later, so a call in flight always counts. A call waiting for a place stops waiting,
+ * with `cancelled`, when its signal aborts.
+ */
+class CallWindow {
+  private held = 0;
+  private readonly waiting: Array<() => void> = [];
+
+  constructor(private readonly limit: number) {}
+
+  /** Waits for a place and answers the function that gives it back once the call has settled. */
+  async enter(signal: AbortSignal | undefined): Promise<() => void> {
+    while (this.held >= this.limit) await this.turn(signal);
+    if (signal?.aborted === true) throw new NotionFault('cancelled');
+    this.held += 1;
+    const started = Date.now();
+    return () => {
+      const left = started + WINDOW_MS - Date.now();
+      if (left <= 0) {
+        this.release();
+        return;
+      }
+      const timer = setTimeout(() => this.release(), left);
+      (timer as { unref?: () => void }).unref?.();
+    };
+  }
+
+  private release(): void {
+    this.held -= 1;
+    this.waiting.shift()?.();
+  }
+
+  private turn(signal: AbortSignal | undefined): Promise<void> {
+    if (signal?.aborted === true) return Promise.reject(new NotionFault('cancelled'));
+    return new Promise<void>((resolve, reject) => {
+      const abort = (): void => {
+        const at = this.waiting.indexOf(wake);
+        if (at >= 0) this.waiting.splice(at, 1);
+        reject(new NotionFault('cancelled'));
+      };
+      const wake = (): void => {
+        signal?.removeEventListener('abort', abort);
+        resolve();
+      };
+      this.waiting.push(wake);
+      signal?.addEventListener('abort', abort, { once: true });
+    });
+  }
+}
+
+/**
+ * The pages a public connection was shared, read as an account source. `list` and `changesSince` answer each page with
+ * its id, its title as plain text, its last edit as its version and its parent; `read` reads one page's text.
+ * Every failure is a `NotionFault`: `configuration` for an option or an input refused before any call, `cancelled` once
+ * a signal has aborted, Notion's refusal by its reason (`unauthorized`, `restricted` for a grant without Read content,
+ * `rate_limited` with Notion's wait), `unavailable` for a 5xx, and the transport's `timeout`, `network` and
+ * `response_too_large`.
+ */
+export class NotionReadConnector implements AccountSourceConnector {
+  readonly kind = NOTION_READ_KIND;
+  private readonly options: NotionReadOptions;
+  private readonly origin: string;
+  private readonly concurrency: number;
+  private readonly timeoutMs: number;
+  private readonly window: CallWindow;
+  private readonly headers: Record<string, string>;
+
+  /**
+   * @param options The grant's access token, the bounds and how calls are sent. Throws `NotionFault` with
+   * `configuration` for an option it refuses, before any call: a token that is not a credential, a bound that is not a
+   * positive whole number, a stand-in address off CI or at a host that is not loopback or `.invalid`.
+   */
+  constructor(options: NotionReadOptions) {
+    if (!isObject(options) || !credential(options.accessToken)) throw new NotionFault('configuration');
+    for (const bound of [options.maxPages, options.maxDepth, options.maxBlocks, options.maxChars]) {
+      if (!count(bound)) throw new NotionFault('configuration');
+    }
+    if (options.requestsPerMinute !== undefined && !count(options.requestsPerMinute)) throw new NotionFault('configuration');
+    if (options.concurrency !== undefined && !count(options.concurrency, MOST_CONCURRENCY)) throw new NotionFault('configuration');
+    if (options.timeoutMs !== undefined && !count(options.timeoutMs)) throw new NotionFault('configuration');
+    if (![options.send, options.fetchImpl, options.revoke, options.now].every(optionalFunction)) throw new NotionFault('configuration');
+    if (options.signal !== undefined && !(options.signal instanceof AbortSignal)) throw new NotionFault('configuration');
+    this.origin = apiOrigin(options.apiBase);
+    this.options = options;
+    this.concurrency = options.concurrency ?? 1;
+    this.timeoutMs = options.timeoutMs ?? DEADLINE_MS;
+    this.window = new CallWindow(options.requestsPerMinute ?? REQUESTS_PER_MINUTE);
+    this.headers = { authorization: `Bearer ${options.accessToken}`, accept: 'application/json', 'notion-version': NOTION_VERSION };
+  }
+
+  /**
+   * With no ids, the pages the grant reaches, newest edited first, searched page after page up to `maxPages`; pages in
+   * the trash or archived are left out. With ids, each page retrieved: a 404 or a page in the trash or archived is
+   * `removed`, a 403 `no_access`. A 403 on search throws `restricted`: the grant has no Read content.
+   */
+  async list(selection: SourceSelection, signal?: AbortSignal): Promise<{ items: NotionPageItem[]; gone: SourceGone[] }> {
+    const ids = idsOf(selection);
+    if (ids.length === 0) return { items: await this.relist(new Set(), signal), gone: [] };
+    const answers = await inOrder(ids, this.concurrency, (id) => this.retrieve(id, signal));
+    return { items: answers.filter((answer): answer is NotionPageItem => 'version' in answer), gone: answers.filter((answer): answer is SourceGone => 'reason' in answer) };
+  }
+
+  /**
+   * Reads one page with its attribution, or answers why it is gone. Reading a page's blocks as text is not part of
+   * this version: it throws `NotionFault` with `configuration` before any call.
+   */
+  async read(item: SourceItem, signal?: AbortSignal): Promise<SourceRead | SourceGone> {
+    void item;
+    void signal;
+    throw new NotionFault('configuration');
+  }
+
+  /**
+   * The changes since `cursor`, a JSON object of the pages a host holds and their versions (`null` for none). With no
+   * ids, one relist runs first, and adds as `changed` up to `maxPages` pages the cursor does not hold; then every page
+   * the cursor holds is retrieved, whatever search says, since Notion's index lags shares, unshares and the trash. A
+   * retrieved version unlike the cursor's is `changed`; a 404 or a page in the trash or archived is `removed`, a 403
+   * `no_access`. With ids, those pages alone are retrieved and no relist runs. `changed` is newest edited first, and
+   * the answered cursor holds every page that answered, at the version it answered.
+   */
+  async changesSince(cursor: string | null, selection: SourceSelection, signal?: AbortSignal): Promise<SourceChanges & { changed: NotionPageItem[] }> {
+    const held = cursorOf(cursor);
+    const ids = idsOf(selection);
+    const chosen = ids.length > 0;
+    const targets = chosen ? ids : [...held.keys()];
+    const heldIds = new Set([...held.keys()].map(canonical));
+    const fresh = chosen ? [] : await this.relist(heldIds, signal);
+    const answers = await inOrder(targets, this.concurrency, (id) => this.retrieve(id, signal));
+    const versions = new Map([...held].map(([id, version]) => [canonical(id), version]));
+    const changed: NotionPageItem[] = [...fresh];
+    const gone: SourceGone[] = [];
+    const next: Record<string, string> = {};
+    for (const answer of answers) {
+      if ('reason' in answer) {
+        gone.push(answer);
+        continue;
+      }
+      next[answer.id] = answer.version as string;
+      if (versions.get(canonical(answer.id)) !== answer.version) changed.push(answer);
+    }
+    for (const item of fresh) next[item.id] = item.version as string;
+    return { changed: newestFirst(changed), gone, cursor: JSON.stringify(next) };
+  }
+
+  /** Ends the grant through the `revoke` the host gave; nothing without one. */
+  async revoke(): Promise<void> {
+    if (this.options.revoke !== undefined) await this.options.revoke();
+  }
+
+  /** Searches page after page and answers, newest edited first, up to `maxPages` pages not among `skip`. */
+  private async relist(skip: ReadonlySet<string>, signal: AbortSignal | undefined): Promise<NotionPageItem[]> {
+    const found = new Map<string, NotionPageItem>();
+    const cursors = new Set<string>();
+    let start: string | undefined;
+    for (let read = 0; read < MOST_SEARCH_PAGES; read += 1) {
+      const body = {
+        filter: { property: 'object', value: 'page' },
+        sort: { direction: 'descending', timestamp: 'last_edited_time' },
+        page_size: SEARCH_PAGE_SIZE,
+        ...(start === undefined ? {} : { start_cursor: start }),
+      };
+      const { status, headers, answer } = await this.exchange('search', '/v1/search', JSON.stringify(body), signal);
+      if (status < 200 || status > 299) throw apiFault(status, headers, answer, false);
+      if (!Array.isArray(answer.results)) throw new NotionFault('invalid_response', { status });
+      for (const result of answer.results) {
+        if (found.size >= this.options.maxPages) break;
+        if (!isObject(result) || away(result as Record<string, unknown>)) continue;
+        const item = pageItem(result);
+        if (item === null || skip.has(canonical(item.id)) || found.has(canonical(item.id))) continue;
+        found.set(canonical(item.id), item);
+      }
+      const following = answer.next_cursor;
+      if (found.size >= this.options.maxPages || answer.has_more !== true || typeof following !== 'string' || cursors.has(following)) break;
+      cursors.add(following);
+      start = following;
+    }
+    return newestFirst([...found.values()]);
+  }
+
+  /**
+   * Retrieves one page: its item under the id asked for, or why it is gone. An id that is not a Notion id names no
+   * page and answers `removed` with no call.
+   */
+  private async retrieve(id: string, signal: AbortSignal | undefined): Promise<NotionPageItem | SourceGone> {
+    if (!NOTION_ID.test(id)) return { id, reason: 'removed' };
+    const { status, headers, answer } = await this.exchange('retrieve', `/v1/pages/${id}`, undefined, signal);
+    if (status === 404) return { id, reason: 'removed' };
+    if (status === 403) return { id, reason: 'no_access' };
+    if (status < 200 || status > 299) throw apiFault(status, headers, answer, false);
+    if (away(answer)) return { id, reason: 'removed' };
+    const item = pageItem(answer);
+    if (item === null) throw new NotionFault('invalid_response', { status });
+    return { ...item, id };
+  }
+
+  /**
+   * Makes one call: through the host's budget when one is given, else inside the connector's window. The call stops
+   * when the connector's signal, the operation's signal or the budget's signal aborts.
+   */
+  private async exchange(method: NotionReadMethod, path: string, body: string | undefined, signal: AbortSignal | undefined): Promise<Exchanged> {
+    const callers = [this.options.signal, signal].filter((caller): caller is AbortSignal => caller !== undefined);
+    const attempt = async (given?: AbortSignal): Promise<Exchanged> => {
+      const signals = given === undefined ? callers : [...callers, given];
+      const init: RequestInit = body === undefined
+        ? { method: 'GET', headers: this.headers }
+        : { method: 'POST', headers: { ...this.headers, 'content-type': 'application/json' }, body };
+      const answer = await call(this.options.fetchImpl ?? fetch, `${this.origin}${path}`, init, {
+        signal: signals.length === 0 ? undefined : AbortSignal.any(signals),
+        timeoutMs: this.timeoutMs,
+        maxBytes: ANSWER_BYTES,
+      });
+      return { status: answer.status, headers: answer.headers, answer: jsonObject(answer.text) };
+    };
+    if (this.options.send !== undefined) return this.options.send(method, attempt);
+    const leave = await this.window.enter(callers.length === 0 ? undefined : AbortSignal.any(callers));
+    try {
+      return await attempt();
+    } finally {
+      leave();
+    }
+  }
+}

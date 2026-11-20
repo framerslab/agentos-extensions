@@ -15,7 +15,7 @@
 
 import { NotionFault, apiFault, type NotionFailure } from './faults.js';
 import { NOTION_VERSION } from './oauth.js';
-import { call, checkAddress, credential, isObject, jsonObject, loopbackHost } from './transport.js';
+import { NOTION_ID, apiOrigin, call, credential, isObject, jsonObject } from './transport.js';
 
 /** Notion's request limits, as the library keeps them. */
 export const NOTION_LIMITS = Object.freeze({
@@ -88,14 +88,8 @@ export interface NotionPagePlan {
   readonly appends: readonly Record<string, unknown>[];
 }
 
-/** Notion's API origin. */
-const NOTION_API = 'https://api.notion.com';
-
 /** The hosts a page's link may name; any other link in an answer is replaced by one made from the page's id. */
 const PAGE_HOSTS: ReadonlySet<string> = new Set(['app.notion.com', 'www.notion.so', 'notion.so']);
-
-/** A Notion id: 32 hex digits, with or without its four hyphens. */
-const NOTION_ID = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 /** One deadline over a write and the reading of its answer: Notion takes up to 60 seconds to answer a request. */
 const WRITE_DEADLINE_MS = 65_000;
@@ -233,16 +227,6 @@ function linkOf(answer: Record<string, unknown>, id: string): string {
     }
   }
   return notionPageLink(id);
-}
-
-/** Notion's API origin, or a stand-in's origin on CI at a loopback or `.invalid` host. */
-function apiOrigin(apiBase: string | undefined): string {
-  if (apiBase === undefined) return NOTION_API;
-  checkAddress(apiBase, true);
-  const url = new URL(apiBase);
-  if (url.pathname !== '/' || apiBase.replace(/\/$/, '') !== url.origin) throw new NotionFault('configuration');
-  if (url.protocol === 'http:' && !loopbackHost(url.hostname)) throw new NotionFault('configuration');
-  return url.origin;
 }
 
 /** The id a 503 names as the page it committed, when its guidance says the write was saved. */
