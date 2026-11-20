@@ -145,6 +145,20 @@ describe('NotionReadConnector read', () => {
     expect(standIn.calls()).toBe(4);
   });
 
+  it("throws rate_limited when a 429 sent through the host's budget answers after another call found a block gone", async () => {
+    const two = page(54, 'Two by budget');
+    const x = said('toggle', 'X', [said('paragraph', 'x1')]);
+    const y = said('toggle', 'Y', [said('paragraph', 'y1')]);
+    standIn.share([two]);
+    standIn.children(two.id, [x, y]);
+    standIn.vanish(x.id, false);
+    standIn.rateLimitCall(4, 9);
+    standIn.slowCall(4, 30);
+    const send: NotionReadOptions['send'] = (_method, call) => call(new AbortController().signal);
+    await expect(connector({ concurrency: 3, send }).read(item(two))).rejects.toMatchObject({ name: 'NotionFault', reason: 'rate_limited', retryAfterMs: 9_000 });
+    expect(standIn.calls()).toBe(4);
+  });
+
   it('throws invalid_response for a children listing that repeats its cursor, and reads no further', async () => {
     const looping = page(52, 'Looping');
     const holder = said('toggle', 'Holder', [said('paragraph', 'Never')]);

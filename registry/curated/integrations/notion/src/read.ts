@@ -288,7 +288,7 @@ interface Holdable {
  */
 function abortable<T>(work: Promise<T>, signals: readonly AbortSignal[]): Promise<T> {
   if (signals.length === 0) return work;
-  const signal = AbortSignal.any(signals);
+  const signal = AbortSignal.any([...signals]);
   if (signal.aborted) {
     work.catch(() => {});
     return Promise.reject(new NotionFault('cancelled'));

@@ -53,6 +53,25 @@ describe('notionMarkdown', () => {
     expect(notionMarkdown([list])).toBe('- Steps\n  then more\n  ```js\n  a()\n  b()\n  ```\n  First\n  Second');
   });
 
+  it("indents a numbered item's later lines and children to its marker's width", () => {
+    const list = [said('numbered_list_item', 'Run\nthen', [block('code', { rich_text: rich('go'), language: 'sh' })])];
+    expect(notionMarkdown(list)).toBe('1. Run\n   then\n   ```sh\n   go\n   ```');
+  });
+
+  it('keeps the trailing spaces inside a block, a hard break, and trims only its end', () => {
+    expect(notionMarkdown([said('paragraph', 'one  \ntwo  ')])).toBe('one  \ntwo');
+  });
+
+  it("keeps a quoted code block's whitespace", () => {
+    const quote = said('quote', 'See', [block('code', { rich_text: rich('keep  \n\nend'), language: 'txt' })]);
+    expect(notionMarkdown([quote])).toBe('> See\n> ```txt\n> keep  \n>\n> end\n> ```');
+  });
+
+  it('writes a block of half a million lines without running out of room', () => {
+    const many = Array.from({ length: 500_000 }, (_, i) => `l${i}`).join('\n');
+    expect(notionMarkdown([said('toggle', 'T', [said('paragraph', many)])]).split('\n')).toHaveLength(500_001);
+  });
+
   it("keeps a quote's children inside the quote", () => {
     const quote = said('quote', 'Said', [said('bulleted_list_item', 'Point'), said('paragraph', 'More')]);
     expect(notionMarkdown([quote])).toBe('> Said\n> - Point\n> More');
