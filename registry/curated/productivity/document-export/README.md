@@ -181,6 +181,57 @@ try {
 
 Between two entries the write waits for a task of its own, `setImmediate` in Node and a message to a `MessageChannel` of its own where there is no `setImmediate`, as in a browser. An abort of `signal` on the writer's own thread stops the write after the entry in hand. In Node so does a message already sent to the thread, a worker's stop among them. A browser picks its next task from its task queues in an order of its own ([event loop processing model](https://html.spec.whatwg.org/multipage/webappapis.html#event-loop-processing-model)), and each message port is a task source of its own, so there a stop sent through another port is handled when the browser picks it, not by rule after the entry in hand, and the write may finish before it is. It waits on no timer, whose delay is at least 1 ms in Node and 4 ms in a browser once timers nest, so thousands of entries spend no time waiting. Every path is checked before the first entry is written, and a bad one, or one given twice, rejects the promise before `onEntry` is called; `writeArchive(entries)` keeps the last entry's data for a path given twice. With no options, `writeArchive(entries)` is the synchronous call above, unchanged. A caller that forwards options it may not have been given (`options?: WriteArchiveOptions`) gets `Uint8Array | Promise<Uint8Array>`: the array when they are `undefined`, the promise otherwise. The two forms write different bytes for the same entries: the entry-by-entry form gives each entry's sizes in a data descriptor after its data (APPNOTE 4.3.9), as a streaming writer does, and `readArchive` and `openArchive` read both alike.
 
+### The note bundle
+
+`writeNoteBundlePart` and `readNoteBundle` write and read a versioned ZIP of a person's notes, for an export a later import puts back whole. One Markdown file holds each note's block byte for byte, in folders that mirror the person's folders by name; `notes.json` at the top is the manifest, which carries each note's identity and details and the part accounting. A file's name is the note's title made safe for any file system: no separators, controls, drive marks or wildcards; at most 120 characters and 200 bytes of UTF-8, cut between two characters; no trailing dots or spaces; `Untitled` when nothing is left; and a name Windows keeps for a device (`CON`, `nul.txt`, `LPT1`) marked with a leading `_`. Folder names are made safe the same way. Every folder's path and `notes.json` are taken before the first note is named, so a note's file never shares a path with a folder or the manifest, and names are unique within the archive whatever their case by a numbered suffix (`Plan (2).md`); two sibling folders of one name take two paths the same way (`Work`, `Work (2)`), and a folder at the top named `notes.json` is written as `notes.json (2)`. A folder whose name is unknown is named by its id's first eight characters, and a folder chain that meets a folder twice stops there.
+
+```typescript
+import { planNoteBundle, readNoteBundle, writeNoteBundlePart, type BundleSnapshot } from '@framers/agentos-ext-document-export/transcript';
+
+const snapshot: BundleSnapshot = {
+  id: 'c0ffee00c0ffee00c0ffee00c0ffee00',
+  at: new Date().toISOString(),
+  copy: 'browser',
+  folders: [{ id: 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0', name: 'Work', parentId: null }],
+  notes: [{
+    id: '11111111111111111111111111111111',
+    block: '## Plan | kw: q4\nShip it.',
+    title: 'Plan',
+    folderId: 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0',
+    pinned: true,
+    sources: [],
+    tags: ['q4'],
+    compat: { slug: 'plan', contentVersion: null },
+    createdAt: null,
+    changedAt: '2026-11-09T08:00:00.000Z',
+  }],
+};
+
+const plan = planNoteBundle(snapshot); // one part a file: at most 2,000 notes and 10 MiB of note bytes
+const zips: Uint8Array[] = [];
+for (let index = 0; index < plan.length; index += 1) {
+  // One ZIP a part: a complete export writes every part of the plan.
+  zips.push(await writeNoteBundlePart(snapshot, plan, index, { onNote: (i, n) => console.log(`Note ${i} of ${n}`) }));
+}
+const read = await readNoteBundle(zips[0]!); // this snapshot is one part: read.notes equals snapshot.notes; read.manifest.part is { index: 1, count: 1 }
+```
+
+A complete export writes every part of the plan, one ZIP a part. `readNoteBundle` reads one part and takes it without the others, so a caller that writes part 0 alone of a longer plan exports that part's notes alone, with no error at the read. An import that wants the whole snapshot checks `read.manifest.part.count`, and `read.manifest.parts` for the note ids each other part holds.
+
+| Name | What it is |
+|---|---|
+| `NOTE_BUNDLE_FORMAT`, `NOTE_BUNDLE_VERSION` | The manifest's `format` (`note-bundle`) and the version this build writes and the newest it reads |
+| `NOTE_BUNDLE_LIMITS` | One part's bounds: 2,000 notes and 10,485,760 bytes, a note counted as its file and its manifest entry as `notes.json` holds it, its path among the entry's fields |
+| `NOTE_BUNDLE_READ_BYTES` | The bound `readNoteBundle` keeps when you name none, 67,108,864 bytes (64 MiB): every part's manifest, and the manifest and the notes' files together in a part of more than one note |
+| `planNoteBundle(snapshot, limits?)` | The snapshot's parts, notes in order, a part closed before a note would pass either bound; a note whose own bytes pass the byte bound goes alone in a part of its own, whatever its size, so no note is split or left out. It reads the snapshot's folders and notes. Every part's manifest (the index of the parts, the snapshot's folders and the part's notes' entries) stays within `limits.readBytes`, `NOTE_BUNDLE_READ_BYTES` unless you name another, and so do the notes' files with it in a part of more than one note; a part of one note reads that note whole. It throws `RangeError` for two notes of one id, or a part that would pass the read's bound |
+| `noteFileNames(snapshot)` | Each note's path in the archive, by its id; throws `RangeError` for two notes of one id |
+| `writeNoteBundlePart(snapshot, plan, index, options?)` | One part as a ZIP: its notes' files, then `notes.json`. `onNote(i, n)` hears each note as it is written and `signal` stops the write between two entries, rejecting with `ArchiveError`, reason `stopped`, with no archive handed back. The part as written, its manifest with the snapshot's own id and time, and its notes' files when it holds more than one, stays within `readBytes` (`NOTE_BUNDLE_READ_BYTES` unless you pass another), or the write rejects with `RangeError` |
+| `readNoteBundle(bytes, options?)` | One part read back through `openArchive`, one entry at a time: the manifest, the notes with their blocks, the folders and every file path. The manifest may inflate to `maxInflatedBytes` (64 MiB unless you pass another bound), and so may the manifest and the notes' files together in a part of more than one note, counted from the directory before any note is read; a part of one note reads that note whole at its recorded size, so a note the writer put alone past the bounds reads back. `worker: false` inflates on the calling thread |
+
+The manifest holds the format's name and version; the snapshot's id, time and copy (`account` or `browser`); `part`, this part's index from 1 and the count; `parts`, every part's index, note ids and bytes, so each part says what the others hold; the folders (id, name or `null`, parent id); and each note's id, file path, title, folder id, pin, sources (`kind` and `ref`), tags, `compat` (`slug` and `contentVersion`) and its creation and change times, `null` where unknown. Every part carries the same snapshot id, and each imports by itself.
+
+`readNoteBundle` refuses with `NoteBundleError`, whose `reason` is one of three. `not_a_bundle`: the ZIP holds no `notes.json` at its top, or a manifest of another format, so the caller reads it as plain files. `newer_version`: the manifest's version is above this build's, refused whole before any other field or note is read. `bad_manifest`: a field of the wrong shape; two notes of one id or one path; a note whose path is `notes.json`; a part list that does not hold `count` parts numbered from 1, or whose entry for this part lists other notes than the manifest's, or one of them twice; the manifest or a note's file recorded twice in the ZIP; a note whose file the ZIP does not hold; or a note's file that is not UTF-8. A block reads back character for character, a leading byte order mark included. Bytes that are not a ZIP, a manifest or a part of more than one note past the bound, and a stopped read reject with the archive reader's `ArchiveError` (`format`, `size`, `stopped`).
+
 ## Archives (browser-safe)
 
 `@framers/agentos-ext-document-export/archive` reads a ZIP too large to inflate whole, such as a folder of notes chosen in a phone's browser. `openArchive` lists the entries from the archive's central directory and inflates none of their data; each entry's `bytes()` reads that entry alone from its own slice of the `Blob`.
