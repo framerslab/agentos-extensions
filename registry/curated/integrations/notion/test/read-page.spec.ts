@@ -176,6 +176,21 @@ describe('NotionReadConnector read', () => {
     expect(standIn.calls()).toBe(3);
   });
 
+  it("throws the 429 that halted a read, never the cancelled of a call the host's budget had yet to send", async () => {
+    const pair = page(57, 'Pair');
+    standIn.share([pair]);
+    standIn.children(pair.id, [said('toggle', 'X', [said('paragraph', 'x1')]), said('toggle', 'Y', [said('paragraph', 'y1')])]);
+    standIn.rateLimitCall(3, 9);
+    let gate: Promise<unknown> = Promise.resolve();
+    const send: NotionReadOptions['send'] = (_method, call) => {
+      const run = gate.then(() => call(new AbortController().signal)); // one call at a time, the next as the last settles
+      gate = run.then(() => undefined, () => undefined);
+      return run;
+    };
+    await expect(connector({ concurrency: 2, send }).read(item(pair))).rejects.toMatchObject({ name: 'NotionFault', reason: 'rate_limited', retryAfterMs: 9_000 });
+    expect(standIn.calls()).toBe(3);
+  });
+
   it('throws invalid_response for a children cursor that cannot be sent, and reads no further', async () => {
     const odd = page(55, 'Odd cursor');
     const holder = said('toggle', 'Holder', [said('paragraph', 'Never')]);
