@@ -45,6 +45,12 @@ function plain(richText: unknown): string {
     .join('');
 }
 
+/** A code fence longer than any run of backticks in `code`, three at the least, so nothing inside closes it. */
+function fenceFor(code: string): string {
+  const longest = (code.match(/`+/g) ?? []).reduce((most, run) => Math.max(most, run.length), 0);
+  return '`'.repeat(Math.max(3, longest + 1));
+}
+
 /** A table's rows: each row's cells as plain text, separated by ' | ', the first row first. */
 function rows(table: NotionBlockNode): string[] {
   return table.children
@@ -78,7 +84,8 @@ function lines(blocks: readonly NotionBlockNode[], indent: string): string[] {
       out.push(...lines(block.children, `${indent}${INDENT}`));
     } else if (block.type === 'code') {
       const language = typeof block.body.language === 'string' && block.body.language !== 'plain text' ? block.body.language : '';
-      out.push(`${indent}\`\`\`${language}`, text, `${indent}\`\`\``);
+      const fence = fenceFor(text);
+      out.push(`${indent}${fence}${language}`, text, `${indent}${fence}`);
     } else if (block.type === 'table') {
       for (const row of rows(block)) own(row);
     } else if (INNER.has(block.type)) {
@@ -93,10 +100,31 @@ function lines(blocks: readonly NotionBlockNode[], indent: string): string[] {
 }
 
 /**
+ * True when a block's children are written into the page's text: a table's rows, and the children of every block that
+ * writes its own, besides code; never those of a captioned block, a child page or database, or a type left out.
+ */
+export function childrenWritten(type: string): boolean {
+  return type in HEADINGS || TEXT.has(type) || type === 'quote' || ITEMS.has(type) || CONTAINERS.has(type) || type === 'table';
+}
+
+/**
+ * The fewest characters a block adds to its page's text, its children apart: what it writes on its own, as the first
+ * of its run with no indentation, which is never longer than what it writes in its place. A table's row, under its
+ * table, is its line of cells; under anything else it writes nothing.
+ */
+export function leastChars(block: NotionBlockNode, parentType: string | null): number {
+  if (block.type === 'table_row') {
+    return parentType === 'table' ? notionMarkdown([{ type: 'table', body: {}, children: [{ ...block, children: [] }] }]).length : 0;
+  }
+  return notionMarkdown([{ ...block, children: [] }]).length;
+}
+
+/**
  * Writes a page's blocks as Markdown text, one line a block: headings with `#` marks, list items with `-`, numbers
  * from 1 that restart after any other block, or a check box, quotes with `>`, code fenced with its language and its
- * text untouched, and a table's rows as lines of their cells. A list item's children are indented two spaces a level;
- * any other block's children follow as their own lines. A block with no text adds no line.
+ * text untouched (the fence longer than any run of backticks in it), and a table's rows as lines of their cells. A
+ * list item's children are indented two spaces a level; any other block's children follow as their own lines. A block
+ * with no text adds no line.
  */
 export function notionMarkdown(blocks: readonly NotionBlockNode[]): string {
   return lines(blocks, '').join('\n');

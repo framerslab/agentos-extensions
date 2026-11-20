@@ -20,7 +20,7 @@
 import type {
   AccountSourceConnector, SourceChanges, SourceGone, SourceItem, SourceRead, SourceSelection,
 } from '@framers/agentos-ext-account-sources';
-import { notionMarkdown, type NotionBlockNode } from './blocks.js';
+import { childrenWritten, leastChars, notionMarkdown, type NotionBlockNode } from './blocks.js';
 import { NotionFault, apiFault } from './faults.js';
 import { NOTION_VERSION } from './oauth.js';
 import { linkOf } from './pages.js';
@@ -115,13 +115,25 @@ type Stop =
   | { readonly kind: 'vanished' }
   | { readonly kind: 'fault'; readonly error: unknown };
 
-/** One children call to make: the block, the cursor of its next page, its children's level and where they go. */
+/**
+ * One children call to make: the block, the cursor of its next page, its children's level and where they go, whether
+ * the page's text writes them, and the type of the block they belong to (null for the page's own).
+ */
 interface ChildrenCall {
   readonly id: string;
   readonly cursor?: string;
   readonly level: number;
   readonly into: NotionBlockNode[];
   readonly top: boolean;
+  readonly written: boolean;
+  readonly parent: string | null;
+}
+
+/** What a page's block read has counted so far: its blocks, the fewest characters of its text, each listing's cursors. */
+interface Counted {
+  blocks: number;
+  chars: number;
+  readonly cursors: Map<string, Set<string>>;
 }
 
 /** A positive whole number no larger than `most`. */
@@ -234,10 +246,13 @@ function cursorOf(cursor: string | null): Map<string, string> {
 
 /**
  * Runs `work` over `items` with at most `limit` in flight and answers their results in the items' order, as one at a
- * time would. After a fault no further item starts, and the first fault is thrown once the work in flight has settled.
+ * time would. After a fault no further item starts: `halt`, given to every item's work, aborts, so a call still waiting
+ * for the window or the host's budget never goes out, while a call already sent is let settle. The first fault is
+ * thrown once the work in flight has settled.
  */
-async function inOrder<T, R>(items: readonly T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+async function inOrder<T, R>(items: readonly T[], limit: number, work: (item: T, halt: AbortSignal) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array<R>(items.length);
+  const halting = new AbortController();
   let next = 0;
   let failed = false;
   let fault: unknown;
@@ -246,11 +261,12 @@ async function inOrder<T, R>(items: readonly T[], limit: number, work: (item: T)
       const index = next;
       next += 1;
       try {
-        results[index] = await work(items[index]!);
+        results[index] = await work(items[index]!, halting.signal);
       } catch (error) {
         if (!failed) {
           failed = true;
           fault = error;
+          halting.abort();
         }
       }
     }
@@ -260,14 +276,22 @@ async function inOrder<T, R>(items: readonly T[], limit: number, work: (item: T)
   return results;
 }
 
+/** A timer as Node answers it, which can hold the process open or let it go. */
+interface Holdable {
+  ref?: () => unknown;
+  unref?: () => unknown;
+}
+
 /**
  * A sliding one-minute window of `limit` calls. A call holds its place from its start until a minute after it, or
  * until it settles when that is later, so a call in flight always counts. A call waiting for a place stops waiting,
- * with `cancelled`, when its signal aborts.
+ * with `cancelled`, when its signal aborts. The timers that give places back hold the process open while a call
+ * waits for one, and let it go once none waits, so a script ends as soon as its last answer is in.
  */
 class CallWindow {
   private held = 0;
   private readonly waiting: Array<() => void> = [];
+  private readonly timers = new Set<Holdable>();
 
   constructor(private readonly limit: number) {}
 
@@ -283,9 +307,22 @@ class CallWindow {
         this.release();
         return;
       }
-      const timer = setTimeout(() => this.release(), left);
-      (timer as { unref?: () => void }).unref?.();
+      const timer: Holdable = setTimeout(() => {
+        this.timers.delete(timer);
+        this.release();
+      }, left);
+      this.timers.add(timer);
+      this.hold();
     };
+  }
+
+  /** Refs every give-back timer while a call waits, and unrefs them all once none does. */
+  private hold(): void {
+    const keep = this.waiting.length > 0;
+    for (const timer of this.timers) {
+      if (keep) timer.ref?.();
+      else timer.unref?.();
+    }
   }
 
   private release(): void {
@@ -299,13 +336,16 @@ class CallWindow {
       const abort = (): void => {
         const at = this.waiting.indexOf(wake);
         if (at >= 0) this.waiting.splice(at, 1);
+        this.hold();
         reject(new NotionFault('cancelled'));
       };
       const wake = (): void => {
         signal?.removeEventListener('abort', abort);
+        this.hold();
         resolve();
       };
       this.waiting.push(wake);
+      this.hold();
       signal?.addEventListener('abort', abort, { once: true });
     });
   }
@@ -359,7 +399,7 @@ export class NotionReadConnector implements AccountSourceConnector {
   async list(selection: SourceSelection, signal?: AbortSignal): Promise<{ items: NotionPageItem[]; gone: SourceGone[] }> {
     const ids = idsOf(selection);
     if (ids.length === 0) return { items: await this.relist(new Set(), signal), gone: [] };
-    const answers = await inOrder(ids, this.concurrency, (id) => this.retrieve(id, signal));
+    const answers = await inOrder(ids, this.concurrency, (id, halt) => this.retrieve(id, signal, halt));
     return { items: answers.filter((answer): answer is NotionPageItem => 'version' in answer), gone: answers.filter((answer): answer is SourceGone => 'reason' in answer) };
   }
 
@@ -368,10 +408,10 @@ export class NotionReadConnector implements AccountSourceConnector {
    * or a page in the trash or archived answers `removed`, a 403 `no_access`. Its blocks are then read one level a call,
    * up to `concurrency` calls in flight, into the page's order whatever order the answers come in; a child page or a
    * child database is written as its title and never read. A page past `maxBlocks`, `maxDepth` or `maxChars` answers
-   * `too_large` and no further call starts. A 404 or 403 on the page's first children call answers `removed` or
-   * `no_access`; on any later children call the page is retrieved again, and the read answers why it is gone, or
-   * throws `unavailable` when it is still there, so a host keeps nothing new and tries again. A fault starts no
-   * further call and is thrown once the calls in flight have settled.
+   * `too_large` and no further call starts; characters are counted as the blocks arrive. A 404 or 403 on the page's
+   * first children call answers `removed` or `no_access`; on any later children call the page is retrieved again,
+   * and the read answers why it is gone, or throws `unavailable` when it is still there, so a host keeps nothing new
+   * and tries again. A fault starts no further call and is thrown once the calls in flight have settled.
    */
   async read(item: SourceItem, signal?: AbortSignal): Promise<SourceRead | SourceGone> {
     if (!isObject(item) || typeof item.id !== 'string') throw new NotionFault('configuration');
@@ -403,7 +443,9 @@ export class NotionReadConnector implements AccountSourceConnector {
    * the cursor holds is retrieved, whatever search says, since Notion's index lags shares, unshares and the trash. A
    * retrieved version unlike the cursor's is `changed`; a 404 or a page in the trash or archived is `removed`, a 403
    * `no_access`. With ids, those pages alone are retrieved and no relist runs. `changed` is newest edited first, and
-   * the answered cursor holds every page that answered, at the version it answered.
+   * the answered cursor holds every page that answered, at the version it answered. A page the relist adds is search's
+   * word alone, which can lag an unshare: `read` retrieves it first and answers `removed` or `no_access` when it is
+   * gone.
    */
   async changesSince(cursor: string | null, selection: SourceSelection, signal?: AbortSignal): Promise<SourceChanges & { changed: NotionPageItem[] }> {
     const held = cursorOf(cursor);
@@ -412,7 +454,7 @@ export class NotionReadConnector implements AccountSourceConnector {
     const targets = chosen ? ids : [...held.keys()];
     const heldIds = new Set([...held.keys()].map(canonical));
     const fresh = chosen ? [] : await this.relist(heldIds, signal);
-    const answers = await inOrder(targets, this.concurrency, (id) => this.retrieve(id, signal));
+    const answers = await inOrder(targets, this.concurrency, (id, halt) => this.retrieve(id, signal, halt));
     const versions = new Map([...held].map(([id, version]) => [canonical(id), version]));
     const changed: NotionPageItem[] = [...fresh];
     const gone: SourceGone[] = [];
@@ -468,15 +510,15 @@ export class NotionReadConnector implements AccountSourceConnector {
    * Retrieves one page: its item under the id asked for, or why it is gone. An id that is not a Notion id names no
    * page and answers `removed` with no call.
    */
-  private async retrieve(id: string, signal: AbortSignal | undefined): Promise<NotionPageItem | SourceGone> {
-    const page = await this.page(id, signal);
+  private async retrieve(id: string, signal: AbortSignal | undefined, halt?: AbortSignal): Promise<NotionPageItem | SourceGone> {
+    const page = await this.page(id, signal, halt);
     return 'reason' in page ? page : { ...page.item, id };
   }
 
   /** Retrieves one page: its item and Notion's answer, or why it is gone. */
-  private async page(id: string, signal: AbortSignal | undefined): Promise<{ item: NotionPageItem; answer: Record<string, unknown> } | SourceGone> {
+  private async page(id: string, signal: AbortSignal | undefined, halt?: AbortSignal): Promise<{ item: NotionPageItem; answer: Record<string, unknown> } | SourceGone> {
     if (!NOTION_ID.test(id)) return { id, reason: 'removed' };
-    const { status, headers, answer } = await this.exchange('retrieve', `/v1/pages/${id}`, undefined, signal);
+    const { status, headers, answer } = await this.exchange('retrieve', `/v1/pages/${id}`, undefined, signal, halt);
     if (status === 404) return { id, reason: 'removed' };
     if (status === 403) return { id, reason: 'no_access' };
     if (status < 200 || status > 299) throw apiFault(status, headers, answer, false);
@@ -493,8 +535,9 @@ export class NotionReadConnector implements AccountSourceConnector {
    */
   private async blocksOf(pageId: string, signal: AbortSignal | undefined): Promise<{ blocks: NotionBlockNode[]; stop: Stop | null }> {
     const blocks: NotionBlockNode[] = [];
-    const queue: ChildrenCall[] = [{ id: pageId, level: 1, into: blocks, top: true }];
-    const counted = { blocks: 0 };
+    const queue: ChildrenCall[] = [{ id: pageId, level: 1, into: blocks, top: true, written: true, parent: null }];
+    const counted: Counted = { blocks: 0, chars: 0, cursors: new Map() };
+    const halting = new AbortController();
     let stop: Stop | null = null;
     let active = 0;
     await new Promise<void>((resolve) => {
@@ -503,7 +546,7 @@ export class NotionReadConnector implements AccountSourceConnector {
           const next = queue.shift()!;
           active += 1;
           const path = `/v1/blocks/${next.id}/children?page_size=${SEARCH_PAGE_SIZE}${next.cursor === undefined ? '' : `&start_cursor=${encodeURIComponent(next.cursor)}`}`;
-          this.exchange('children', path, undefined, signal)
+          this.exchange('children', path, undefined, signal, halting.signal)
             .then((exchanged) => {
               if (stop !== null) return;
               try {
@@ -516,6 +559,7 @@ export class NotionReadConnector implements AccountSourceConnector {
             })
             .finally(() => {
               active -= 1;
+              if (stop !== null) halting.abort();
               pump();
             });
         }
@@ -526,8 +570,12 @@ export class NotionReadConnector implements AccountSourceConnector {
     return { blocks, stop };
   }
 
-  /** Takes one children answer into the tree and queues the calls it leads to; answers why the read stops, if it does. */
-  private take(made: ChildrenCall, exchanged: Exchanged, queue: ChildrenCall[], counted: { blocks: number }): Stop | null {
+  /**
+   * Takes one children answer into the tree and queues the calls it leads to; answers why the read stops, if it does.
+   * Each block the page's text writes adds the fewest characters it can write, so a page past `maxChars` stops as soon
+   * as it is known to be, and a listing that answers a cursor it answered before is no answer Notion documents.
+   */
+  private take(made: ChildrenCall, exchanged: Exchanged, queue: ChildrenCall[], counted: Counted): Stop | null {
     const { status, headers, answer } = exchanged;
     if (status === 404 || status === 403) {
       if (made.top && made.cursor === undefined) return { kind: 'gone', reason: status === 404 ? 'removed' : 'no_access' };
@@ -547,25 +595,38 @@ export class NotionReadConnector implements AccountSourceConnector {
       const body = block[type];
       const node: NotionBlockNode = { type, body: isObject(body) ? (body as Record<string, unknown>) : {}, children: [] };
       made.into.push(node);
+      const shown = made.written && (made.parent !== 'table' || type === 'table_row');
+      if (shown) {
+        counted.chars += leastChars(node, made.parent);
+        if (counted.chars > this.options.maxChars) return { kind: 'too_large' };
+      }
       if (block.has_children !== true || UNREAD.has(type)) continue;
       if (made.level + 1 > this.options.maxDepth) return { kind: 'too_large' };
       if (typeof block.id !== 'string' || !NOTION_ID.test(block.id)) return invalid;
-      queue.push({ id: block.id, level: made.level + 1, into: node.children as NotionBlockNode[], top: false });
+      queue.push({ id: block.id, level: made.level + 1, into: node.children as NotionBlockNode[], top: false, written: shown && childrenWritten(type), parent: type });
     }
     if (answer.has_more === true) {
-      if (typeof answer.next_cursor !== 'string' || answer.next_cursor.length === 0) return invalid;
-      queue.push({ ...made, cursor: answer.next_cursor });
+      const following = answer.next_cursor;
+      if (typeof following !== 'string' || following.length === 0) return invalid;
+      const seen = counted.cursors.get(made.id) ?? new Set<string>();
+      if (seen.has(following)) return invalid;
+      seen.add(following);
+      counted.cursors.set(made.id, seen);
+      queue.push({ ...made, cursor: following });
     }
     return null;
   }
 
   /**
    * Makes one call: through the host's budget when one is given, else inside the connector's window. The call stops
-   * when the connector's signal, the operation's signal or the budget's signal aborts.
+   * when the connector's signal, the operation's signal or the budget's signal aborts. Once `halt` has aborted (another
+   * call of the operation failed or stopped it), a call still waiting for its place or for the budget is never sent and
+   * throws `cancelled`; a call already sent is not stopped by it.
    */
-  private async exchange(method: NotionReadMethod, path: string, body: string | undefined, signal: AbortSignal | undefined): Promise<Exchanged> {
+  private async exchange(method: NotionReadMethod, path: string, body: string | undefined, signal: AbortSignal | undefined, halt?: AbortSignal): Promise<Exchanged> {
     const callers = [this.options.signal, signal].filter((caller): caller is AbortSignal => caller !== undefined);
     const attempt = async (given?: AbortSignal): Promise<Exchanged> => {
+      if (halt?.aborted === true) throw new NotionFault('cancelled');
       const signals = given === undefined ? callers : [...callers, given];
       const init: RequestInit = body === undefined
         ? { method: 'GET', headers: this.headers }
@@ -578,7 +639,8 @@ export class NotionReadConnector implements AccountSourceConnector {
       return { status: answer.status, headers: answer.headers, answer: jsonObject(answer.text) };
     };
     if (this.options.send !== undefined) return this.options.send(method, attempt);
-    const leave = await this.window.enter(callers.length === 0 ? undefined : AbortSignal.any(callers));
+    const waiters = halt === undefined ? callers : [...callers, halt];
+    const leave = await this.window.enter(waiters.length === 0 ? undefined : AbortSignal.any(waiters));
     try {
       return await attempt();
     } finally {
