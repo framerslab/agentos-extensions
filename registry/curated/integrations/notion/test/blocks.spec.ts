@@ -72,6 +72,17 @@ describe('notionMarkdown', () => {
     expect(notionMarkdown([said('toggle', 'T', [said('paragraph', many)])]).split('\n')).toHaveLength(500_001);
   });
 
+  it('ends a quote before the block after it, so that block is not quoted', () => {
+    const quote = said('quote', 'Said', [said('paragraph', 'Quoted child')]);
+    expect(notionMarkdown([quote, said('paragraph', 'Outside')])).toBe('> Said\n> Quoted child\n\nOutside');
+    expect(notionMarkdown([said('quote', 'One'), said('quote', 'Two')])).toBe('> One\n\n> Two');
+  });
+
+  it("starts a list item's text at its marker whatever spaces it begins with", () => {
+    const list = [said('numbered_list_item', '  Run', [block('code', { rich_text: rich('go'), language: 'sh' })])];
+    expect(notionMarkdown(list)).toBe('1. Run\n   ```sh\n   go\n   ```');
+  });
+
   it("keeps a quote's children inside the quote", () => {
     const quote = said('quote', 'Said', [said('bulleted_list_item', 'Point'), said('paragraph', 'More')]);
     expect(notionMarkdown([quote])).toBe('> Said\n> - Point\n> More');

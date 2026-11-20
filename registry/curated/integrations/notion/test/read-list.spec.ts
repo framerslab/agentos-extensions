@@ -263,6 +263,19 @@ describe('NotionReadConnector list and changesSince', () => {
     expect(standIn.calls()).toBe(0);
   });
 
+  it("sends no call that a host's budget starts as soon as a failed call settles", async () => {
+    standIn.share([a, b]);
+    standIn.rateLimitNext({ retryAfter: 30 });
+    let gate: Promise<unknown> = Promise.resolve();
+    const send: NotionReadOptions['send'] = (_method, call) => {
+      const run = gate.then(() => call(new AbortController().signal));
+      gate = run.then(() => undefined, () => undefined);
+      return run;
+    };
+    await expect(connector({ concurrency: 2, send }).list({ ids: [a.id, b.id] })).rejects.toMatchObject({ name: 'NotionFault', reason: 'rate_limited', retryAfterMs: 30_000 });
+    expect(standIn.calls()).toBe(1);
+  });
+
   it('sends its token and Notion\'s version on every call', async () => {
     standIn.share([a]);
     const sent: Headers[] = [];

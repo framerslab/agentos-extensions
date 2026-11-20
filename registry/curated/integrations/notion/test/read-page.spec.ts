@@ -159,6 +159,16 @@ describe('NotionReadConnector read', () => {
     expect(standIn.calls()).toBe(4);
   });
 
+  it('throws invalid_response for a children cursor that cannot be sent, and reads no further', async () => {
+    const odd = page(55, 'Odd cursor');
+    const holder = said('toggle', 'Holder', [said('paragraph', 'Never')]);
+    standIn.share([odd]);
+    standIn.children(odd.id, [holder]);
+    standIn.unsendableCursor(holder.id);
+    await expect(connector().read(item(odd))).rejects.toMatchObject({ name: 'NotionFault', reason: 'invalid_response' });
+    expect(standIn.calls()).toBe(3);
+  });
+
   it('throws invalid_response for a children listing that repeats its cursor, and reads no further', async () => {
     const looping = page(52, 'Looping');
     const holder = said('toggle', 'Holder', [said('paragraph', 'Never')]);

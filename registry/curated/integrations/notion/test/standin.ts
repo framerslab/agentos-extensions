@@ -117,6 +117,7 @@ export class NotionStandIn {
   private afterRetrieve = new Map<string, 'unshare' | 'forbid'>();
   private repeating = new Set<string>();
   private slow = new Map<number, number>();
+  private unsendable = new Set<string>();
   private limitAt = new Map<number, number>();
   private noReadContent = false;
   private limitNext: { retryAfter: number } | null = null;
@@ -161,6 +162,7 @@ export class NotionStandIn {
     this.afterRetrieve = new Map();
     this.repeating = new Set();
     this.slow = new Map();
+    this.unsendable = new Set();
     this.limitAt = new Map();
     this.noReadContent = false;
     this.limitNext = null;
@@ -226,6 +228,11 @@ export class NotionStandIn {
   /** Makes a block's children answer no blocks and the same `next_cursor` on every call, more always to come. */
   repeatCursor(blockId: string): void {
     this.repeating.add(blockId);
+  }
+
+  /** Makes a block's children answer no blocks and a `next_cursor` that holds a lone surrogate, more to come. */
+  unsendableCursor(blockId: string): void {
+    this.unsendable.add(blockId);
   }
 
   /** Answers the `n`th call (1-based) `ms` milliseconds later than the others. */
@@ -387,6 +394,9 @@ export class NotionStandIn {
     }
     if (this.forbidden.has(owner)) return { status: 403, body: failure(403, 'restricted_resource') };
     if (!this.shared.has(owner)) return { status: 404, body: failure(404, 'object_not_found') };
+    if (this.unsendable.has(id)) {
+      return { status: 200, body: { object: 'list', type: 'block', block: {}, results: [], next_cursor: '\ud800', has_more: true } };
+    }
     if (this.repeating.has(id)) {
       return { status: 200, body: { object: 'list', type: 'block', block: {}, results: [], next_cursor: notionId(1, 'c'), has_more: true } };
     }
