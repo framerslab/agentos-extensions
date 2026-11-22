@@ -173,7 +173,7 @@ importers:
     dependencies:
       '@larksuiteoapi/node-sdk':
         specifier: ^1.52.0
-        version: 1.59.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+        version: 1.76.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@framers/agentos':
         specifier: ^0.19.3
@@ -2843,16 +2843,16 @@ packages:
     resolution: {integrity: sha512-YVB1wrpE1WF8NvMpaRyhwm9XBYl3HTbPNEIgybi0b0XpmBrJ7Y3Y/drbxh9qAVMbR+0hcwM63GPWzhOVRuerfg==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/middleware-bucket-endpoint@3.972.62':
-    resolution: {integrity: sha512-FdxKcr+vM7vCwjcjufgPrEDkJxwj/dyaw6YuFHlEcfxHMbz3vwXrXSx2hKModKAYkpKN4EixxrdeARe0F+XO3w==}
+  '@aws-sdk/middleware-bucket-endpoint@3.972.63':
+    resolution: {integrity: sha512-MwHPFpCTzU35I7Imt3QZVaRJLMqqPmIp6plf7RHJ2xrqwZa2f9V1I/EWbzqvFQLpNzRGdsOlmXnSHaSc65ke4Q==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/middleware-eventstream@3.972.38':
     resolution: {integrity: sha512-4K6FDz2BxH3rve8Hw/8uApWXKCuKKMeYKzY23PoiGqUBWaA23eAy+GzW9aoG3Cm7HqgYzqkljl3ECJRJCxGs7g==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/middleware-expect-continue@3.972.58':
-    resolution: {integrity: sha512-JwJAxH6o7jhmsLCR/ozyJcji/9q1BIE1mf+oDi+lvvBpLWXT0t5GqZLln1Roe55YW7RGwD9pKSd4tn+9hj0tJw==}
+  '@aws-sdk/middleware-expect-continue@3.972.59':
+    resolution: {integrity: sha512-qenfQVKXeGTMsZx73pte+zjjFwyg59BBGE3eYWM2JzlDVsu9qvvslRDzCdL+AKNgoYl0WF08tgPHkZQ/keP7+Q==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/middleware-flexible-checksums@3.974.68':
@@ -2863,8 +2863,8 @@ packages:
     resolution: {integrity: sha512-Aj572A4Umr8joC873dSZs6nW/4OHXBZgYOaimHPyffDs2TbJrJOhmSvoNKAN5ECKc/2XS0WLDBu5cyuVv72MEA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/middleware-location-constraint@3.972.55':
-    resolution: {integrity: sha512-LQJbHAp5yWAyIvczZ995+aaI6gn54oWr277I+XADrcuoIfbD8Zu9WlhikkZ0w1sFZQeARrCW39GcOyx+ZtGyMw==}
+  '@aws-sdk/middleware-location-constraint@3.972.56':
+    resolution: {integrity: sha512-p6Emb6RgnGN45qQKnRaMryKR1mSbuiCCdC34AEVKofApwBQqZfW23Ea56+0Zool1upLVUvlvl+/LBXIy/TtLGQ==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/middleware-logger@3.972.58':
@@ -2875,12 +2875,12 @@ packages:
     resolution: {integrity: sha512-zzsZhrQDk6qnAdp5Hspzt3hgGToxkIrqvkBoRBDAR4LBjOAzI7DJGukVYyKxnyUqy4zkXluKeQ+IraoQkgW7Rw==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/middleware-sdk-s3@3.972.89':
-    resolution: {integrity: sha512-Lem2/ZT1eOicVATBukPRPm2S4JAmrTEkP3/dnJE9iTeyqIKqsJF2j04f5L0o+rrZIrwR13swiQMdzcE5jXRzNA==}
+  '@aws-sdk/middleware-sdk-s3@3.972.90':
+    resolution: {integrity: sha512-UtdPoeKTfUyk4WI6iGirvuN+2MkVMNiWyYwHlwbdOBIonD66+Jm8qR4zdlJJDLqTIDmtvULTH0ZUyEyf/BGTsA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/middleware-ssec@3.972.55':
-    resolution: {integrity: sha512-PAm6DCg3Tz9xaBs+Yrug/XwTQR7qRAJ6cP2vT6LVMei6C3CPr9rAtidauTb7RJX/PeRtyM+XtAcaKNinoD+4yw==}
+  '@aws-sdk/middleware-ssec@3.972.56':
+    resolution: {integrity: sha512-/dEFJYWPWd++uNq9HDZ1kX6y2mluBnsBd3SzE4pb+fqTBu+8Gw989GMBJRpiuS5fp+aoZBb1HgWtpdZIOPCB3A==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/middleware-user-agent@3.972.88':
@@ -3828,8 +3828,8 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
-  '@larksuiteoapi/node-sdk@1.59.0':
-    resolution: {integrity: sha512-sBpkruTvZDOxnVtoTbepWKRX0j1Y1ZElQYu0x7+v088sI9pcpbVp6ZzCGn62dhrKPatzNyCJyzYCPXPYQWccrA==}
+  '@larksuiteoapi/node-sdk@1.76.0':
+    resolution: {integrity: sha512-v/bxQNCugwAmMPbZtBGJtSu8hdQLiB1/29Jr+GBIG18DyQ4LYyp7gxQ74pkhXVSuoUeH4v+/ZHAw/SW+KMrj2g==}
 
   '@line/bot-sdk@11.4.0':
     resolution: {integrity: sha512-VPPNiCxhJnjjB3zb7q14toar6WnPdeBU9019uIq0ATozkc2LTDozx2Xrqw21uc5wgFz7g/E1MM/vcPI5VlsZPQ==}
@@ -5472,11 +5472,11 @@ packages:
   axios@1.13.4:
     resolution: {integrity: sha512-1wVkUaAO6WyaYtCkcYCOx12ZgpGf9Zif+qXa4n+oYzK558YryKqiL6UWwd5DqiH3VRW0GYhTZQ/vlgJrCoNQlg==}
 
-  axios@1.13.6:
-    resolution: {integrity: sha512-ChTCHMouEe2kn713WHbQGcuYrr6fXTBiu460OTwWrWob16g1bXn4vtz07Ope7ewMozJAnEquLk5lWQWtBig9DQ==}
-
   axios@1.21.0:
     resolution: {integrity: sha512-YCzXMB53Q9PZBsh7yN7wtapit4WepwcHS2fP8QhGsBxSz5YtgYobV7GGlWlAJi+RxfU77GQTQi2DSLUma42EYA==}
+
+  axios@1.21.1:
+    resolution: {integrity: sha512-6eI5Q/Y4u/Um9dDlsRoq5pY2rxnUTv+L4PpLitnbk/i4jb3MxLZ5CsN5Ih3IysbeRYK4pR+P7qfMsOQl9fwwFQ==}
 
   b4a@1.9.0:
     resolution: {integrity: sha512-dpfcF9fDNR6++cthXR67iyhgqWy9CBouAvIWhIntzBG6cvK/cnIPiZQjBwi/ZqjjBEDGfoNDtmB0kTjroOJ3pQ==}
@@ -6771,6 +6771,15 @@ packages:
 
   follow-redirects@1.16.2:
     resolution: {integrity: sha512-/kVP2U8z596Ia0gwFrwyIeo74ta5aVmSeU1FfAUMAmcEP5EP7zydmag3SLiN64NaRKef3lxsq7i/g7ltJQDGow==}
+    engines: {node: '>=4.0'}
+    peerDependencies:
+      debug: '*'
+    peerDependenciesMeta:
+      debug:
+        optional: true
+
+  follow-redirects@1.16.3:
+    resolution: {integrity: sha512-toOSoqN6d51Wjf1aOFJYcoVv1aND9rj/CwjLU0Vz40oDuSpWDayCeKe4JpL5NL0WdFvoOOCI3BRo69HahjbR1A==}
     engines: {node: '>=4.0'}
     peerDependencies:
       debug: '*'
@@ -8563,6 +8572,10 @@ packages:
     resolution: {integrity: sha512-W67iLl4J2EXEGTbfeHCffrjDfitvLANg0UlX3wFUUSTx92KXRFegMHUVgSqE+wvhAbi4WqjGg9czysTV2Epbew==}
     engines: {node: '>= 0.4'}
 
+  object-inspect@1.14.0:
+    resolution: {integrity: sha512-IVgHNlp/jwQX271+Xzoq9LZNTWXxZK+cEOrGBOBxXNbn7fapnZ+Ts6TVMgNOuAezwG2wdtnMX97tTPK6VEnuOQ==}
+    engines: {node: '>= 0.4'}
+
   object-keys@1.1.1:
     resolution: {integrity: sha512-NuAESUOUMrlIXOfHKzD6bpPu3tYt3xvjNdRIQ+FeT0lNb4K8WR70CaDxhuNguS2XG+GjkyMwOzsN5ZktImfhLA==}
     engines: {node: '>= 0.4'}
@@ -9200,20 +9213,16 @@ packages:
     resolution: {integrity: sha512-4EK3+xJl8Ts67nLYNwqw/dsFVnCf+qR7RgXSK9jEEm9unao3njwMDdmsdvoKBKHzxd7tCYz5e5M+SnMjdtXGQQ==}
     engines: {node: '>=0.6'}
 
-  qs@6.15.0:
-    resolution: {integrity: sha512-mAZTtNCeetKMH+pSjrb76NAM8V9a05I9aBZOHztWy/UqcJdQYNsf59vrRKWnojAT9Y+GbIvoTBC++CPHqpDBhQ==}
-    engines: {node: '>=0.6'}
-
-  qs@6.16.0:
-    resolution: {integrity: sha512-h6fhOIaRrID2CbEY2fqs+7t+UXZo+MLAnU5gRIq85uFtdiUPCdsApMlHhXogKVM4HM2DVbIjGNTTYH2OcmP1vA==}
+  qs@6.14.3:
+    resolution: {integrity: sha512-rQNAwFzg3KZjjfANpCQOAoZwHQvcpWuabal4khEuSStXNnVh6iLM+yscBqdSZuj+dRNl99Cgq5OuVyDBJZWq6Q==}
     engines: {node: '>=0.6'}
 
   qs@6.17.1:
     resolution: {integrity: sha512-jd3COkaKVgGUW+ZHyEHCG9bH7RoaaiWuMgzsIBjUMVjLAaWGWpoUAVwljVvBHxRu/2qEHnadLGZrkutYUBPQJA==}
     engines: {node: '>=0.6'}
 
-  qs@6.5.3:
-    resolution: {integrity: sha512-qxXIEh4pCGfHICj1mAJQ2/2XVZkjCDTcEgfoSQxc/fYivUZxTkk7L3bDBJSoNrEzXI17oUO5Dp07ktqE5KzczA==}
+  qs@6.5.5:
+    resolution: {integrity: sha512-mzR4sElr1bfCaPJe7m8ilJ6ZXdDaGoObcYR0ZHSsktM/Lt21MVHj5De30GQH2eiZ1qGRTO7LCAzQsUeXTNexWQ==}
     engines: {node: '>=0.6'}
 
   querystring@0.2.1:
@@ -10726,6 +10735,18 @@ packages:
       utf-8-validate:
         optional: true
 
+  ws@7.5.14:
+    resolution: {integrity: sha512-u9Oi2nQ8SZnTUAf6spLLKF5TyqoG3Nbbrd4ai6Sjo4P24bycDewhQqtNMIg4bFpnpH/TD4qk4IuAVhT0HIIqug==}
+    engines: {node: '>=8.3.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: ^5.0.2
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   ws@8.17.1:
     resolution: {integrity: sha512-6XQFvXTkbfUOZOKKILFG1PDK2NDQs4azKQl26T0YS5CxqWLgXajbPZ+h4gZekJyRqFU8pvnbAbbs/3TgRPy+GQ==}
     engines: {node: '>=10.0.0'}
@@ -10764,6 +10785,18 @@ packages:
 
   ws@8.22.1:
     resolution: {integrity: sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
+  ws@8.23.0:
+    resolution: {integrity: sha512-wCkmX8QMOrKjgO8HW2WyDbTSGeqkocxgDzS9iR79rEAexty6/2qzilx3Ag8Tqf9ykop3irLKle0MtVn5qjVnoQ==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -11060,15 +11093,15 @@ snapshots:
       '@aws-crypto/sha256-js': 5.2.0
       '@aws-sdk/core': 3.981.0
       '@aws-sdk/credential-provider-node': 3.972.97
-      '@aws-sdk/middleware-bucket-endpoint': 3.972.62
-      '@aws-sdk/middleware-expect-continue': 3.972.58
+      '@aws-sdk/middleware-bucket-endpoint': 3.972.63
+      '@aws-sdk/middleware-expect-continue': 3.972.59
       '@aws-sdk/middleware-flexible-checksums': 3.974.68
       '@aws-sdk/middleware-host-header': 3.972.59
-      '@aws-sdk/middleware-location-constraint': 3.972.55
+      '@aws-sdk/middleware-location-constraint': 3.972.56
       '@aws-sdk/middleware-logger': 3.972.58
       '@aws-sdk/middleware-recursion-detection': 3.972.60
-      '@aws-sdk/middleware-sdk-s3': 3.972.89
-      '@aws-sdk/middleware-ssec': 3.972.55
+      '@aws-sdk/middleware-sdk-s3': 3.972.90
+      '@aws-sdk/middleware-ssec': 3.972.56
       '@aws-sdk/middleware-user-agent': 3.972.88
       '@aws-sdk/region-config-resolver': 3.972.62
       '@aws-sdk/signature-v4-multi-region': 3.984.0
@@ -11213,9 +11246,9 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/middleware-bucket-endpoint@3.972.62':
+  '@aws-sdk/middleware-bucket-endpoint@3.972.63':
     dependencies:
-      '@aws-sdk/middleware-sdk-s3': 3.972.89
+      '@aws-sdk/middleware-sdk-s3': 3.972.90
       tslib: 2.9.1
 
   '@aws-sdk/middleware-eventstream@3.972.38':
@@ -11225,9 +11258,9 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/middleware-expect-continue@3.972.58':
+  '@aws-sdk/middleware-expect-continue@3.972.59':
     dependencies:
-      '@aws-sdk/middleware-sdk-s3': 3.972.89
+      '@aws-sdk/middleware-sdk-s3': 3.972.90
       tslib: 2.9.1
 
   '@aws-sdk/middleware-flexible-checksums@3.974.68':
@@ -11240,9 +11273,9 @@ snapshots:
       '@aws-sdk/core': 3.981.0
       tslib: 2.9.1
 
-  '@aws-sdk/middleware-location-constraint@3.972.55':
+  '@aws-sdk/middleware-location-constraint@3.972.56':
     dependencies:
-      '@aws-sdk/middleware-sdk-s3': 3.972.89
+      '@aws-sdk/middleware-sdk-s3': 3.972.90
       tslib: 2.9.1
 
   '@aws-sdk/middleware-logger@3.972.58':
@@ -11255,7 +11288,7 @@ snapshots:
       '@aws-sdk/core': 3.981.0
       tslib: 2.9.1
 
-  '@aws-sdk/middleware-sdk-s3@3.972.89':
+  '@aws-sdk/middleware-sdk-s3@3.972.90':
     dependencies:
       '@aws-sdk/core': 3.981.0
       '@aws-sdk/signature-v4-multi-region': 3.996.52
@@ -11264,9 +11297,9 @@ snapshots:
       '@smithy/types': 4.20.0
       tslib: 2.9.1
 
-  '@aws-sdk/middleware-ssec@3.972.55':
+  '@aws-sdk/middleware-ssec@3.972.56':
     dependencies:
-      '@aws-sdk/middleware-sdk-s3': 3.972.89
+      '@aws-sdk/middleware-sdk-s3': 3.972.90
       tslib: 2.9.1
 
   '@aws-sdk/middleware-user-agent@3.972.88':
@@ -11292,7 +11325,7 @@ snapshots:
 
   '@aws-sdk/signature-v4-multi-region@3.984.0':
     dependencies:
-      '@aws-sdk/middleware-sdk-s3': 3.972.89
+      '@aws-sdk/middleware-sdk-s3': 3.972.90
       '@aws-sdk/types': 3.975.1
       '@smithy/protocol-http': 5.6.2
       '@smithy/signature-v4': 5.7.5
@@ -11547,7 +11580,7 @@ snapshots:
       json-stringify-safe: 5.0.1
       mime-types: 2.1.35
       performance-now: 2.1.0
-      qs: 6.14.1
+      qs: 6.14.3
       safe-buffer: 5.2.1
       tough-cookie: 5.1.2
       tunnel-agent: 0.6.0
@@ -11599,7 +11632,7 @@ snapshots:
       '@vladfrangu/async_event_emitter': 2.4.7
       discord-api-types: 0.38.57
       tslib: 2.8.1
-      ws: 8.22.1(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      ws: 8.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -12166,18 +12199,19 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@larksuiteoapi/node-sdk@1.59.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)':
+  '@larksuiteoapi/node-sdk@1.76.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)':
     dependencies:
-      axios: 1.13.6
+      axios: 1.21.1
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
-      protobufjs: 7.5.4
-      qs: 6.15.0
-      ws: 8.19.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      protobufjs: 7.6.6
+      qs: 6.17.1
+      ws: 8.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - bufferutil
       - debug
+      - supports-color
       - utf-8-validate
 
   '@line/bot-sdk@11.4.0':
@@ -13262,7 +13296,7 @@ snapshots:
   '@types/body-parser@1.19.6':
     dependencies:
       '@types/connect': 3.4.38
-      '@types/node': 20.19.43
+      '@types/node': 20.19.32
 
   '@types/caseless@0.12.5': {}
 
@@ -13273,7 +13307,7 @@ snapshots:
 
   '@types/connect@3.4.38':
     dependencies:
-      '@types/node': 20.19.43
+      '@types/node': 20.19.32
 
   '@types/debug@4.1.12':
     dependencies:
@@ -13312,7 +13346,7 @@ snapshots:
 
   '@types/express-serve-static-core@4.19.8':
     dependencies:
-      '@types/node': 20.19.43
+      '@types/node': 20.19.32
       '@types/qs': 6.14.0
       '@types/range-parser': 1.2.7
       '@types/send': 1.2.1
@@ -13339,7 +13373,7 @@ snapshots:
 
   '@types/jsonwebtoken@9.0.6':
     dependencies:
-      '@types/node': 20.19.43
+      '@types/node': 20.19.32
 
   '@types/long@4.0.2': {}
 
@@ -13438,16 +13472,16 @@ snapshots:
   '@types/send@0.17.6':
     dependencies:
       '@types/mime': 1.3.5
-      '@types/node': 20.19.43
+      '@types/node': 20.19.32
 
   '@types/send@1.2.1':
     dependencies:
-      '@types/node': 20.19.43
+      '@types/node': 20.19.32
 
   '@types/serve-static@1.15.10':
     dependencies:
       '@types/http-errors': 2.0.5
-      '@types/node': 20.19.43
+      '@types/node': 20.19.32
       '@types/send': 0.17.6
 
   '@types/sql.js@1.4.11':
@@ -13479,7 +13513,7 @@ snapshots:
 
   '@types/ws@6.0.4':
     dependencies:
-      '@types/node': 20.19.43
+      '@types/node': 20.19.32
 
   '@types/ws@7.4.7':
     dependencies:
@@ -13491,7 +13525,7 @@ snapshots:
 
   '@types/yauzl@2.10.3':
     dependencies:
-      '@types/node': 20.19.43
+      '@types/node': 20.19.32
     optional: true
 
   '@typescript-eslint/eslint-plugin@8.54.0(@typescript-eslint/parser@8.54.0(eslint@9.39.2)(typescript@6.0.3))(eslint@9.39.2)(typescript@6.0.3)':
@@ -14078,17 +14112,19 @@ snapshots:
     transitivePeerDependencies:
       - debug
 
-  axios@1.13.6:
-    dependencies:
-      follow-redirects: 1.16.2
-      form-data: 4.0.6
-      proxy-from-env: 1.1.0
-    transitivePeerDependencies:
-      - debug
-
   axios@1.21.0:
     dependencies:
       follow-redirects: 1.16.2
+      form-data: 4.0.6
+      https-proxy-agent: 5.0.1
+      proxy-from-env: 2.1.0
+    transitivePeerDependencies:
+      - debug
+      - supports-color
+
+  axios@1.21.1:
+    dependencies:
+      follow-redirects: 1.16.3
       form-data: 4.0.6
       https-proxy-agent: 5.0.1
       proxy-from-env: 2.1.0
@@ -14245,7 +14281,7 @@ snapshots:
       http-errors: 2.0.1
       iconv-lite: 0.4.24
       on-finished: 2.4.1
-      qs: 6.14.1
+      qs: 6.14.3
       raw-body: 2.5.3
       type-is: 1.6.18
       unpipe: 1.0.0
@@ -14360,7 +14396,7 @@ snapshots:
     dependencies:
       '@types/ws': 6.0.4
       uuid: 10.0.0
-      ws: 7.5.13(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+      ws: 7.5.14(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -15473,7 +15509,7 @@ snapshots:
       parseurl: 1.3.3
       path-to-regexp: 0.1.12
       proxy-addr: 2.0.7
-      qs: 6.14.1
+      qs: 6.14.3
       range-parser: 1.2.1
       safe-buffer: 5.2.1
       send: 0.19.2
@@ -15508,7 +15544,7 @@ snapshots:
       once: 1.4.0
       parseurl: 1.3.3
       proxy-addr: 2.0.8
-      qs: 6.16.0
+      qs: 6.17.1
       range-parser: 1.2.1
       router: 2.2.0
       send: 1.2.1
@@ -15686,6 +15722,8 @@ snapshots:
   follow-redirects@1.15.11: {}
 
   follow-redirects@1.16.2: {}
+
+  follow-redirects@1.16.3: {}
 
   fontkit@2.0.4:
     dependencies:
@@ -16062,7 +16100,7 @@ snapshots:
       gaxios: 7.3.1
       google-auth-library: 11.3.3
       google-logging-utils: 2.1.1
-      qs: 6.16.0
+      qs: 6.17.1
       url-template: 2.0.8
     transitivePeerDependencies:
       - supports-color
@@ -17792,6 +17830,8 @@ snapshots:
 
   object-inspect@1.13.4: {}
 
+  object-inspect@1.14.0: {}
+
   object-keys@1.1.1: {}
 
   object.assign@4.1.7:
@@ -18383,7 +18423,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.2
-      '@types/node': 20.19.43
+      '@types/node': 20.19.32
       long: 5.3.2
 
   proxy-addr@2.0.7:
@@ -18518,13 +18558,8 @@ snapshots:
     dependencies:
       side-channel: 1.1.0
 
-  qs@6.15.0:
+  qs@6.14.3:
     dependencies:
-      side-channel: 1.1.0
-
-  qs@6.16.0:
-    dependencies:
-      es-define-property: 1.0.1
       side-channel: 1.1.1
 
   qs@6.17.1:
@@ -18532,7 +18567,7 @@ snapshots:
       es-define-property: 1.0.1
       side-channel: 1.1.1
 
-  qs@6.5.3: {}
+  qs@6.5.5: {}
 
   querystring@0.2.1: {}
 
@@ -18806,7 +18841,7 @@ snapshots:
       mime-types: 2.1.35
       oauth-sign: 0.9.0
       performance-now: 2.1.0
-      qs: 6.5.3
+      qs: 6.5.5
       safe-buffer: 5.2.1
       tough-cookie: 2.5.0
       tunnel-agent: 0.6.0
@@ -19214,21 +19249,21 @@ snapshots:
   side-channel-list@1.0.1:
     dependencies:
       es-errors: 1.3.0
-      object-inspect: 1.13.4
+      object-inspect: 1.14.0
 
   side-channel-map@1.0.1:
     dependencies:
       call-bound: 1.0.4
       es-errors: 1.3.0
       get-intrinsic: 1.3.0
-      object-inspect: 1.13.4
+      object-inspect: 1.14.0
 
   side-channel-weakmap@1.0.2:
     dependencies:
       call-bound: 1.0.4
       es-errors: 1.3.0
       get-intrinsic: 1.3.0
-      object-inspect: 1.13.4
+      object-inspect: 1.14.0
       side-channel-map: 1.0.1
 
   side-channel@1.1.0:
@@ -19242,7 +19277,7 @@ snapshots:
   side-channel@1.1.1:
     dependencies:
       es-errors: 1.3.0
-      object-inspect: 1.13.4
+      object-inspect: 1.14.0
       side-channel-list: 1.0.1
       side-channel-map: 1.0.1
       side-channel-weakmap: 1.0.2
@@ -20571,6 +20606,11 @@ snapshots:
       bufferutil: 4.1.0
       utf-8-validate: 5.0.10
 
+  ws@7.5.14(bufferutil@4.1.0)(utf-8-validate@5.0.10):
+    optionalDependencies:
+      bufferutil: 4.1.0
+      utf-8-validate: 5.0.10
+
   ws@8.17.1(bufferutil@4.1.0)(utf-8-validate@5.0.10):
     optionalDependencies:
       bufferutil: 4.1.0
@@ -20587,6 +20627,11 @@ snapshots:
       utf-8-validate: 5.0.10
 
   ws@8.22.1(bufferutil@4.1.0)(utf-8-validate@5.0.10):
+    optionalDependencies:
+      bufferutil: 4.1.0
+      utf-8-validate: 5.0.10
+
+  ws@8.23.0(bufferutil@4.1.0)(utf-8-validate@5.0.10):
     optionalDependencies:
       bufferutil: 4.1.0
       utf-8-validate: 5.0.10
