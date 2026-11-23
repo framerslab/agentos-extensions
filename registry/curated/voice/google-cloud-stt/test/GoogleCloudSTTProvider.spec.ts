@@ -62,6 +62,12 @@ vi.mock('@google-cloud/speech', () => {
 import { GoogleCloudSTTProvider } from '../src/GoogleCloudSTTProvider.js';
 import { createExtensionPack } from '../src/index.js';
 
+it('keeps the published Speech v6 peer range', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const speechRanges = manifest.peerDependencies['@google-cloud/speech'].split('||').map((range) => range.trim());
+  expect(speechRanges).toContain('^6.0.0');
+});
+
 /**
  * The shape of a real service-account key: https URLs, and `\n` escapes inside
  * private_key once it is JSON. Every value is made up.

@@ -26,11 +26,11 @@
   },
   "peerDependencies": {
     "@framers/agentos": ">=0.10.40",
-    "@google-cloud/speech": "^6.0.0"
+    "@google-cloud/speech": "^6.0.0 || ^8.2.1"
   },
   "devDependencies": {
     "@framers/agentos": "^0.19.3",
-    "@google-cloud/speech": "^6.0.0",
+    "@google-cloud/speech": "^8.2.1",
     "typescript": "^6.0.3",
     "vitest": "^5.1.0"
   },
