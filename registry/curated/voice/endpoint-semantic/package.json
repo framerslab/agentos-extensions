@@ -28,7 +28,7 @@
     "@framers/agentos": ">=0.10.40"
   },
   "devDependencies": {
-    "@framers/agentos": "^0.19.3",
+    "@framers/agentos": "^0.19.10",
     "typescript": "^6.0.3",
     "vitest": "^5.1.0"
   },
