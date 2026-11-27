@@ -27,6 +27,9 @@ export {
   GmailApi, GmailApiFault, type GmailApiOptions, type GmailApiLimits,
   type GmailProfile, type GmailLabels, type GmailReadOptions, type GmailTokenHolder,
 } from './gmail.js';
+export {
+  ingestMailbox, type GmailMailboxIngestOptions, type GmailMailboxCursor, type GmailMailboxMessage, type GmailMailboxPage,
+} from './mailboxIngest.js';
 export { classifyGmailHttp, gmailOAuthFault, type GmailHttpDisposition } from './retry.js';
 export {
   GmailSourceConnector, GmailConnectorFault,

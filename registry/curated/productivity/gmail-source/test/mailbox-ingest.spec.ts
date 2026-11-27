@@ -18,13 +18,15 @@ function fixture(id: string, delivery: Record<string, string>, from = '"Example,
 
 const messagesPath = '/gmail/v1/users/me/messages';
 const list = (...ids: string[]) => ({ messages: ids.map((id) => ({ id, threadId: 'abc123' })) });
-const fixtureFetch = (...fixtures: ReturnType<typeof fixture>[]) => async (input: URL | RequestInfo) => {
-  const url = new URL(String(input));
-  if (url.pathname === messagesPath) return json(list(...fixtures.map((entry) => entry.id)));
-  const entry = fixtures.find((item) => url.pathname === messagesPath + '/' + item.id);
-  if (!entry) throw new Error('unexpected request');
-  return json(entry);
-};
+function fixtureFetch<T extends { id: string }>(...fixtures: T[]): typeof fetch {
+  return async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === messagesPath) return json(list(...fixtures.map((entry) => entry.id)));
+    const entry = fixtures.find((item) => url.pathname === messagesPath + '/' + item.id);
+    if (!entry) throw new Error('unexpected request');
+    return json(entry);
+  };
+}
 
 describe('shared mailbox ingestion', () => {
   it('queries exact recipient terms and checks delivery per message, even in one thread', async () => {
@@ -44,6 +46,7 @@ describe('shared mailbox ingestion', () => {
       fixture('a6', { 'X-Original-To': '<route@example.invalid>' }, ''),
       fixture('a7', { To: 'Unnamed recipients: other@example.invalid, route@example.invalid;' }),
       fixture('a8', { To: role }, 'first@example.invalid, malformed'),
+      fixture('a9', { To: encodedWord('"Example" <' + role + '>') }),
     ];
     const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fixture-access');

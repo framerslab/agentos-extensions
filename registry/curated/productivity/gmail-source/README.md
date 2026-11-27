@@ -129,7 +129,7 @@ const changes = await api.history(profile.historyId, 100, null, signal); // { ki
 // A failure is a SourceSyncFault with a fixed code and, for a wait, the time to try again in retryAt.
 ```
 
-`GmailApi(options)` uses the account-source quota and grant services supplied by the host. Pass a live `currentHandle` getter, stable opaque project/mailbox quota keys, the dedicated OAuth client, mapper bounds and explicit transport limits. The client constructs each OAuth flow inside the grant service's callback. It retains no flow or sealed-store callback between operations. Production uses fixed Google origins and only profile, labels, threads list/get and history list. CI may configure loopback or reserved fixture origins; HTTP redirects and arbitrary paths are refused.
+`GmailApi(options)` uses the account-source quota and grant services supplied by the host. Pass a live `currentHandle` getter, stable opaque project/mailbox quota keys, the dedicated OAuth client, mapper bounds and explicit transport limits. The client constructs each OAuth flow inside the grant service's callback. It retains no flow or sealed-store callback between operations. Production uses fixed Google origins for profile, labels, threads list/get, history list and the shared mailbox's messages list/get. CI may configure loopback or reserved fixture origins; HTTP redirects and arbitrary paths are refused.
 
 `profile(signal?)` returns a server-memory address and history id for private account binding. Never store its address in a source or log it. `list(cutoff, windowMs, pageSize, pageToken, signal?)` returns a bounded scan page. The query uses epoch seconds and excludes spam, trash and drafts; exact message eligibility remains the mapper's responsibility. `history(fromCursor, pageSize, pageToken, signal?)` returns deduplicated changed thread ids and the string response cursor. The host must persist pending work and commit a terminal cursor only after all work has completed. Neither method claims mailbox-wide completeness.
 
@@ -144,6 +144,27 @@ Each operation refreshes the grant unless the client has a `tokenHolder`: a memo
 A canonical thread 404 means gone. History 404 means the history anchor expired and bounded recovery is required. Domain policy is a fixed failure. Missing or explicitly invalid grants and insufficient scope are passed to the coordinator's fenced grant-loss lifecycle. Client configuration errors and transient network/provider failures are not reported as revoked mailboxes. Oversized successful thread responses are counted skips; oversized control pages fail without a cursor advance. Response streams are capped before decoding and are cancelled on size, deadline or caller cancellation.
 
 The client performs no storage write, purge, logging, model request or attachment fetch. Its successful result is still untrusted source material and needs the host's fresh owner/generation/expiry checks before storage, preparation or delivery. Limits are defensive library policy, not provider maxima; hosts must record any live compatibility failure before changing them.
+
+## Shared mailbox ingestion
+
+```ts
+import { ingestMailbox } from '@framers/agentos-ext-gmail-source';
+
+const recipients = ['intake@example.invalid'];
+const maxMessages = 20;
+const page = await ingestMailbox(api, { recipients, maxMessages, after: sinceMs, signal });
+// After handling the page, pass its cursor as `after` to continue when the cursor is present.
+```
+
+`ingestMailbox(api, options)` and `api.ingestMailbox(options)` use the authorized server-side client with the existing `https://www.googleapis.com/auth/gmail.readonly` scope. Supply one to ten plain ASCII recipient addresses. The client lowercases and deduplicates them and uses only those addresses in `to:` and `deliveredto:` search terms. `maxMessages` bounds the candidates fetched per page, up to the smaller of 100 and the client's `bounds.maxMessages`. It defaults to 20 or the client's limit if lower.
+
+The client reads each candidate message in full and checks decoded delivery headers inside the call. It compares complete addresses in `Delivered-To`, `X-Original-To`, `To` and `Cc`, and recognizes a Google Groups `List-Id` of the form `<local.domain>` paired with a single valid `X-Original-Sender` mailbox. Delivery headers take precedence over visible recipients. Gmail must surface a message in the recipient search before the client can check its headers. Alias expansion and list-header indexing can vary, so a header match alone provides no guarantee of search coverage.
+
+Each selected message carries `messageId`, `threadId`, `internalDate` in epoch milliseconds and a lowercased `matchedRecipient`. Its `from` has a lowercased `address` and sanitized `name`. An absent, invalid or multiple-mailbox From yields a null address and an empty name. The result also carries a sanitized `subject`, sanitized and trimmed `text`, and up to 32 attachment summaries containing only `name` and `size` in bytes. Display fields are capped at 200 characters and text at the client's `maxMessageCharacters`. The call returns no raw header or attachment content and logs no mail data.
+
+A message with an unreadable or oversized body has empty text and `bodyOmitted: true`. If the full response exceeds the wire cap, the client retries with a capped request for selected headers. This recovery, or an oversized MIME structure, may yield an empty attachment list. Failed provider calls and unusable control or recovery responses reject with a fixed `SourceSyncFault` and yield no cursor.
+
+A numeric `after` filters on the exclusive internal date of each candidate. Pass a returned `cursor` as `after` with the same mailbox, recipients and page size, even if that page selected zero messages. A null cursor means the search is exhausted. Persist progress only after handling the page and deduplicate by message ID across searches. Delivery matches and sender addresses are routing data. Keep them private and apply your application's access and retention policy before storing the returned fields.
 
 ## Connector and durable synchronization
 
