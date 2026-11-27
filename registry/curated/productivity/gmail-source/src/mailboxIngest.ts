@@ -1,4 +1,4 @@
-import { SourceSyncFault } from '@framers/agentos-ext-account-sources';
+import type { SourceSyncFault } from '@framers/agentos-ext-account-sources';
 import type { GmailApi } from './gmail.js';
 import { headerMailboxes } from './mailboxAddresses.js';
 import { GmailTextFault, sanitizeMailMetadata, type GmailTextPolicy } from './mailSanitize.js';
@@ -14,6 +14,8 @@ export interface GmailMailboxCursor {
   readonly after: number | null;
   /** The bounded opaque Gmail token for the next candidate page. */
   readonly pageToken: string;
+  /** Binds this continuation to the originating mailbox search and page size. */
+  readonly queryDigest: string;
 }
 
 /** Server-side criteria for one bounded search of an authorized Gmail mailbox. */
@@ -38,7 +40,7 @@ export interface GmailMailboxMessage {
   readonly internalDate: number;
   /** The matched configured mailbox in lower case. */
   readonly matchedRecipient: string;
-  /** The lowercased mailbox and sanitized display name from a single valid From mailbox. */
+  /** The lowercased sender mailbox and sanitized display name, with Groups DMARC rewrites handled. */
   readonly from: { readonly address: string | null; readonly name: string };
   /** Sanitized, decoded subject. */
   readonly subject: string;
@@ -50,10 +52,14 @@ export interface GmailMailboxMessage {
   readonly bodyOmitted: boolean;
 }
 
-/** One page of selected messages and its continuation, which is null after the last candidate page. */
+type MailboxReadLimit = 'structure_limit' | 'response_too_large';
+
+/** One page of selected and unreadable messages with a continuation until the search is exhausted. */
 export interface GmailMailboxPage {
   /** Selected messages in candidate order. */
   readonly messages: readonly GmailMailboxMessage[];
+  /** Candidates that disappeared or exceeded the read limits, in candidate order. */
+  readonly unreadable: readonly { readonly messageId: string; readonly reason: 'gone' | MailboxReadLimit }[];
   /** Continue even after an empty page when this value is present. */
   readonly cursor: GmailMailboxCursor | null;
 }
@@ -70,21 +76,31 @@ export function ingestMailbox<Prepared>(api: GmailApi<Prepared>, options: GmailM
   return api.ingestMailbox(options);
 }
 
-const envelopeFields = ['Delivered-To', 'X-Original-To', 'To', 'Cc', 'List-Id', 'X-Original-Sender', 'From', 'Subject'] as const;
-type EnvelopeField = Lowercase<typeof envelopeFields[number]>;
+const envelopeFields = {
+  'Delivered-To': 'delivered-to',
+  'X-Original-To': 'x-original-to',
+  To: 'to',
+  Cc: 'cc',
+  'List-Id': 'list-id',
+  'X-Original-Sender': 'x-original-sender',
+  From: 'from',
+  Subject: 'subject',
+} as const;
+type EnvelopeField = typeof envelopeFields[keyof typeof envelopeFields];
 
 /** The only headers a metadata-only recovery request needs. */
-export const mailboxMetadataHeaders: readonly string[] = envelopeFields;
+export const mailboxMetadataHeaders: readonly string[] = Object.keys(envelopeFields);
 
-const fieldByName = new Map<string, EnvelopeField>(envelopeFields.map((name) => {
-  const key = name.toLowerCase() as EnvelopeField;
-  return [key, key];
-}));
+const fieldByName = new Map<string, EnvelopeField>(
+  Object.entries(envelopeFields).map(([name, field]) => [name.toLowerCase(), field]),
+);
 
-/** Whether a MIME limit, rather than an invalid provider shape, prevented reading content. */
-export function mailboxMimeLimit(error: unknown): boolean {
-  return (error instanceof GmailMappingFault && (error.reason === 'response_too_large' || error.reason === 'structure_limit'))
-    || (error instanceof GmailTextFault && error.reason === 'input_too_large');
+/** The MIME limit that prevented reading content, if applicable. */
+export function mailboxMimeLimitReason(error: unknown): MailboxReadLimit | null {
+  if (error instanceof GmailMappingFault && (error.reason === 'response_too_large' || error.reason === 'structure_limit')) {
+    return error.reason;
+  }
+  return error instanceof GmailTextFault && error.reason === 'input_too_large' ? 'structure_limit' : null;
 }
 
 interface Candidate {
@@ -94,31 +110,34 @@ interface Candidate {
   readonly payload: unknown;
 }
 
-type DecodeHeader = (value: string) => string | null;
+type Envelope = ReadonlyMap<EnvelopeField, readonly string[]>;
 
-function groupRecipient(headers: ReadonlyMap<EnvelopeField, readonly string[]>, recipients: ReadonlySet<string>,
-  decode: DecodeHeader): string | null {
+function groupDelivery(headers: Envelope, recipients: ReadonlySet<string>):
+  { recipient: string; originalSender: string } | null {
   const ids = headers.get('list-id');
   const senders = headers.get('x-original-sender');
-  if (ids?.length !== 1 || senders?.length !== 1 || headerMailboxes(senders[0]!, decode)?.length !== 1) return null;
-  const identity = /^[^<>]*<([^<>\s]+)>$/.exec(ids[0]!.trim())?.[1];
-  const listId = identity === undefined ? null : decode(identity)?.toLowerCase();
+  if (ids?.length !== 1 || senders?.length !== 1) return null;
+  const listId = /^[^<>]*<([^<>\s]+)>$/.exec(ids[0]!.trim())?.[1]?.toLowerCase();
   if (!listId) return null;
+  // In the Google Groups delivery pattern, local@domain appears as <local.domain> in List-Id.
   const matches = [...recipients].filter((recipient) => recipient.replace('@', '.') === listId);
-  return matches.length === 1 ? matches[0]! : null;
+  if (matches.length !== 1) return null;
+  const original = headerMailboxes(senders[0]!);
+  return original?.length === 1 ? { recipient: matches[0]!, originalSender: original[0]!.address } : null;
 }
 
-function matchedRecipient(headers: ReadonlyMap<EnvelopeField, readonly string[]>, recipients: ReadonlySet<string>,
-  decode: DecodeHeader): string | null {
+function matchedRecipient(headers: Envelope, recipients: ReadonlySet<string>, group: string | undefined): string | null {
   const match = (field: EnvelopeField): string | null => {
-    for (const value of headers.get(field) ?? []) {
-      for (const mailbox of headerMailboxes(value, decode, field === 'to' || field === 'cc') ?? []) {
+    const values = headers.get(field) ?? [];
+    // Only the topmost Delivered-To records the most recent delivery.
+    for (const value of field === 'delivered-to' ? values.slice(0, 1) : values) {
+      for (const mailbox of headerMailboxes(value, field === 'to' || field === 'cc') ?? []) {
         if (recipients.has(mailbox.address)) return mailbox.address;
       }
     }
     return null;
   };
-  return match('delivered-to') ?? match('x-original-to') ?? groupRecipient(headers, recipients, decode) ?? match('to') ?? match('cc');
+  return match('delivered-to') ?? match('x-original-to') ?? group ?? match('to') ?? match('cc');
 }
 
 /** Checks routing from bounded root headers before reading body text and returns only the public projection. */
@@ -133,7 +152,7 @@ export async function projectMailboxMessage(
   const decode = (input: string): string | null => {
     try { return decodeMimeWords(input, budget); }
     catch (error) {
-      if (mailboxMimeLimit(error)) { bodyOmitted = true; return null; }
+      if (mailboxMimeLimitReason(error) !== null) { bodyOmitted = true; return null; }
       if (error instanceof GmailMappingFault && (error.reason === 'invalid_encoding' || error.reason === 'unsupported_charset')) {
         return null;
       }
@@ -148,7 +167,8 @@ export async function projectMailboxMessage(
     values.push(header.value);
     headers.set(field, values);
   }
-  const matched = matchedRecipient(headers, recipients, decode);
+  const group = groupDelivery(headers, recipients);
+  const matched = matchedRecipient(headers, recipients, group?.recipient);
   if (matched === null) return null;
 
   const policy = (maximum: number): GmailTextPolicy => ({
@@ -158,12 +178,15 @@ export async function projectMailboxMessage(
   });
   const display = (value: string): string => {
     try { return sanitizeMailMetadata(value, policy(200)).text; }
-    catch (error) { if (mailboxMimeLimit(error)) { bodyOmitted = true; return ''; } throw error; }
+    catch (error) { if (mailboxMimeLimitReason(error) !== null) { bodyOmitted = true; return ''; } throw error; }
   };
   const fromValues = headers.get('from');
-  const fromList = fromValues?.length === 1 ? headerMailboxes(fromValues[0]!, decode) : null;
+  const fromList = fromValues?.length === 1 ? headerMailboxes(fromValues[0]!) : null;
   const from = fromList?.length === 1 ? fromList[0]! : null;
-  const sender = { address: from?.address ?? null, name: display(from?.name ?? '') };
+  const sender = {
+    address: group && from?.address === group.recipient ? group.originalSender : from?.address ?? null,
+    name: display(decode(from?.name ?? '')?.trim() ?? ''),
+  };
   const subject = display(decode(headers.get('subject')?.[0] ?? '') ?? '');
 
   let text = '';
@@ -181,7 +204,7 @@ export async function projectMailboxMessage(
         text = messageText(body.text, policy(bounds.maxMessageCharacters)).text;
       }
     } catch (error) {
-      if (!mailboxMimeLimit(error) && !(error instanceof GmailMappingFault
+      if (mailboxMimeLimitReason(error) === null && !(error instanceof GmailMappingFault
         && (error.reason === 'invalid_encoding' || error.reason === 'unsupported_charset'))) throw error;
       bodyOmitted = true;
     }

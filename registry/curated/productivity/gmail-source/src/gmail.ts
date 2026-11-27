@@ -1,13 +1,13 @@
 /**
- * @fileoverview The capped, read-only Gmail API client: profile, labels, a bounded thread list, history pages and one
- * thread read at fixed `users/me` paths. Every token refresh and every HTTP dispatch is admitted through the host's
- * shared account-source quota with a new attempt id, and every refresh runs inside the host's grant operation on a
- * flow built for it alone; given a holder, the clients of one sync lease share one access token. Responses are read
+ * @fileoverview The capped, read-only Gmail API client: profile, labels, thread listing and reads, history pages,
+ * and message listing and reads for shared mailbox ingestion at fixed `users/me` paths. Each refresh and dispatch uses
+ * the host's shared account-source quota with a new attempt id. Each refresh runs inside the host's grant operation on
+ * a flow built for it alone. With a token holder, the clients of one sync lease share one access token. Responses are read
  * through the released byte cap before decoding, with prompt cancellation, and only fixed failures leave the client.
  * It never sleeps, retries a transient failure inline, stores, purges, logs, or fetches an attachment.
  * @module agentos-ext-gmail-source/gmail
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   readCapped, ReadCapExceeded, decideSourceCache, sourceRetryAt, SourceSyncFault, SOURCE_GRANT_KEY,
   type SourceQuota, type SourceQuotaMethod, type SourceQuotaResult, type SourceRevocations,
@@ -19,7 +19,7 @@ import type { GmailOAuthClient, GmailOAuthEndpoints } from './types.js';
 import { GmailThreadMapper, gmailCategories, categoryLabels, type GmailCategory } from './mapThread.js';
 import { searchMailboxAddress } from './mailboxAddresses.js';
 import {
-  mailboxMetadataHeaders, mailboxMimeLimit, projectMailboxMessage,
+  mailboxMetadataHeaders, mailboxMimeLimitReason, projectMailboxMessage,
   type GmailMailboxIngestOptions, type GmailMailboxMessage, type GmailMailboxPage,
 } from './mailboxIngest.js';
 import { mappingBounds, gmailId, type GmailMappingBounds } from './mime.js';
@@ -130,7 +130,8 @@ export interface GmailReadOptions {
 }
 /**
  * A client's fixed refusal; its message is `gmail_api_<reason>`. `configuration` is thrown by the constructor;
- * `response_too_large` stays inside the client, which answers it as a skipped thread or an invalid control page.
+ * `response_too_large` stays inside the client, which can skip an oversized thread or message and refuses oversized
+ * control pages.
  */
 export class GmailApiFault extends Error {
   /** @param reason Why the client refused. */
@@ -650,15 +651,25 @@ export class GmailApi<Prepared = unknown> {
     const start = options.after;
     let after: number | null = typeof start === 'number' ? start : null;
     let pageToken: string | null = null;
+    let cursorDigest: unknown;
     if (start !== undefined && typeof start !== 'number') {
       const cursor = object(start);
       pageToken = this.pageToken(cursor.pageToken);
       if (pageToken === null || (cursor.after !== null && typeof cursor.after !== 'number')) return invalid();
       after = cursor.after;
+      cursorDigest = cursor.queryDigest;
     }
     if (after !== null && !integer(after)) return invalid();
 
-    const q = '{' + [...recipients].map((address) => 'to:' + address + ' deliveredto:' + address).join(' ') + '}';
+    const terms = [...recipients].sort().map((address) => `to:${address} cc:${address} deliveredto:${address} list:${address}`);
+    // Start before the floor's second so the exact millisecond check can resolve the boundary.
+    const time = after === null ? '' : ` after:${Math.max(0, Math.floor(after / 1000) - 1)}`;
+    const q = `{${terms.join(' ')}} -in:drafts -in:sent${time}`;
+    const queryDigest = createHash('sha256').update(
+      JSON.stringify([this.options.projectKey, this.options.mailboxKey, q, after, pageSize]),
+    ).digest('hex');
+    if (pageToken !== null && cursorDigest !== queryDigest) return invalid();
+
     const signal = options.signal;
     const response = await this.control('list', 'messages', { q, maxResults: String(pageSize), includeSpamTrash: 'false',
       ...(pageToken === null ? {} : { pageToken }),
@@ -675,34 +686,43 @@ export class GmailApi<Prepared = unknown> {
     });
 
     const messages: GmailMailboxMessage[] = [];
+    const unreadable: GmailMailboxPage['unreadable'][number][] = [];
     for (const candidate of candidates) {
-      const read = async (metadataOnly: boolean): Promise<GmailMailboxMessage | null> => {
-        const message = await this.request('read', 'messages/' + candidate.id, metadataOnly
-          ? { format: 'metadata', metadataHeaders: mailboxMetadataHeaders }
-          : { format: 'full' }, signal);
-        if (message === null) return invalid();
-        const { id, threadId, internalDate, payload } = object(message.body);
-        if (id !== candidate.id || threadId !== candidate.threadId || typeof internalDate !== 'string'
-          || !/^[0-9]{1,16}$/.test(internalDate)) return invalid();
-        const date = Number(internalDate);
-        if (!integer(date)) return invalid();
-        if (after !== null && date <= after) return null;
-        return projectMailboxMessage({ ...candidate, payload, internalDate: date }, recipients, this.bounds, metadataOnly, signal);
-      };
-      let selected: GmailMailboxMessage | null;
-      try { selected = await read(false); }
-      catch (error) {
-        if (!mailboxMimeLimit(error) && !(error instanceof GmailApiFault && error.reason === 'response_too_large')) throw error;
-        // The full response could not even supply bounded routing headers. Try Gmail's header-only projection.
-        try { selected = await read(true); }
-        catch (metadataError) {
-          if (mailboxMimeLimit(metadataError) || metadataError instanceof GmailApiFault) return invalid();
-          throw metadataError;
+      // Try Gmail's header-only projection once if the full read could not supply bounded routing headers.
+      for (const metadataOnly of [false, true]) {
+        try {
+          const message = await this.request('read', 'messages/' + candidate.id, metadataOnly
+            ? { format: 'metadata', metadataHeaders: mailboxMetadataHeaders }
+            : { format: 'full' }, signal);
+          if (message === null) {
+            unreadable.push({ messageId: candidate.id, reason: 'gone' });
+            break;
+          }
+          const { id, threadId, internalDate, labelIds, payload } = object(message.body);
+          if (id !== candidate.id || threadId !== candidate.threadId || typeof internalDate !== 'string'
+            || !/^[0-9]{1,16}$/.test(internalDate)) return invalid();
+          const date = Number(internalDate);
+          if (!integer(date)) return invalid();
+          if (after !== null && date <= after) break;
+
+          const labels = labelIds === undefined ? [] : labelIds;
+          if (!Array.isArray(labels) || !labels.every(labelId)) return invalid();
+          if (labels.includes('DRAFT') || labels.includes('SENT')) break;
+
+          const selected = await projectMailboxMessage(
+            { ...candidate, payload, internalDate: date }, recipients, this.bounds, metadataOnly, signal,
+          );
+          if (selected !== null) messages.push(selected);
+          break;
+        } catch (error) {
+          const reason = error instanceof GmailApiFault && error.reason === 'response_too_large'
+            ? error.reason : mailboxMimeLimitReason(error);
+          if (reason === null) throw error;
+          if (metadataOnly) unreadable.push({ messageId: candidate.id, reason });
         }
       }
-      if (selected !== null) messages.push(selected);
     }
     active(signal);
-    return { messages, cursor: nextPageToken === null ? null : { after, pageToken: nextPageToken } };
+    return { messages, unreadable, cursor: nextPageToken === null ? null : { after, pageToken: nextPageToken, queryDigest } };
   }
 }

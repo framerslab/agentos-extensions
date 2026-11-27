@@ -23,18 +23,18 @@ export function searchMailboxAddress(value: unknown): string | null {
 }
 
 interface Mailbox { readonly address: string; readonly name: string }
-type DecodeHeader = (value: string) => string | null;
 
-function mailbox(value: string, decode: DecodeHeader): Mailbox | null {
+function mailbox(value: string): Mailbox | null {
   const named = namedMailbox.exec(value);
-  const mail = address(decode((named?.[2] ?? value).trim()) ?? '');
+  // RFC 2047 encoded words belong in display names, outside the addr-spec.
+  const mail = address((named?.[2] ?? value).trim());
   if (mail === null) return null;
   const display = (named?.[1] ?? '').replace(/"((?:\\.|[^"\\])*)"/g, (_, quoted: string) => quoted.replace(/\\(.)/g, '$1'));
-  return { address: mail, name: decode(display)?.trim() ?? '' };
+  return { address: mail, name: display };
 }
 
-/** Reads a bounded address list, decoding words only after separating addresses, display names and comments. */
-export function headerMailboxes(input: string, decode: DecodeHeader, allowGroups = false): Mailbox[] | null {
+/** Reads a bounded address list and separates display names for later decoding. */
+export function headerMailboxes(input: string, allowGroups = false): Mailbox[] | null {
   if (input.length > 8192) return null;
   const value = input.replace(/\r\n(?=[ \t])/g, '').trim();
   if (controls.test(value)) return null;
@@ -47,7 +47,7 @@ export function headerMailboxes(input: string, decode: DecodeHeader, allowGroups
     const item = token.trim();
     token = '';
     if (!item) return allowEmpty;
-    const parsed = mailbox(item, decode);
+    const parsed = mailbox(item);
     if (parsed === null) return false;
     result.push(parsed);
     return true;
