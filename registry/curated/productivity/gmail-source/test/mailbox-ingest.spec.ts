@@ -86,7 +86,7 @@ describe('shared mailbox ingestion', () => {
 
   it.each(['DRAFT', 'SENT'])('drops a candidate labelled %s even if Gmail lists it', async (label) => {
     const entry = { ...fixture('a1', label === 'DRAFT' ? { To: role } : { Cc: role }, 'mailbox@example.invalid'),
-      labelIds: [label] };
+      labelIds: label === 'SENT' ? [label, 'INBOX'] : [label] };
     const { api } = await harness(fixtureFetch(entry, fixture('a2', { To: role })));
     const result = await ingestMailbox(api, { recipients: [role] });
     expect(result.messages.map(({ messageId }) => messageId)).toEqual(['a2']);
@@ -305,12 +305,53 @@ describe('shared mailbox ingestion', () => {
     },
   );
 
+  it('skips a malformed MIME candidate and continues through the page and cursor', async () => {
+    const entry = fixture('a2', { To: role });
+    const fixtures = [
+      fixture('a1', { To: role }),
+      { ...entry, payload: { mimeType: 'multipart/mixed', headers: entry.payload.headers, parts: [
+        part('Body.'),
+        { mimeType: 'application/pdf', headers: [
+          { name: 'Content-Disposition', value: 'attachment' },
+          { name: 'Content-Disposition', value: 'attachment' },
+        ] },
+      ] } },
+      fixture('a3', { To: role }),
+      fixture('a4', { To: role }),
+    ];
+    const reads: string[] = [];
+    const { api } = await harness(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === messagesPath) {
+        const token = url.searchParams.get('pageToken');
+        if (token === null) return json({ ...list('a1', 'a2', 'a3'), nextPageToken: 'fixture-next' });
+        expect(token).toBe('fixture-next');
+        return json(list('a4'));
+      }
+      const message = fixtures.find(({ id }) => url.pathname === messagesPath + '/' + id);
+      if (!message) throw new Error('unexpected request');
+      expect(url.searchParams.get('format')).toBe('full');
+      reads.push(message.id);
+      return json(message);
+    });
+    const options = { recipients: [role], maxMessages: 3 };
+    const first = await ingestMailbox(api, options);
+    expect(first.messages.map(({ messageId }) => messageId)).toEqual(['a1', 'a3']);
+    expect(first.unreadable).toEqual([{ messageId: 'a2', reason: 'invalid_mime' }]);
+    if (first.cursor === null) throw new Error('expected a continuation');
+    const next = await ingestMailbox(api, { ...options, after: first.cursor });
+    expect(next.messages.map(({ messageId }) => messageId)).toEqual(['a4']);
+    expect(next.unreadable).toEqual([]);
+    expect(next.cursor).toBeNull();
+    expect(reads).toEqual(['a1', 'a2', 'a3', 'a4']);
+  });
+
   it('caps display fields, body text and attachment summaries', async () => {
     const entry = fixture('a1', { To: role, Subject: 's'.repeat(400) }, 'n'.repeat(300) + ' <' + sender + '>');
     const { api } = await harness(fixtureFetch({ ...entry, payload: {
       ...entry.payload, mimeType: 'multipart/mixed',
       parts: [part('x'.repeat(128)), ...Array.from({ length: 33 }, () => ({
-        mimeType: 'application/pdf', filename: 'f'.repeat(400), body: { size: 42, attachmentId: 'fixture-attachment' },
+        mimeType: 'application/pdf', filename: 'z'.repeat(400), body: { size: 42, attachmentId: 'fixture-attachment' },
       }))],
     } }), { bounds: { ...bounds, maxMessageCharacters: 64 } });
     const result = await ingestMailbox(api, { recipients: [role] });
@@ -318,7 +359,7 @@ describe('shared mailbox ingestion', () => {
       from: { address: sender, name: 'n'.repeat(200) }, subject: 's'.repeat(200),
       text: 'x'.repeat(64), bodyOmitted: false,
     });
-    expect(result.messages[0]?.attachments).toEqual(Array.from({ length: 32 }, () => ({ name: 'f'.repeat(200), size: 42 })));
+    expect(result.messages[0]?.attachments).toEqual(Array.from({ length: 32 }, () => ({ name: 'z'.repeat(200), size: 42 })));
   });
 
   it.each(['full', 'metadata'])('rejects the whole page on a %s transport failure with the fixed failure code', async (format) => {
@@ -333,12 +374,13 @@ describe('shared mailbox ingestion', () => {
       .rejects.toMatchObject({ code: 'provider_unavailable', message: 'source_sync_provider_unavailable' });
   });
 
-  it('rejects a malformed metadata recovery instead of treating it as unreadable', async () => {
+  it.each(['full', 'metadata'])('rejects malformed root headers on a %s read', async (format) => {
     const { api } = await harness(async (input) => {
       const url = new URL(String(input));
       if (url.pathname === messagesPath) return json(list('a1'));
-      return url.searchParams.get('format') === 'full' ? json({ huge: 'x'.repeat(1024) })
-        : json({ ...fixture('a1', { To: role }), payload: { headers: 'malformed' } });
+      return url.searchParams.get('format') === format
+        ? json({ ...fixture('a1', { To: role }), payload: { headers: 'malformed' } })
+        : json({ huge: 'x'.repeat(1024) });
     }, { bounds: { ...bounds, maxResponseBytes: 1024 } });
     await expect(ingestMailbox(api, { recipients: [role] })).rejects.toMatchObject({ code: 'invalid_response' });
   });
