@@ -1,4 +1,4 @@
-import type { SourceSyncFault } from '@framers/agentos-ext-account-sources';
+import { SourceSyncFault } from '@framers/agentos-ext-account-sources';
 import type { GmailApi } from './gmail.js';
 import { headerMailboxes } from './mailboxAddresses.js';
 import { GmailTextFault, sanitizeMailMetadata, type GmailTextPolicy } from './mailSanitize.js';
@@ -58,8 +58,8 @@ type MailboxReadLimit = 'structure_limit' | 'response_too_large';
 export interface GmailMailboxPage {
   /** Selected messages in candidate order. */
   readonly messages: readonly GmailMailboxMessage[];
-  /** Candidates that disappeared or exceeded the read limits, in candidate order. */
-  readonly unreadable: readonly { readonly messageId: string; readonly reason: 'gone' | MailboxReadLimit }[];
+  /** Candidates that disappeared, exceeded the read limits or had malformed MIME, in candidate order. */
+  readonly unreadable: readonly { readonly messageId: string; readonly reason: 'gone' | MailboxReadLimit | 'invalid_mime' }[];
   /** Continue even after an empty page when this value is present. */
   readonly cursor: GmailMailboxCursor | null;
 }
@@ -140,11 +140,14 @@ function matchedRecipient(headers: Envelope, recipients: ReadonlySet<string>, gr
   return match('delivered-to') ?? match('x-original-to') ?? group ?? match('to') ?? match('cc');
 }
 
-/** Checks routing from bounded root headers before reading body text and returns only the public projection. */
+/** The body MIME parser rejected a message after its routing headers were validated. */
+export const invalidMailboxMime = Symbol('invalid_mime');
+
+/** Checks routing from bounded root headers before reading and projecting the message. */
 export async function projectMailboxMessage(
   candidate: Candidate, recipients: ReadonlySet<string>, bounds: GmailMappingBounds, metadataOnly: boolean,
   signal?: AbortSignal,
-): Promise<GmailMailboxMessage | null> {
+): Promise<GmailMailboxMessage | typeof invalidMailboxMime | null> {
   mappingActive(signal);
   const budget: MimeBudget = { bounds, rawBytes: 0, decodedBytes: 0, parts: 0 };
   const rawHeaders = mimeMessageHeaders(candidate.payload, budget);
@@ -204,6 +207,7 @@ export async function projectMailboxMessage(
         text = messageText(body.text, policy(bounds.maxMessageCharacters)).text;
       }
     } catch (error) {
+      if (error instanceof SourceSyncFault && error.code === 'invalid_response') return invalidMailboxMime;
       if (mailboxMimeLimitReason(error) === null && !(error instanceof GmailMappingFault
         && (error.reason === 'invalid_encoding' || error.reason === 'unsupported_charset'))) throw error;
       bodyOmitted = true;

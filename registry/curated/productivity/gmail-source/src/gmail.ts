@@ -19,7 +19,7 @@ import type { GmailOAuthClient, GmailOAuthEndpoints } from './types.js';
 import { GmailThreadMapper, gmailCategories, categoryLabels, type GmailCategory } from './mapThread.js';
 import { searchMailboxAddress } from './mailboxAddresses.js';
 import {
-  mailboxMetadataHeaders, mailboxMimeLimitReason, projectMailboxMessage,
+  invalidMailboxMime, mailboxMetadataHeaders, mailboxMimeLimitReason, projectMailboxMessage,
   type GmailMailboxIngestOptions, type GmailMailboxMessage, type GmailMailboxPage,
 } from './mailboxIngest.js';
 import { mappingBounds, gmailId, type GmailMappingBounds } from './mime.js';
@@ -712,7 +712,8 @@ export class GmailApi<Prepared = unknown> {
           const selected = await projectMailboxMessage(
             { ...candidate, payload, internalDate: date }, recipients, this.bounds, metadataOnly, signal,
           );
-          if (selected !== null) messages.push(selected);
+          if (selected === invalidMailboxMime) unreadable.push({ messageId: candidate.id, reason: 'invalid_mime' });
+          else if (selected !== null) messages.push(selected);
           break;
         } catch (error) {
           const reason = error instanceof GmailApiFault && error.reason === 'response_too_large'
