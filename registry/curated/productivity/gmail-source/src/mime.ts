@@ -161,6 +161,16 @@ function array(value: unknown, maximum: number): unknown[] {
   if (value.length > maximum) throw new GmailMappingFault('structure_limit');
   return value;
 }
+function parseHeaders(value: unknown, budget: MimeBudget): readonly GmailHeaderInput[] {
+  return array(value ?? [], budget.bounds.maxMimeParts).map((value): GmailHeaderInput => {
+    const h = object(value);
+    return { name: string(h.name, budget), value: string(h.value, budget) };
+  });
+}
+/** Reads the top-level headers of a full or metadata-only message payload without walking its MIME tree. */
+export function mimeMessageHeaders(payload: unknown, budget: MimeBudget): readonly GmailHeaderInput[] {
+  return parseHeaders(object(payload).headers, budget);
+}
 // Reads one part and its children. `withinAttachment` marks the subtree of an attachment, such as an attached message.
 function parsePart(
   value: unknown, budget: MimeBudget, depth: number, signal?: AbortSignal, withinAttachment = false,
@@ -173,10 +183,7 @@ function parsePart(
   const mimeType = string(raw.mimeType ?? 'application/octet-stream', budget).toLowerCase();
   if (!/^[a-z0-9!#$&^_.+-]{1,64}\/[a-z0-9!#$&^_.+-]{1,64}$/.test(mimeType)) return fail();
   const filename = string(raw.filename ?? '', budget);
-  const headers = array(raw.headers ?? [], budget.bounds.maxMimeParts).map((value): GmailHeaderInput => {
-    const h = object(value);
-    return { name: string(h.name, budget), value: string(h.value, budget) };
-  });
+  const headers = parseHeaders(raw.headers, budget);
   const body = object(raw.body ?? {});
   const size = body.size ?? 0; if (!integer(size)) return fail();
   const data = string(body.data ?? '', budget);
@@ -192,6 +199,10 @@ function parsePart(
   const readable = !attachment && !withinAttachment && (mimeType === 'text/plain' || mimeType === 'text/html');
   return { mimeType, filename, headers, size, data: readable ? data : '', external: attachmentId !== '', attachment,
     parts: children.map((child) => parsePart(child, budget, depth + 1, signal, withinAttachment || attachment)) };
+}
+/** Checks the whole MIME tree of a single message using the same limits as the thread parser. */
+export function parseMimePayload(payload: unknown, budget: MimeBudget, signal?: AbortSignal): MimePart {
+  return parsePart(payload, budget, 1, signal);
 }
 /**
  * Validate the whole structure before decoding any selected message. Copies only the fields this package reads: ids,
@@ -359,13 +370,18 @@ function rank(part: MimePart): number {
   if (part.mimeType === 'text/html') return 1;
   return part.parts.reduce((best, child) => Math.max(best, rank(child)), 0);
 }
-// Lists attachment parts in MIME order without descending into them.
-function attachments(part: MimePart, output: MimeAttachment[]): void {
-  if (part.attachment) {
-    output.push({ filename: part.filename || 'attachment', mediaType: part.mimeType, size: part.size });
-    return;
-  }
-  for (const child of part.parts) attachments(child, output);
+/** Lists attachment parts in MIME order without descending into them. */
+export function mimeAttachments(root: MimePart): MimeAttachment[] {
+  const output: MimeAttachment[] = [];
+  const visit = (part: MimePart): void => {
+    if (part.attachment) {
+      output.push({ filename: part.filename || 'attachment', mediaType: part.mimeType, size: part.size });
+      return;
+    }
+    for (const child of part.parts) visit(child);
+  };
+  visit(root);
+  return output;
 }
 // The loader decodes a few named references, then collapses whitespace. Every reference it leaves is decoded here and
 // padding collapsed (see `collapsePadding`), then whitespace collapses again as the loader collapses it: one space for
@@ -389,7 +405,15 @@ function inertText(content: string): string {
  * @throws {SourceSyncFault} `cancelled` once the signal is aborted.
  */
 export async function mimeBody(root: MimePart, budget: MimeBudget, signal?: AbortSignal): Promise<MimeBody> {
-  const listed: MimeAttachment[] = []; attachments(root, listed);
+  const listed = mimeAttachments(root);
+  const { text, unsupportedParts } = await mimeTextBody(root, budget, signal);
+  return { text, attachments: listed, unsupportedParts };
+}
+
+/** Reads only the body text. A caller can keep its attachment listing if decoding the text fails. */
+export async function mimeTextBody(
+  root: MimePart, budget: MimeBudget, signal?: AbortSignal,
+): Promise<Pick<MimeBody, 'text' | 'unsupportedParts'>> {
   let unsupportedParts = 0;
   const text = async (part: MimePart): Promise<string> => {
     mappingActive(signal);
@@ -440,5 +464,5 @@ export async function mimeBody(root: MimePart, budget: MimeBudget, signal?: Abor
     return inertText(content);
   };
   const body = await text(root); mappingActive(signal);
-  return { text: body, attachments: listed, unsupportedParts };
+  return { text: body, unsupportedParts };
 }
